@@ -209,7 +209,7 @@ internal object StayApiClient {
 
     fun updateReservation(baseUrl: String, token: String, reservationId: Long, status: String): JSONObject {
         val normalized = status.lowercase(Locale.ROOT).replace(' ', '_')
-        return JSONObject(request(baseUrl, "/owner/reservations/$reservationId", token, "PATCH", JSONObject().put("status", normalized)))
+        return JSONObject(request(baseUrl, "/owner/reservations/$reservationId/status", token, "POST", JSONObject().put("status", normalized)))
     }
 
     fun updateEnquiry(baseUrl: String, token: String, enquiryId: Long, status: String): JSONObject {
@@ -217,7 +217,7 @@ internal object StayApiClient {
             "visit scheduled" -> "visit_scheduled"
             else -> status.lowercase(Locale.ROOT).replace(' ', '_')
         }
-        return JSONObject(request(baseUrl, "/owner/enquiries/$enquiryId", token, "PATCH", JSONObject().put("status", normalized)))
+        return JSONObject(request(baseUrl, "/owner/enquiries/$enquiryId/status", token, "POST", JSONObject().put("status", normalized)))
     }
 
     fun enquiries(baseUrl: String, token: String): List<JSONObject> {

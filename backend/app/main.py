@@ -507,6 +507,11 @@ def update_enquiry(enquiry_id: int, body: dict, actor: dict = Depends(require_ro
     old = {"status": item.status}; item.status = status_value; item.owner_response = str(body.get("owner_response", item.owner_response))[:4000]
     audit(db, actor, "enquiry", item.id, "updated", old=old, new={"status": item.status}); db.commit(); return {"id": item.id, "status": item.status, "owner_response": item.owner_response}
 
+@app.post("/owner/enquiries/{enquiry_id}/status")
+def update_enquiry_status_action(enquiry_id: int, body: dict, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
+    """POST-compatible alias for clients whose HTTP stack does not support PATCH."""
+    return update_enquiry(enquiry_id, body, actor, db)
+
 @app.post("/visits", status_code=201)
 def create_visit(body: VisitCreate, actor: dict = Depends(require_roles("customer")), db: Session = Depends(get_db)):
     prop = property_or_404(db, body.property_id)
@@ -579,6 +584,11 @@ def update_reservation(reservation_id: int, body: ReservationStatus, actor: dict
             elif body.status in {"cancelled", "expired"} and unit.status == "reserved": unit.status = "available"
     audit(db, actor, "reservation", item.id, "status_changed", old=old, new={"status": item.status})
     db.commit(); db.refresh(item); return {"id": item.id, "status": item.status}
+
+@app.post("/owner/reservations/{reservation_id}/status")
+def update_reservation_status_action(reservation_id: int, body: ReservationStatus, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
+    """POST-compatible alias for Android clients that cannot issue HTTP PATCH."""
+    return update_reservation(reservation_id, body, actor, db)
 
 @app.post("/owner/stays", status_code=201)
 def create_stay(body: StayCreate, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):

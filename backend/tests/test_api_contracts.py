@@ -96,6 +96,9 @@ def test_enquiry_and_visit_creation_emit_owner_notifications():
     assert enquiry_rows.status_code == 200, enquiry_rows.text
     assert enquiry_rows.json()[0]["property_name"] == "Test House"
     set_actor("owner-1", "owner")
+    enquiry_status = client.post(f"/owner/enquiries/{enquiry.json()['id']}/status", json={"status": "contacted", "owner_response": "We can arrange a visit."})
+    assert enquiry_status.status_code == 200, enquiry_status.text
+    assert enquiry_status.json()["status"] == "contacted"
     messages = client.get("/notifications")
     assert messages.status_code == 200
     assert len(messages.json()) >= 2
@@ -112,6 +115,10 @@ def test_reservations_block_duplicate_active_unit():
     assert reservation_rows.json()[0]["property_name"] == "Test House"
     second = client.post("/reservations", json=payload)
     assert second.status_code == 409, second.text
+    set_actor("owner-1", "owner")
+    status_update = client.post(f"/owner/reservations/{first.json()['id']}/status", json={"status": "confirmed"})
+    assert status_update.status_code == 200, status_update.text
+    assert status_update.json()["status"] == "confirmed"
 
 
 def test_ledger_notice_staff_and_amenity_contracts():
