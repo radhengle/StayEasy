@@ -74,6 +74,14 @@ object StayRecordStore {
         save(context, category, records)
     }
 
+    /** Replace rows sourced from the server while preserving records created only on this device. */
+    fun replaceServerRecords(context: Context, category: String, serverRecords: List<StayRecord>) {
+        val localRecords = load(context, category).filter { it.source != "Server" }
+        val merged = (serverRecords + localRecords).distinctBy { it.id }
+            .sortedByDescending { it.updatedAt }
+        save(context, category, merged)
+    }
+
     fun remove(context: Context, category: String, id: String) {
         save(context, category, load(context, category).filterNot { it.id == id })
     }

@@ -489,7 +489,10 @@ def list_enquiries(property_id: int | None = None, actor: dict = Depends(get_act
         stmt = stmt.where(m.Enquiry.property_id.in_(owned))
     if property_id: stmt = stmt.where(m.Enquiry.property_id == property_id)
     rows = list(db.scalars(stmt.order_by(m.Enquiry.created_at.desc()).limit(300)))
-    return [{"id": e.id, "property_id": e.property_id, "customer_id": e.customer_id, "message": e.message, "status": e.status,
+    property_ids = {e.property_id for e in rows}
+    property_names = {p.id: p.name for p in db.scalars(select(m.Property).where(m.Property.id.in_(property_ids)))} if property_ids else {}
+    return [{"id": e.id, "property_id": e.property_id, "property_name": property_names.get(e.property_id, f"Property #{e.property_id}"),
+             "customer_id": e.customer_id, "message": e.message, "status": e.status,
              "move_in_date": e.move_in_date.isoformat() if e.move_in_date else None, "preferred_room_type": e.preferred_room_type,
              "owner_response": e.owner_response, "created_at": e.created_at.isoformat()} for e in rows]
 
@@ -555,8 +558,11 @@ def list_reservations(property_id: int | None = None, actor: dict = Depends(get_
     elif actor["role"] != "admin": stmt = stmt.where(m.Reservation.property_id.in_(select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))))
     if property_id: stmt = stmt.where(m.Reservation.property_id == property_id)
     rows = list(db.scalars(stmt.order_by(m.Reservation.created_at.desc()).limit(300)))
-    return [{"id": r.id, "property_id": r.property_id, "unit_id": r.unit_id, "customer_id": r.customer_id,
-             "preferred_room_type": r.preferred_room_type, "move_in_date": r.move_in_date.isoformat(), "status": r.status,
+    property_ids = {r.property_id for r in rows}
+    property_names = {p.id: p.name for p in db.scalars(select(m.Property).where(m.Property.id.in_(property_ids)))} if property_ids else {}
+    return [{"id": r.id, "property_id": r.property_id, "property_name": property_names.get(r.property_id, f"Property #{r.property_id}"),
+             "unit_id": r.unit_id, "customer_id": r.customer_id, "preferred_room_type": r.preferred_room_type,
+             "move_in_date": r.move_in_date.isoformat(), "status": r.status,
              "expires_at": r.expires_at.isoformat() if r.expires_at else None, "rent_snapshot": r.rent_snapshot, "deposit_snapshot": r.deposit_snapshot} for r in rows]
 
 @app.patch("/owner/reservations/{reservation_id}")

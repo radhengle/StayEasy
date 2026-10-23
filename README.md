@@ -32,7 +32,7 @@ The packaging environment used for this build did not have an Android SDK/Gradle
 
 ## Get the APK from GitHub Actions
 
-Every push to `main` runs the **Android APK** workflow ([`.github/workflows/android-apk.yml`](.github/workflows/android-apk.yml)), which builds the app with JDK 17 and Gradle and uploads the APKs as build artifacts (kept for 30 days):
+Every push to `main` or a `feat/**` branch runs the **Android APK** workflow ([`.github/workflows/android-apk.yml`](.github/workflows/android-apk.yml)), which builds the app with JDK 17 and Gradle and uploads the APKs as build artifacts (kept for 30 days):
 
 - `stayeasy-debug-apk` — debug build (`app-debug.apk`), installable directly on a phone.
 - `stayeasy-release-unsigned-apk` — release build (`app-release-unsigned.apk`). It is **not signed**, so Android will not install it until it is signed with a release key.
@@ -121,7 +121,7 @@ The tested API contracts use a temporary/test database. Passing tests verifies t
 
 ## API connection from Android
 
-In the app, open Profile → Owner/management features → API connection & sync. Enter a reachable API base URL and run the health/listing check. The screen can fetch public listings from `/properties?city=Pune`. Use HTTPS except for explicitly permitted local development hosts (`localhost`, `127.0.0.1`, `10.0.2.2`). A token entered for an optional owner-dashboard check is kept in screen state rather than persisted as an app preference. Currently, only this discovery/health path is wired from Android to the API; the rest of Android's feature records stay local until their individual API workflows are connected.
+In the app, open Profile → Owner/management features → API connection & sync. Enter a reachable API base URL and run the health/listing check. The screen can fetch public listings from `/properties?city=Pune`. Use HTTPS except for explicitly permitted local development hosts (`localhost`, `127.0.0.1`, `10.0.2.2`). A token entered for an optional owner-dashboard check is kept in screen state rather than persisted as an app preference. Beyond public discovery and health checks, Android now supports role-token sessions for development, owner property creation with room/bed inventory and amenity submission, customer enquiry + visit requests, server-backed reservation requests for a selected server unit, and owner status updates for server-side enquiries/reservations. Enquiry and reservation views refresh from the API when a session is active. Drafts and finance, resident and maintenance records remain device-local until their individual workflows are connected and reconciled. Development-token minting is for a configured development environment only and must be disabled in production.
 
 ## Google Maps and location accuracy
 

@@ -92,6 +92,9 @@ def test_enquiry_and_visit_creation_emit_owner_notifications():
     visit = client.post("/visits", json={"property_id": prop["id"], "enquiry_id": enquiry.json()["id"],
                                          "preferred_at": (date.today() + timedelta(days=2)).isoformat() + "T15:00:00"})
     assert visit.status_code == 201, visit.text
+    enquiry_rows = client.get("/enquiries")
+    assert enquiry_rows.status_code == 200, enquiry_rows.text
+    assert enquiry_rows.json()[0]["property_name"] == "Test House"
     set_actor("owner-1", "owner")
     messages = client.get("/notifications")
     assert messages.status_code == 200
@@ -104,6 +107,9 @@ def test_reservations_block_duplicate_active_unit():
     payload = {"property_id": prop["id"], "unit_id": unit["id"], "move_in_date": (date.today() + timedelta(days=7)).isoformat(), "terms_snapshot": {"currency": "INR"}}
     first = client.post("/reservations", json=payload)
     assert first.status_code == 201, first.text
+    reservation_rows = client.get("/reservations")
+    assert reservation_rows.status_code == 200, reservation_rows.text
+    assert reservation_rows.json()[0]["property_name"] == "Test House"
     second = client.post("/reservations", json=payload)
     assert second.status_code == 409, second.text
 
