@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>StayEasy · Platform Console</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0c1323;--panel:#141f33;--panel2:#192740;--line:#2a3a55;--ink:#eef3ff;--muted:#9baac4;--blue:#7aa2ff;--violet:#b6a0ff;--amber:#ffbc8b;--red:#ff929b;--radius:18px;font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 10% 0%,#1a2a4d 0%,transparent 42%),var(--bg);color:var(--ink);min-height:100vh}
+    header{padding:27px max(20px,calc((100vw - 1240px)/2));border-bottom:1px solid var(--line);display:flex;align-items:center;gap:16px;justify-content:space-between;flex-wrap:wrap}
+    .brand{display:flex;gap:12px;align-items:center}.mark{width:46px;height:46px;border-radius:15px;background:linear-gradient(145deg,#759cff,#7d6be9);display:grid;place-items:center;font-size:22px;font-weight:800;color:#fff;box-shadow:0 8px 32px #5a78d533}.eyebrow{font-size:10px;font-weight:800;letter-spacing:.16em;color:var(--blue)}h1{font-size:23px;margin:2px 0}.sub{font-size:12px;color:var(--muted)}main{max-width:1240px;margin:auto;padding:22px 20px 50px}.grid{display:grid;grid-template-columns:350px 1fr;gap:18px;align-items:start}.panel{background:linear-gradient(180deg,#17243a,#131e31);border:1px solid var(--line);border-radius:var(--radius);padding:18px;box-shadow:0 12px 36px #0002}.panel h2{font-size:16px;margin:0 0 7px}.hint{font-size:12px;color:var(--muted);line-height:1.6;margin:0 0 16px}label{display:block;font-size:11px;color:var(--muted);margin:12px 0 6px}input,textarea,select{background:#0d1728;border:1px solid #354663;border-radius:11px;color:var(--ink);padding:11px 12px;width:100%;font:inherit;font-size:12px;outline:none}input:focus,textarea:focus{border-color:var(--blue)}button{border:1px solid #405679;color:var(--ink);background:#202f49;border-radius:11px;padding:10px 13px;font-weight:700;font-size:11px;cursor:pointer;transition:.15s}button:hover{filter:brightness(1.17);transform:translateY(-1px)}button:disabled{opacity:.4;cursor:not-allowed;transform:none}.primary{background:linear-gradient(120deg,#426be9,#745ee5);border-color:transparent}.approve{background:#21395a;border-color:#4f7ee8}.warn{background:#3d2d2a;border-color:#a76f55}.reject{background:#3d2633;border-color:#9f576d}.row{display:flex;gap:8px;align-items:center}.row>*{flex:1}.status{display:inline-flex;border:1px solid #48608b;color:#afc6ff;border-radius:100px;padding:5px 9px;font-size:10px}.status.pending{color:var(--amber);border-color:#865f46}.muted{color:var(--muted)}.stack{display:grid;gap:10px}.summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}.metric{border:1px solid var(--line);background:#121d30;border-radius:14px;padding:13px}.metric strong{font-size:22px;display:block}.metric span{font-size:10px;color:var(--muted)}.listing{border:1px solid var(--line);background:#101a2c;border-radius:15px;padding:15px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:14px}.listing h3{font-size:14px;margin:0 0 5px}.meta{font-size:11px;color:var(--muted);line-height:1.8}.actions{display:flex;flex-direction:column;gap:7px;min-width:145px}.empty{border:1px dashed #40516d;color:var(--muted);padding:25px;border-radius:14px;text-align:center;font-size:12px}.log{font:11px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px;overflow:auto;background:#0b1423;border:1px solid var(--line);border-radius:12px;padding:12px}.notice{margin-top:12px;padding:11px 12px;border-radius:10px;font-size:11px;line-height:1.5;display:none}.notice.error{display:block;background:#3c202c;color:#ffc7cf;border:1px solid #7e4053}.notice.good{display:block;background:#1c2b43;color:#bed3ff;border:1px solid #405a8c}.actions2{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.footer{font-size:10px;color:var(--muted);margin:20px 2px;line-height:1.6}@media(max-width:900px){.grid{grid-template-columns:1fr}.summary{grid-template-columns:repeat(2,1fr)}.listing{grid-template-columns:1fr}.actions{flex-direction:row;flex-wrap:wrap}.actions button{flex:1}}
+  </style>
+</head>
+<body>
+<header><div class="brand"><div class="mark">S</div><div><div class="eyebrow">STAYEASY · OPERATIONS</div><h1>Platform console</h1><div class="sub">Listing review · trust & safety · platform health</div></div></div><span class="status">ADMIN ACCESS REQUIRED</span></header>
+<main>
+  <section class="grid">
+    <div class="stack">
+      <div class="panel"><h2>Connect to the API</h2><p class="hint">Run the StayEasy API first. Paste a short-lived admin bearer token issued by your identity provider. Tokens remain in this page's memory only and are not written to browser storage.</p>
+        <label for="base">API base URL</label><input id="base" value="http://localhost:8000" spellcheck="false">
+        <label for="token">Admin bearer token</label><input id="token" type="password" placeholder="Paste admin JWT" autocomplete="off">
+        <div class="actions2"><button class="primary" id="connect">Connect & load</button><button id="disconnect">Clear token</button></div>
+        <div id="notice" class="notice"></div>
+      </div>
+      <div class="panel"><h2>API health</h2><p class="hint">Checks connectivity separately from authenticated admin access.</p><button id="health">Check health</button><div id="healthLog" class="log" style="margin-top:10px">Not checked yet.</div></div>
+      <div class="panel"><h2>Admin reports</h2><p class="hint">High-level platform counts from the API database.</p><button id="reports">Refresh report</button><div id="reportLog" class="log" style="margin-top:10px">Connect with an admin token to load reports.</div></div>
+      <div class="panel"><h2>Audit history</h2><p class="hint">Recent moderation and operational changes. Sensitive data should not be copied into shared channels.</p><button id="audit">Load latest 100 entries</button><div id="auditLog" class="log" style="margin-top:10px">Not loaded.</div></div>
+    </div>
+    <div class="stack">
+      <div class="summary">
+        <div class="metric"><strong id="mProperties">—</strong><span>Total properties</span></div>
+        <div class="metric"><strong id="mPublished">—</strong><span>Published</span></div>
+        <div class="metric"><strong id="mReview">—</strong><span>Pending review</span></div>
+        <div class="metric"><strong id="mIssues">—</strong><span>Open issues</span></div>
+      </div>
+      <div class="panel"><div class="row"><div><h2>Listing review queue</h2><p class="hint">Review accuracy, eligibility rules, photos, pricing, location and inventory before publishing. Approving marks a property as verified in this prototype and should be backed by documented checks in production.</p></div><button id="reload" class="primary">Refresh queue</button></div><div id="queue" class="stack"><div class="empty">Connect to the API using an admin token to load review items.</div></div></div>
+    </div>
+  </section>
+  <p class="footer">Prototype administration console. This is not a production identity provider or complete trust-and-safety case-management system. Before public launch, configure SSO/MFA, enforce least-privilege administrator access, define verification evidence and escalation policies, add rate limits and monitor administrative actions.</p>
+</main>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  let token = '';
+  const base = () => $('base').value.trim().replace(/\/$/, '');
+  const notify = (message, error=false) => { const el=$('notice'); el.className='notice '+(error?'error':'good'); el.textContent=message; };
+  const api = async (path, opts={}) => {
+    const headers = {'Content-Type':'application/json', ...(opts.headers||{})}; if(token) headers.Authorization = `Bearer ${token}`;
+    const response = await fetch(base()+path, {...opts, headers});
+    const raw = await response.text(); let data; try { data=raw ? JSON.parse(raw) : null; } catch { data=raw; }
+    if(!response.ok) throw new Error(`${response.status} ${response.statusText}: ${typeof data==='string'?data:JSON.stringify(data)}`);
+    return data;
+  };
+  const pretty = v => JSON.stringify(v,null,2);
+  const safe = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  async function loadReports(){ const r=await api('/admin/reports'); $('mProperties').textContent=r.properties??0; $('mPublished').textContent=r.published_properties??0; $('mReview').textContent=r.pending_review??0; $('mIssues').textContent=r.open_issues??0; $('reportLog').textContent=pretty(r); }
+  async function loadAudit(){ $('auditLog').textContent=pretty(await api('/admin/audit-log?limit=100')); }
+  async function loadQueue(){
+    const rows=await api('/admin/listing-review'); const host=$('queue');
+    if(!Array.isArray(rows)||!rows.length){host.innerHTML='<div class="empty">No listings currently require a decision.</div>';return;}
+    host.innerHTML=rows.map(p=>`<article class="listing"><div><div class="row" style="justify-content:flex-start;flex-wrap:wrap"><span class="status ${p.status==='pending_review'?'pending':''}">${safe(p.status)}</span><span class="status">${safe(p.verification_status)}</span></div><h3 style="margin-top:10px">${safe(p.name)}</h3><div class="meta">${safe(p.locality)}, ${safe(p.city)}${p.pin_code?' · '+safe(p.pin_code):''}<br>Rent from ₹${Number(p.rent_from||0).toLocaleString('en-IN')} · Deposit from ₹${Number(p.deposit_from||0).toLocaleString('en-IN')} · ${safe(p.eligibility)}${p.couples_welcome?' · Couples welcome':''}<br>Inventory: ${safe(JSON.stringify(p.inventory||{}))}</div><p class="hint" style="margin:8px 0 0">${safe((p.description||'No description provided').slice(0,500))}</p><label>Review note (optional)</label><input id="note-${p.id}" placeholder="Verification or change request note"></div><div class="actions"><button class="approve" data-id="${p.id}" data-decision="approve">Approve & publish</button><button data-id="${p.id}" data-decision="request_changes">Request changes</button><button class="warn" data-id="${p.id}" data-decision="pause">Pause listing</button><button class="reject" data-id="${p.id}" data-decision="reject">Reject listing</button></div></article>`).join('');
+    host.querySelectorAll('button[data-decision]').forEach(btn=>btn.addEventListener('click', async()=>{
+      const id=btn.dataset.id, decision=btn.dataset.decision; const note=$(`note-${id}`).value;
+      if(!confirm(`${decision.replace('_',' ')} listing #${id}?`)) return;
+      try { await api(`/admin/properties/${id}/decision`, {method:'POST', body:JSON.stringify({decision,note})}); notify(`Listing #${id}: ${decision.replace('_',' ')} saved.`); await Promise.all([loadQueue(),loadReports(),loadAudit()]); }
+      catch(e){notify(e.message,true);}
+    }));
+  }
+  async function connect(){token=$('token').value.trim(); if(!token){notify('Provide an admin bearer token first.',true);return;} try { await loadReports(); await loadQueue(); notify('Connected. Admin endpoints accepted the token.'); } catch(e){ notify(e.message,true); } }
+  $('connect').addEventListener('click',connect); $('reload').addEventListener('click',async()=>{try{await loadQueue();notify('Review queue refreshed.')}catch(e){notify(e.message,true)}});
+  $('reports').addEventListener('click',async()=>{try{await loadReports();notify('Reports refreshed.')}catch(e){notify(e.message,true)}});
+  $('audit').addEventListener('click',async()=>{try{await loadAudit();notify('Audit history loaded.')}catch(e){notify(e.message,true)}});
+  $('disconnect').addEventListener('click',()=>{$('token').value='';token='';notify('Token cleared from this page.');});
+  $('health').addEventListener('click',async()=>{try{$('healthLog').textContent=pretty(await api('/health'));}catch(e){$('healthLog').textContent=e.message;}});
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+name: stayeasy
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-stayeasy}
+      POSTGRES_USER: ${POSTGRES_USER:-stayeasy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the root .env file}
+    volumes:
+      - stayeasy_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [stayeasy-internal]
+  api:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-stayeasy}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stayeasy}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in the root .env file}
+      JWT_ISSUER: ${JWT_ISSUER:-stayeasy-api}
+      ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-120}
+      DEV_TOKEN_PASSWORD: ${DEV_TOKEN_PASSWORD:-}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [stayeasy-internal]
+volumes:
+  stayeasy_pgdata:
+networks:
+  stayeasy-internal:
+    internal: true
