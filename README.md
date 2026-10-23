@@ -23,12 +23,52 @@ stayeasy_android/
 
 ## Run the Android app
 
-1. Extract the ZIP and open the `stayeasy_android` folder in Android Studio.
+1. Clone this repository and open its root folder in Android Studio.
 2. Install JDK 17 and an Android SDK platform compatible with `compileSdk = 35`.
 3. Allow Android Studio to sync dependencies and download the pinned Gradle 8.9 distribution.
 4. Run the `app` configuration on an emulator or Android phone.
 
 The packaging environment used for this build did not have an Android SDK/Gradle distribution and could not resolve external download hosts, so a definitive Android Gradle build or emulator run could not be completed here. The project-level Kotlin syntax pass found no targeted parser errors, but that does not replace a proper Gradle compile. Run the definitive build in Android Studio or CI before release.
+
+## Get the APK from GitHub Actions
+
+Every push to `main` runs the **Android APK** workflow ([`.github/workflows/android-apk.yml`](.github/workflows/android-apk.yml)), which builds the app with JDK 17 and Gradle and uploads the APKs as build artifacts (kept for 30 days):
+
+- `stayeasy-debug-apk` — debug build (`app-debug.apk`), installable directly on a phone.
+- `stayeasy-release-unsigned-apk` — release build (`app-release-unsigned.apk`). It is **not signed**, so Android will not install it until it is signed with a release key.
+
+### Download from the website
+
+1. Open the repo on GitHub and click the **Actions** tab.
+2. Select the **Android APK** workflow in the left sidebar.
+3. Open the latest run with a green check mark.
+4. Scroll to **Artifacts** and click **stayeasy-debug-apk** to download a `.zip`. You must be signed in to GitHub to download artifacts.
+5. Unzip it to get `app-debug.apk`.
+6. Copy the `.apk` to your Android device (minimum Android 8.0) and open it. If asked, allow **Install unknown apps** for the app you're opening it from (Files, Chrome, etc.), then tap **Install**.
+
+### Run the build manually
+
+- On GitHub: **Actions** → **Android APK** → **Run workflow** → choose `main` → **Run workflow**.
+- With the GitHub CLI:
+
+```bash
+gh workflow run android-apk.yml -R radhengle/StayEasy
+gh run watch -R radhengle/StayEasy   # pick the new run to follow it
+```
+
+### Download with the GitHub CLI
+
+```bash
+# Debug APK from the latest successful run on main, into ./apk
+RUN_ID=$(gh run list -R radhengle/StayEasy -w android-apk.yml -b main -s success -L 1 --json databaseId -q '.[0].databaseId')
+gh run download "$RUN_ID" -R radhengle/StayEasy -n stayeasy-debug-apk -D apk
+
+# Or a specific run
+gh run list -R radhengle/StayEasy -w android-apk.yml
+gh run download <run-id> -R radhengle/StayEasy -n stayeasy-debug-apk -D apk
+```
+
+Install it on a USB-connected device with `adb install -r apk/app-debug.apk`.
 
 ## Android capability overview
 
