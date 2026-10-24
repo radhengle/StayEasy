@@ -531,7 +531,15 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                 if (category in setOf("residents", "stays") && !serverOwnerStayMode) {
                     Text("Local records are device-only. Connect the API and sign in with an authorized owner account to view shared stay history.", color = SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
                 }
-                if (serverOwnerStayMode) Text("Server-synced · records come from authorized properties and refresh from StayEasy.", color = SE.Blue, fontSize = 9.sp, lineHeight = 13.sp)
+                if (serverOwnerStayMode) {
+                    val staySyncCopy = when {
+                        remoteSyncing -> "Loading server-backed records…"
+                        remoteSyncMessage.startsWith("Synced") -> "Server-synced · records come from properties you are authorized to manage."
+                        remoteSyncMessage.startsWith("Server sync unavailable") -> "Server refresh failed. Cached rows may be shown; refresh before acting on this information."
+                        else -> "Waiting for the first server refresh."
+                    }
+                    Text(staySyncCopy, color = if (remoteSyncMessage.startsWith("Server sync unavailable")) SE.Orange else SE.Blue, fontSize = 9.sp, lineHeight = 13.sp)
+                }
                 if (readOnlyServerFinance) Text("Read-only · these entries are linked to your server-backed stay.", color = SE.Blue, fontSize = 9.sp, lineHeight = 13.sp)
                 if (remoteSyncMessage.isNotBlank()) Text(remoteSyncMessage, color = if (remoteSyncMessage.startsWith("Synced") || remoteSyncMessage.startsWith("Server confirmed") || remoteSyncMessage.startsWith("Saved to server")) SE.Blue else SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
             }
