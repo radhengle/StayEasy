@@ -670,11 +670,16 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     StayRecordStore.notify(context, "Message saved", "Conversation note for ${selectedListing.name}", selectedListing.name)
                     notify("Message note saved on this device")
                 })
-                "stay" -> MyStayScreen({ route = "records:payments" }, { route = "issue" }, { chatReturnRoute = "stay"; route = "chat" }, {
-                    StayRecordStore.add(context, StayRecord(category = "stays", title = "Move-out notice", details = "Move-out request submitted from My Stay. Owner must confirm the applicable notice period and final settlement.", status = "Notice given"))
-                    StayRecordStore.notify(context, "Move-out request saved", "Confirm notice period and deposit settlement with the owner")
-                    notify("Move-out request saved on this device")
-                })
+                "stay" -> MyStayScreen(
+                    baseUrl = preferences.apiBaseUrl,
+                    account = signedInAccount,
+                    onPayments = { route = "records:payments" },
+                    onIssue = { route = "issue" },
+                    onChat = { chatReturnRoute = "stay"; route = "chat" },
+                    onMoveOut = {
+                        notify("Move-out requests are not connected to the shared backend yet. Nothing was saved; please contact the owner directly.")
+                    }
+                )
                 "payments" -> FeatureRecordsScreen("payments", ownerMode = false) { route = "stay" }
                 "issue" -> IssueScreen({ route = "stay" }, { category, details, urgency ->
                     val apiBaseUrl = preferences.apiBaseUrl
@@ -1598,27 +1603,216 @@ private fun ChatScreen(p: PgListing, onBack: () -> Unit, onSend: () -> Unit) {
 }
 
 @Composable
-private fun MyStayScreen(onPayments: () -> Unit, onIssue: () -> Unit, onChat: () -> Unit, onMoveOut: () -> Unit) {
+private fun MyStayScreen(
+    baseUrl: String,
+    account: JSONObject?,
+    onPayments: () -> Unit,
+    onIssue: () -> Unit,
+    onChat: () -> Unit,
+    onMoveOut: () -> Unit
+) {
+    val accountRole = account?.optString("role").orEmpty()
+    val accountId = account?.optString("id").orEmpty()
+    var stays by remember(accountId) { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var loading by remember(accountId) { mutableStateOf(false) }
+    var error by remember(accountId) { mutableStateOf("") }
+    var syncMessage by remember(accountId) { mutableStateOf("") }
+    var refreshKey by remember(accountId) { mutableIntStateOf(0) }
+
+    LaunchedEffect(baseUrl, accountRole, accountId, refreshKey) {
+        stays = emptyList()
+        error = ""
+        syncMessage = ""
+        if (accountRole != "customer") {
+            syncMessage = if (account == null) {
+                "Sign in with your verified tenant account to load shared stay details."
+            } else {
+                "My Stay is available to customer accounts. The account currently signed in is not a tenant."
+            }
+            loading = false
+            return@LaunchedEffect
+        }
+        if (baseUrl.isBlank()) {
+            error = "Connect the StayEasy API to load your stay from the server."
+            loading = false
+            return@LaunchedEffect
+        }
+        val token = StayApiClient.currentSessionToken(baseUrl)
+        if (token == null) {
+            error = "Your tenant session is unavailable. Sign in again to load shared stay details."
+            loading = false
+            return@LaunchedEffect
+        }
+        loading = true
+        try {
+            stays = withContext(Dispatchers.IO) { StayApiClient.myStays(baseUrl, token) }
+            syncMessage = "Synced from StayEasy · account-scoped"
+        } catch (e: Exception) {
+            error = e.message ?: "Could not load your stay. Check the API connection and retry."
+        } finally {
+            loading = false
+        }
+    }
+
+    val currentStay = stays.firstOrNull {
+        it.optString("status").lowercase(Locale.ROOT) in setOf("active", "notice_given")
+    } ?: stays.firstOrNull()
+    val status = currentStay?.optString("status", "").orEmpty()
+        .replace('_', ' ').replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString() }
+    val propertyName = currentStay?.optString("property_name").orEmpty()
+    val unitLabel = currentStay?.let {
+        listOf(it.optString("room_code"), it.optString("unit_code"))
+            .filter(String::isNotBlank).joinToString(" · ")
+    }.orEmpty()
+    val locality = currentStay?.let {
+        listOf(it.optString("locality"), it.optString("city")).filter(String::isNotBlank).joinToString(", ")
+    }.orEmpty()
+
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
-        ScreenHeader("My stay", "Your home, payments and requests", trailing = { RoundIconButton(Icons.Filled.Notifications, {}) })
-        Spacer(Modifier.height(15.dp))
-        Card(shape = RoundedCornerShape(23.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(17.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) { StatusPill("ACTIVE STAY", Color.White.copy(alpha = 0.13f), Color.White); Spacer(Modifier.weight(1f)); Icon(Icons.Filled.VerifiedUser, null, tint = Color(0xFFB7D2FF)) }
-                Spacer(Modifier.height(13.dp)); Text("The Courtyard Co-Living", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp); Text("Room 204 · Bed B · Hinjawadi Phase 1", color = Color.White.copy(alpha = 0.73f), fontSize = 12.sp)
-                Spacer(Modifier.height(13.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("NEXT RENT DUE", color = Color.White.copy(alpha = 0.62f), fontSize = 9.sp, fontWeight = FontWeight.Bold); Text("₹12,500", color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 24.sp); Text("Due on 5 Nov · example data", color = Color.White.copy(alpha = 0.7f), fontSize = 10.sp) }; Button(onClick = onPayments, colors = ButtonDefaults.buttonColors(containerColor = SE.Orange), shape = RoundedCornerShape(13.dp)) { Text("View payments", color = Color.White) } }
+        ScreenHeader(
+            "My stay",
+            "Your home, payments and requests",
+            trailing = { RoundIconButton(Icons.Filled.Notifications, {}) }
+        )
+        Spacer(Modifier.height(10.dp))
+        if (accountRole == "customer") {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    if (loading) "Refreshing your server stay…" else syncMessage.ifBlank { "Server stay not loaded" },
+                    color = if (error.isNotBlank()) SE.Orange else SE.Blue,
+                    fontSize = 10.sp,
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(
+                    onClick = { refreshKey++ },
+                    enabled = !loading,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp),
+                    shape = RoundedCornerShape(10.dp)
+                ) { Text(if (loading) "Loading…" else "Refresh", fontSize = 10.sp) }
             }
         }
-        Spacer(Modifier.height(18.dp)); Text("QUICK ACTIONS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SE.Muted, letterSpacing = 1.sp); Spacer(Modifier.height(10.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            QuickAction("Payments", Icons.Filled.Payments, SE.BlueSoft, SE.Blue, onPayments, Modifier.weight(1f)); QuickAction("Raise issue", Icons.Filled.ReportProblem, SE.OrangeSoft, SE.Orange, onIssue, Modifier.weight(1f)); QuickAction("Contact owner", Icons.Filled.ChatBubbleOutline, SE.Lavender, SE.Ink, onChat, Modifier.weight(1f))
+        if (error.isNotBlank()) {
+            Spacer(Modifier.height(9.dp))
+            Card(shape = RoundedCornerShape(13.dp), colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft)) {
+                Text(error, color = SE.Orange, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(12.dp))
+            }
         }
-        Spacer(Modifier.height(20.dp)); Text("Your stay details", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = SE.Ink)
-        Spacer(Modifier.height(9.dp)); DetailLine("Move-in date", "1 October 2026", Icons.Filled.CalendarToday); DetailLine("Security deposit", "₹22,000 · recorded", Icons.Filled.Lock); DetailLine("Billing method", "Monthly · due on the 5th", Icons.Filled.Payments); DetailLine("House rules", "View shared guidelines", Icons.Filled.Apartment)
-        Spacer(Modifier.height(17.dp)); Text("Need to make a change?", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp)
-        Text("Request a bed transfer or move-out and track the owner's response.", color = SE.Muted, fontSize = 12.sp, lineHeight = 18.sp)
-        Spacer(Modifier.height(9.dp)); OutlinedButton(onClick = onMoveOut, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("Request move-out", color = SE.Ink) }
-        Spacer(Modifier.height(18.dp)); Text("Illustrative resident account. No real payment is collected.", color = SE.Muted, fontSize = 10.sp)
+
+        if (account == null) {
+            Spacer(Modifier.height(14.dp))
+            Card(shape = RoundedCornerShape(23.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(17.dp)) {
+                    StatusPill("SAMPLE PREVIEW", Color.White.copy(alpha = 0.13f), Color.White)
+                    Spacer(Modifier.height(13.dp))
+                    Text("Illustrative shared-living stay", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 19.sp)
+                    Text("Room 204 · Bed B · Pune", color = Color.White.copy(alpha = 0.73f), fontSize = 12.sp)
+                    Spacer(Modifier.height(8.dp))
+                    Text("Sample data only · no real stay is attached to this device.", color = Color.White.copy(alpha = 0.72f), fontSize = 10.sp)
+                }
+            }
+        } else if (accountRole == "customer" && !loading && error.isBlank() && currentStay == null) {
+            Spacer(Modifier.height(14.dp))
+            Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Icon(Icons.Filled.Apartment, null, tint = SE.Blue)
+                    Text("No server-backed stay yet", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        "Once an owner confirms your assignment, the property, room/bed, rent and deposit will appear here automatically.",
+                        color = SE.Muted, fontSize = 12.sp, lineHeight = 18.sp
+                    )
+                }
+            }
+        } else if (currentStay != null) {
+            Spacer(Modifier.height(14.dp))
+            Card(shape = RoundedCornerShape(23.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(17.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        StatusPill(status.uppercase(Locale.ROOT), Color.White.copy(alpha = 0.13f), Color.White)
+                        Spacer(Modifier.weight(1f))
+                        Icon(Icons.Filled.VerifiedUser, null, tint = Color(0xFFB7D2FF))
+                    }
+                    Spacer(Modifier.height(13.dp))
+                    Text(propertyName.ifBlank { "Your property" }, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                    Text(
+                        listOf(unitLabel, locality).filter(String::isNotBlank).joinToString(" · ").ifBlank { "Unit details unavailable" },
+                        color = Color.White.copy(alpha = 0.73f), fontSize = 12.sp
+                    )
+                    Spacer(Modifier.height(13.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("AGREED MONTHLY RENT", color = Color.White.copy(alpha = 0.62f), fontSize = 9.sp, fontWeight = FontWeight.Bold)
+                            Text(
+                                if (currentStay.optInt("agreed_monthly_rent") > 0) money(currentStay.optInt("agreed_monthly_rent")) else "Not recorded",
+                                color = Color.White, fontWeight = FontWeight.ExtraBold, fontSize = 23.sp
+                            )
+                            Text("From the server stay record · no payment status implied", color = Color.White.copy(alpha = 0.7f), fontSize = 9.sp)
+                        }
+                        Button(onClick = onPayments, colors = ButtonDefaults.buttonColors(containerColor = SE.Orange), shape = RoundedCornerShape(13.dp)) {
+                            Text("Payments", color = Color.White)
+                        }
+                    }
+                }
+            }
+        } else if (loading) {
+            Spacer(Modifier.height(18.dp))
+            Text("Loading your current stay…", color = SE.Muted, fontSize = 12.sp)
+        } else {
+            Spacer(Modifier.height(12.dp))
+            Text("Connect a verified tenant account to see your shared stay.", color = SE.Muted, fontSize = 12.sp)
+        }
+
+        Spacer(Modifier.height(18.dp))
+        Text("QUICK ACTIONS", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SE.Muted, letterSpacing = 1.sp)
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            QuickAction("Payments", Icons.Filled.Payments, SE.BlueSoft, SE.Blue, onPayments, Modifier.weight(1f))
+            QuickAction("Raise issue", Icons.Filled.ReportProblem, SE.OrangeSoft, SE.Orange, onIssue, Modifier.weight(1f))
+            QuickAction("Contact owner", Icons.Filled.ChatBubbleOutline, SE.Lavender, SE.Ink, onChat, Modifier.weight(1f))
+        }
+
+        if (currentStay != null) {
+            Spacer(Modifier.height(20.dp))
+            Text("Your stay details", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = SE.Ink)
+            Spacer(Modifier.height(9.dp))
+            DetailLine("Move-in date", currentStay.optString("joining_date").ifBlank { "Not recorded" }, Icons.Filled.CalendarToday)
+            DetailLine("Security deposit", if (currentStay.optInt("deposit_held") > 0) "${money(currentStay.optInt("deposit_held"))} · recorded" else "Not recorded", Icons.Filled.Lock)
+            DetailLine("Stay status", status.ifBlank { "Unknown" }, Icons.Filled.VerifiedUser)
+            val noticeDate = currentStay.optString("notice_date")
+            if (noticeDate.isNotBlank()) DetailLine("Notice date", noticeDate, Icons.Filled.CalendarToday)
+            val moveOutDate = currentStay.optString("move_out_date")
+            if (moveOutDate.isNotBlank()) DetailLine("Move-out date", moveOutDate, Icons.Filled.CalendarToday)
+            Spacer(Modifier.height(17.dp))
+            Text("Need to make a change?", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            Text(
+                "Move-out requests are not yet connected to the shared backend. Contact the owner directly; this screen will not create a local-only request.",
+                color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp
+            )
+            Spacer(Modifier.height(9.dp))
+            OutlinedButton(
+                onClick = onMoveOut,
+                enabled = currentStay.optString("status").lowercase(Locale.ROOT) in setOf("active", "notice_given"),
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp)
+            ) { Text("Move-out request status", color = SE.Ink) }
+        }
+
+        if (stays.size > 1) {
+            Spacer(Modifier.height(20.dp))
+            Text("Previous stays", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = SE.Ink)
+            stays.filter { currentStay == null || it.optLong("id") != currentStay.optLong("id") }.forEach { row ->
+                Spacer(Modifier.height(8.dp))
+                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(row.optString("property_name", "Property"), color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                        Text(
+                            "${row.optString("joining_date")} · ${row.optString("status").replace('_', ' ')} · ${money(row.optInt("agreed_monthly_rent"))}/month",
+                            color = SE.Muted, fontSize = 10.sp
+                        )
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(18.dp))
     }
 }
 
