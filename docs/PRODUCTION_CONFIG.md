@@ -10,7 +10,7 @@ The API permits SQLite and missing SMTP only in `development` and `test`. Set `A
 | `SMTP_HOST` | Configured SMTP relay for verification and recovery |
 | `SMTP_FROM_EMAIL` | Verified sender address |
 | `SMTP_PORT` | Valid TCP port; defaults to 587 |
-| `CORS_ORIGINS` | Optional comma-separated browser origins; if configured in staging/production they must use HTTPS and cannot contain `*` |
+| `CORS_ORIGINS` | Required comma-separated browser origins in staging/production; every origin must use HTTPS and wildcard `*` is rejected |
 
 Keep secrets in your hosting platform's secret manager. Do not commit secrets, place passwords in shell arguments, or expose production credentials in CI. The API's development token endpoint is unavailable unless `APP_ENV=development`.
 
