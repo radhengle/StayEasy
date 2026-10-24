@@ -43,7 +43,7 @@ def list_owner_access_requests(
         "account_active": user.is_active,
         "role": user.role,
         "requested_workspace": credential.requested_workspace,
-        "owner_access_status": "active" if user.role == "owner" else credential.owner_access_status,
+        "owner_access_status": credential.owner_access_status,
         "requested_at": credential.owner_access_requested_at.isoformat() if credential.owner_access_requested_at else None,
         "reviewed_at": credential.owner_access_reviewed_at.isoformat() if credential.owner_access_reviewed_at else None,
         "review_note": credential.owner_access_review_note,
