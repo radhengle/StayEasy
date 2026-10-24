@@ -32,7 +32,7 @@ The packaging environment used for this build did not have an Android SDK/Gradle
 
 ## Get the APK from GitHub Actions
 
-Every push to `main` or a `feat/**` branch runs the **Android APK** workflow ([`.github/workflows/android-apk.yml`](.github/workflows/android-apk.yml)). CI first runs backend contract tests and static project validation. After those pass, APK packaging and Compose UI smoke tests on an Android API 35 emulator run as separate jobs in parallel. APK artifacts are retained for 30 days, so a slow emulator cannot block packaging; however, treat a build as fully verified only when both the APK and emulator-test jobs pass. Test reports are uploaded even if emulator tests fail:
+Every pull request targeting `main` and every push to `main` runs the **Android APK** workflow ([`.github/workflows/android-apk.yml`](.github/workflows/android-apk.yml)); feature branches are validated by their pull request rather than duplicate push builds. CI first runs backend contract tests and static project validation. After those pass, APK packaging and Compose UI smoke tests on an Android API 35 emulator run as separate jobs in parallel. APK artifacts are retained for 30 days, so a slow emulator cannot block packaging; however, treat a build as fully verified only when both the APK and emulator-test jobs pass. Test reports are uploaded even if emulator tests fail:
 
 - `stayeasy-debug-apk` — debug build (`app-debug.apk`), installable directly on a phone.
 - `stayeasy-release-unsigned-apk` — release build (`app-release-unsigned.apk`). It is **not signed**, so Android will not install it until it is signed with a release key.
