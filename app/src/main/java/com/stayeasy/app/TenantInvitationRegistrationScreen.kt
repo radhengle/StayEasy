@@ -460,7 +460,7 @@ internal fun TenantInvitationRegistrationScreen(
                             invitationToken = null
                             invitationId = null
                             documents = emptyList()
-                            invitations = withContext(Dispatchers.IO) { StayApiClient.tenantInvitations(baseUrl, sessionToken) }
+                            invitations = withContext(Dispatchers.IO) { StayApiClient.tenantInvitations(baseUrl, sessionToken!!) }
                             notify("Registration submitted. No payment was collected.")
                         } catch (e: Exception) {
                             error = e.message ?: "Registration could not be submitted. Refresh and try again."
