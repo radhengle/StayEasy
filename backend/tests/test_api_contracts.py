@@ -158,7 +158,7 @@ def test_assigned_manager_reads_only_scoped_marketplace_records():
     with SessionLocal() as db:
         db.add(m.StaffAssignment(
             owner_id="owner-a", staff_user_id="manager-1", property_id=property_a["id"],
-            role="manager", permissions=["enquiries.view", "visits.view", "reservations.view"], status="active"
+            role="manager", permissions=["enquiries.view", "visits.view", "reservations.view", "dashboard.view"], status="active"
         ))
         db.commit()
 
