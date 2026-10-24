@@ -368,3 +368,46 @@ def test_maintenance_issues_are_scoped_to_staff_permissions():
 
     view_only_update = client.patch(f"/owner/issues/{issue_a['id']}", json={"status": "resolved"})
     assert view_only_update.status_code == 403
+
+
+
+def test_tenant_owner_registration_and_login():
+    tenant = client.post("/auth/register", json={
+        "display_name": "Tenant Example", "email": "tenant@example.com",
+        "phone": "+919876543210", "password": "StrongTenantPass123", "role": "customer",
+    })
+    assert tenant.status_code == 201, tenant.text
+    tenant_body = tenant.json()
+    assert tenant_body["user"]["role"] == "customer"
+    assert tenant_body["user"]["email"] == "tenant@example.com"
+    assert "password" not in tenant_body and "password_hash" not in tenant_body
+    token = tenant_body["access_token"]
+    me = client.get("/auth/me", headers={"Authorization": f"Bearer {token}"})
+    assert me.status_code == 200 and me.json()["display_name"] == "Tenant Example"
+    assert client.get("/stays/me", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+    assert client.get("/owner/dashboard", headers={"Authorization": f"Bearer {token}"}).status_code == 403
+
+    owner = client.post("/auth/register", json={
+        "display_name": "Owner Example", "email": "OWNER@example.com",
+        "password": "StrongOwnerPass123", "role": "owner",
+    })
+    assert owner.status_code == 201, owner.text
+    owner_body = owner.json()
+    assert owner_body["user"]["role"] == "owner"
+    assert client.get("/owner/dashboard", headers={
+        "Authorization": f"Bearer {owner_body['access_token']}"
+    }).status_code == 200
+
+    duplicate = client.post("/auth/register", json={
+        "display_name": "Another Tenant", "email": "tenant@example.com",
+        "password": "StrongTenantPass123", "role": "customer",
+    })
+    assert duplicate.status_code == 409
+    bad_login = client.post("/auth/login", json={
+        "email": "tenant@example.com", "password": "IncorrectPassword123",
+    })
+    assert bad_login.status_code == 401
+    login = client.post("/auth/login", json={
+        "email": " TENANT@example.com ", "password": "StrongTenantPass123",
+    })
+    assert login.status_code == 200 and login.json()["user"]["role"] == "customer"
