@@ -485,6 +485,12 @@ internal object StayApiClient {
         require(normalizedStatus in setOf("active", "notice_given", "completed", "cancelled")) {
             "Unsupported resident stay status."
         }
+        if (normalizedStatus == "notice_given") {
+            require(!noticeDate.isNullOrBlank()) { "Enter the notice date as YYYY-MM-DD." }
+        }
+        if (normalizedStatus == "completed") {
+            require(!moveOutDate.isNullOrBlank()) { "Enter the move-out date as YYYY-MM-DD." }
+        }
         val body = JSONObject().put("status", normalizedStatus)
         if (noticeDate != null) {
             body.put("notice_date", normalizeDate(noticeDate)
