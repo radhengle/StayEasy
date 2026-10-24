@@ -482,6 +482,14 @@ internal fun OwnerMoveInArrivalsScreen(
     var refresh by remember { mutableIntStateOf(0) }
     var tab by remember(initialTab) { mutableStateOf(initialTab) }
     var busyId by remember { mutableLongStateOf(0L) }
+    var docInvitationId by remember { mutableLongStateOf(0L) }
+    var docRows by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var docLoading by remember { mutableStateOf(false) }
+    var docError by remember { mutableStateOf("") }
+    var docRefresh by remember { mutableIntStateOf(0) }
+    var documentReviewNote by remember { mutableStateOf("") }
+    var docViewBusyId by remember { mutableLongStateOf(0L) }
+    val context = LocalContext.current
 
     LaunchedEffect(baseUrl, token, refresh) {
         if (baseUrl.isBlank() || token.isNullOrBlank()) {
@@ -508,6 +516,22 @@ internal fun OwnerMoveInArrivalsScreen(
                 error = e.message ?: "Could not load reservations and stays."
                 reservations = emptyList(); stays = emptyList(); properties = emptyList(); invitations = emptyList()
             } finally { loading = false }
+        }
+    }
+
+    LaunchedEffect(baseUrl, token, docInvitationId, docRefresh) {
+        if (docInvitationId > 0L && !token.isNullOrBlank()) {
+            docLoading = true
+            docError = ""
+            try {
+                docRows = withContext(Dispatchers.IO) { StayApiClient.ownerInvitationDocuments(baseUrl, token, docInvitationId) }
+            } catch (e: Exception) {
+                docError = e.message ?: "Document metadata could not be loaded."
+                docRows = emptyList()
+            } finally { docLoading = false }
+        } else {
+            docRows = emptyList()
+            docError = ""
         }
     }
 
@@ -577,6 +601,16 @@ internal fun OwnerMoveInArrivalsScreen(
                                 status == "pending" -> "Reservation request · owner decision required."
                                 else -> "Confirmed booking · check-in can be recorded on or after the move-in date."
                             }, color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                            if (invite != null && invite.optLong("id") > 0L) {
+                                OutlinedButton(
+                                    onClick = {
+                                        docInvitationId = invite.optLong("id")
+                                        documentReviewNote = ""
+                                        docRefresh++
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) { Text("Review registration documents") }
+                            }
                             if (!checkedIn && status == "pending") {
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Button(enabled = busyId == 0L, onClick = {
@@ -644,6 +678,124 @@ internal fun OwnerMoveInArrivalsScreen(
             }
         }
     }
+
+    if (docInvitationId > 0L) {
+        AlertDialog(
+            onDismissRequest = { if (docViewBusyId == 0L) docInvitationId = 0L },
+            title = { Text("Registration documents", color = SE.Ink, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = 500.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    if (docLoading) {
+                        CircularProgressIndicator()
+                        Text("Loading private document metadata…", color = SE.Muted, fontSize = 12.sp)
+                    } else if (docError.isNotBlank()) {
+                        Text(docError, color = SE.Red, fontSize = 12.sp)
+                    } else if (docRows.isEmpty()) {
+                        Text("No documents have been submitted for this invitation.", color = SE.Muted, fontSize = 12.sp)
+                    } else {
+                        docRows.forEach { doc ->
+                            val documentId = doc.optLong("id")
+                            val status = doc.pText("status")
+                            Card(shape = SE.cardShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.Background)) {
+                                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(doc.pText("category").replace('_', ' ').replaceFirstChar { it.uppercase() }, color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                                            Text(doc.pText("original_filename"), color = SE.Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                        PriorityTag(status, status == "approved")
+                                    }
+                                    Text(doc.pText("purpose"), color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
+                                    Text("Consent recorded: ${doc.pText("consent_at").take(10)} · Retention until: ${doc.pText("retention_until").take(10)}", color = SE.Muted, fontSize = 10.sp)
+                                    OutlinedButton(
+                                        enabled = docViewBusyId == 0L,
+                                        onClick = {
+                                            docViewBusyId = documentId
+                                            scope.launch {
+                                                try {
+                                                    val bytes = withContext(Dispatchers.IO) {
+                                                        StayApiClient.downloadInvitationDocument(baseUrl, token!!, docInvitationId, documentId)
+                                                    }
+                                                    val directory = File(context.cacheDir, "stayeasy-documents")
+                                                    directory.mkdirs()
+                                                    directory.listFiles()?.filter { System.currentTimeMillis() - it.lastModified() > 24L * 60 * 60 * 1000 }?.forEach { it.delete() }
+                                                    val extension = when (doc.pText("media_type")) {
+                                                        "application/pdf" -> "pdf"
+                                                        "image/png" -> "png"
+                                                        else -> "jpg"
+                                                    }
+                                                    val local = File(directory, "document-$documentId.$extension")
+                                                    FileOutputStream(local).use { it.write(bytes) }
+                                                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", local)
+                                                    val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, doc.pText("media_type"))
+                                                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                                    context.startActivity(Intent.createChooser(intent, "View registration document"))
+                                                } catch (e: Exception) {
+                                                    notify("Document could not be opened: ${e.message ?: "install a PDF or image viewer and retry"}")
+                                                } finally { docViewBusyId = 0L }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxWidth()
+                                    ) { Text(if (docViewBusyId == documentId) "Opening securely…" else "View document") }
+                                    if (status != "approved") {
+                                        OutlinedTextField(
+                                            value = documentReviewNote,
+                                            onValueChange = { documentReviewNote = it.take(2000) },
+                                            label = { Text("Review note (required for rejection)") },
+                                            modifier = Modifier.fillMaxWidth(),
+                                            minLines = 1,
+                                            maxLines = 3
+                                        )
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Button(
+                                                enabled = docViewBusyId == 0L,
+                                                onClick = {
+                                                    scope.launch {
+                                                        try {
+                                                            withContext(Dispatchers.IO) {
+                                                                StayApiClient.reviewInvitationDocument(baseUrl, token!!, docInvitationId, documentId, "approved")
+                                                            }
+                                                            notify("Document approved. Remaining required documents must also be approved.")
+                                                            docRefresh++
+                                                        } catch (e: Exception) { notify("Document approval failed: ${e.message ?: "refresh and retry"}") }
+                                                    }
+                                                },
+                                                modifier = Modifier.weight(1f)
+                                            ) { Text("Approve") }
+                                            OutlinedButton(
+                                                enabled = docViewBusyId == 0L && documentReviewNote.trim().length >= 5,
+                                                onClick = {
+                                                    scope.launch {
+                                                        try {
+                                                            withContext(Dispatchers.IO) {
+                                                                StayApiClient.reviewInvitationDocument(baseUrl, token!!, docInvitationId, documentId, "rejected", documentReviewNote)
+                                                            }
+                                                            notify("Document rejected with a review note for the tenant.")
+                                                            documentReviewNote = ""
+                                                            docRefresh++
+                                                        } catch (e: Exception) { notify("Document rejection failed: ${e.message ?: "refresh and retry"}") }
+                                                    }
+                                                },
+                                                modifier = Modifier.weight(1f)
+                                            ) { Text("Reject") }
+                                        }
+                                    } else {
+                                        Text("Approved by owner", color = SE.Blue, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { docInvitationId = 0L }) { Text("Close") } },
+            containerColor = SE.Surface
+        )
+    }
+}
 }
 
 private data class ArrivalLoad(
