@@ -421,9 +421,12 @@ def test_owner_ledger_is_scoped_and_manual_payment_cannot_claim_provider_verific
     manually_recorded = client.post("/owner/ledger", json={
         "property_id": property_a["id"], "category": "payment", "amount": 9000,
         "provider_status": "manual_record", "status": "recorded",
+        "paid_at": "2026-11-15T00:00:00+00:00",
         "description": "Cash payment noted by owner",
     })
     assert manually_recorded.status_code == 201, manually_recorded.text
+    assert manually_recorded.json()["provider_status"] == "manual_record"
+    assert manually_recorded.json()["paid_at"].startswith("2026-11-15")
 
     falsely_confirmed = client.post("/owner/ledger", json={
         "property_id": property_a["id"], "category": "payment", "amount": 9000,
