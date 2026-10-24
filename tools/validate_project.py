@@ -10,16 +10,20 @@ store = root / "app/src/main/java/com/stayeasy/app/FeatureStore.kt"
 api_client = root / "app/src/main/java/com/stayeasy/app/StayApiClient.kt"
 manifest = root / "app/src/main/AndroidManifest.xml"
 api_source = root / "backend/app/main.py"
+auth_source = root / "backend/app/auth.py"
+security_source = root / "backend/app/security.py"
 models = root / "backend/app/models.py"
 admin = root / "admin/index.html"
 
-for path in [main, features, store, api_client, manifest, api_source, models, admin]:
+for path in [main, features, store, api_client, manifest, api_source, auth_source, security_source, models, admin]:
     assert path.is_file(), f"Required file missing: {path.relative_to(root)}"
 main_text = main.read_text(encoding="utf-8")
 feature_text = features.read_text(encoding="utf-8")
 store_text = store.read_text(encoding="utf-8")
 client_text = api_client.read_text(encoding="utf-8")
 api_text = api_source.read_text(encoding="utf-8")
+auth_text = auth_source.read_text(encoding="utf-8")
+security_text = security_source.read_text(encoding="utf-8")
 model_text = models.read_text(encoding="utf-8")
 admin_text = admin.read_text(encoding="utf-8")
 
@@ -51,8 +55,15 @@ for marker in [
 for marker in ['SharedPreferences', 'StayRecord', 'apiBaseUrl', 'favorites', 'recentLocations']:
     assert marker.lower() in store_text.lower(), f"Missing local store marker: {marker}"
 assert 'putString("apiBaseUrl", value.apiBaseUrl)' in store_text, "API base URL preference is not persisted"
-for marker in ['/health', '/properties?city=$encodedCity', 'distanceIsVerified = false', 'https']:
+for marker in ['/health', '/properties?city=$encodedCity', 'distanceIsVerified = false', 'https', '/auth/register', '/auth/verify-email', '/auth/login', '/auth/forgot-password', '/auth/logout']:
     assert marker.lower() in client_text.lower(), f"Missing API client marker: {marker}"
+for route in [
+    '"/register"', '"/verify-email"', '"/resend-verification"', '"/login"',
+    '"/forgot-password"', '"/reset-password"', '"/me"', '"/logout"'
+]:
+    assert route in auth_text, f"Missing authentication route: {route}"
+for marker in ["hash_password", "verify_password", "hash_one_time_code", "auth_version"]:
+    assert marker in security_text or marker in auth_text, f"Missing authentication security contract: {marker}"
 for route in [
     '"/health"', '"/properties"', '"/owner/properties"', '"/owner/units"',
     '"/enquiries"', '"/visits"', '"/reservations"', '"/owner/stays"',
@@ -83,9 +94,10 @@ for doc in [
 ]:
     assert (root / doc).is_file(), f"Missing documentation: {doc}"
 assert "0.2.0-comprehensive-foundation" in (root / "app/build.gradle.kts").read_text(encoding="utf-8")
-for folder in [root / "backend/app", root / "backend/tests"]:
-    for py in folder.glob("*.py"):
-        ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
+assert (root / "backend/alembic.ini").is_file()
+assert (root / "backend/alembic/versions/20261024_01_initial_schema.py").is_file()
+for py in (root / "backend").rglob("*.py"):
+    ast.parse(py.read_text(encoding="utf-8"), filename=str(py))
 
 print(f"PASS: Android navigation and feature markers ({len(required_routes)} routes), local persistence and theme hooks.")
 print("PASS: API/client entry points, core domain models, moderation console, XML and project docs.")
