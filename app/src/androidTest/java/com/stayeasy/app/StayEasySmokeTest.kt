@@ -115,6 +115,30 @@ class StayEasySmokeTest {
     }
 
     @Test
+    fun ownerAccessReviewClientRejectsInvalidFiltersAndDecisionsBeforeNetwork() {
+        val invalidFilter = runCatching {
+            StayApiClient.ownerAccessRequests(
+                "https://api.example.invalid", "test-token", "waiting"
+            )
+        }.exceptionOrNull()
+        assertTrue("Only supported Owner access filters should be accepted", invalidFilter is IllegalArgumentException)
+
+        val missingUser = runCatching {
+            StayApiClient.decideOwnerAccessRequest(
+                "https://api.example.invalid", "test-token", " ", "approve"
+            )
+        }.exceptionOrNull()
+        assertTrue("An applicant must be selected before sending a decision", missingUser is IllegalArgumentException)
+
+        val invalidDecision = runCatching {
+            StayApiClient.decideOwnerAccessRequest(
+                "https://api.example.invalid", "test-token", "applicant-id", "promote"
+            )
+        }.exceptionOrNull()
+        assertTrue("Only explicit approve or reject decisions should be accepted", invalidDecision is IllegalArgumentException)
+    }
+
+    @Test
     fun malformedMoveInDateIsRejectedBeforeSendingARequest() {
         val error = runCatching {
             StayApiClient.createEnquiry(
