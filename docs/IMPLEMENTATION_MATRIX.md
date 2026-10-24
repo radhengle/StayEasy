@@ -88,7 +88,7 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 
 | Checklist item | Delivered behaviour / location | Status / acceptance condition |
 |---|---|---|
-| Authentication/roles | API JWT validation and role checks; dev-only token bootstrap guarded by environment + shared local password | Identity/OTP/OIDC/MFA/session revocation must be integrated. Not ready for public production |
+| Authentication/roles | Tenant/Owner email-password registration and sign-in, salted PBKDF2 password hashes, API-issued JWT sessions and server-side role checks; dev-token bootstrap remains development-only | Email/phone verification, password reset, rate limiting/lockout, MFA/OIDC, session revocation and production security review are still required. Not ready for public production |
 | Shared property database | PostgreSQL backend schema and endpoints with property/inventory/record models | Foundation implemented; Android app not connected yet; no multi-device sync claim |
 | Search | API filters for city, locality, text/PIN, rent, eligibility, couples, verified and availability | Basic API search; advanced geospatial search and full amenities joins require expansion |
 | Media storage | Android image picker remembers selected content URI locally; database supports listing photo metadata | No production object storage, upload/access-control/compression pipeline yet |
