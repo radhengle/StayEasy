@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -12,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from .database import Base, engine, get_db
 from . import models as m
-from .security import create_access_token, get_actor, require_roles, check_dev_password, APP_ENV
+from .security import create_access_token, get_actor, require_roles, check_dev_password, hash_password, verify_password, APP_ENV
 
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="StayEasy API", version="0.2.0", description="Role-protected PG marketplace and property operations API")
@@ -23,6 +24,17 @@ class DevTokenRequest(BaseModel):
     subject: str = Field(min_length=2, max_length=255)
     role: str = Field(pattern="^(customer|owner|manager|staff|admin)$")
     dev_password: str = Field(min_length=1)
+
+class AccountRegister(BaseModel):
+    display_name: str = Field(min_length=2, max_length=180)
+    email: str = Field(min_length=5, max_length=255)
+    phone: str = Field(default="", max_length=40)
+    password: str = Field(min_length=10, max_length=128)
+    role: str = Field(pattern="^(customer|owner)$")
+
+class AccountLogin(BaseModel):
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=1, max_length=128)
 
 class PropertyCreate(BaseModel):
     name: str = Field(min_length=2, max_length=180)
@@ -371,6 +383,61 @@ def dev_token(body: DevTokenRequest):
     token = create_access_token(body.subject, body.role, scopes=["prototype"])
     return {"access_token": token, "token_type": "bearer", "expires_in_minutes": int(os.getenv("ACCESS_TOKEN_MINUTES", "120")),
             "warning": "Development-only token endpoint. Disable it and use the organization's identity provider before deployment."}
+
+def account_session_payload(user: m.User) -> dict[str, Any]:
+    token = create_access_token(user.id, user.role, scopes=["registered"])
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_in_minutes": int(os.getenv("ACCESS_TOKEN_MINUTES", "120")),
+        "user": {"id": user.id, "email": user.email, "phone": user.phone,
+                 "display_name": user.display_name, "role": user.role},
+    }
+
+
+@app.post("/auth/register", status_code=201)
+def register_account(body: AccountRegister, db: Session = Depends(get_db)):
+    email = body.email.strip().lower()
+    display_name = body.display_name.strip()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(422, "Enter a valid email address")
+    if len(display_name) < 2:
+        raise HTTPException(422, "Enter your name")
+    existing = db.scalar(select(m.User).where(func.lower(m.User.email) == email))
+    if existing:
+        raise HTTPException(409, "An account with this email already exists. Sign in instead.")
+    user = m.User(id=str(uuid4()), email=email, phone=body.phone.strip(),
+                  display_name=display_name, role=body.role, is_active=True)
+    try:
+        db.add(user)
+        db.flush()
+        db.add(m.AccountCredential(user_id=user.id, password_hash=hash_password(body.password)))
+        db.commit()
+        db.refresh(user)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "An account with this email already exists. Sign in instead.") from exc
+    return account_session_payload(user)
+
+
+@app.post("/auth/login")
+def login_account(body: AccountLogin, db: Session = Depends(get_db)):
+    email = body.email.strip().lower()
+    user = db.scalar(select(m.User).where(func.lower(m.User.email) == email))
+    credential = db.get(m.AccountCredential, user.id) if user else None
+    if not user or not user.is_active or not credential or not verify_password(body.password, credential.password_hash):
+        raise HTTPException(401, "Email or password is incorrect")
+    return account_session_payload(user)
+
+
+@app.get("/auth/me")
+def current_account(actor: dict = Depends(get_actor), db: Session = Depends(get_db)):
+    user = db.get(m.User, actor_user_id(actor))
+    if not user or not user.is_active:
+        raise HTTPException(401, "Account is unavailable")
+    return {"id": user.id, "email": user.email, "phone": user.phone,
+            "display_name": user.display_name, "role": user.role}
+
 
 @app.get("/properties")
 def search_properties(city: str | None = None, locality: str | None = None, q: str | None = None,
