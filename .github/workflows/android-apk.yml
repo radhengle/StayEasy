@@ -19,6 +19,20 @@ jobs:
     name: Backend contracts and project validation
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: stayeasy_test
+          POSTGRES_USER: stayeasy
+          POSTGRES_PASSWORD: stayeasy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U stayeasy -d stayeasy_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,6 +60,14 @@ jobs:
 
       - name: Validate project layout and feature contracts
         run: python tools/validate_project.py
+
+      - name: Verify PostgreSQL reservation concurrency
+        env:
+          DATABASE_URL: postgresql+psycopg://stayeasy:stayeasy@localhost:5432/stayeasy_test
+          APP_ENV: test
+          JWT_SECRET: postgres-reservation-race-test-secret-at-least-32-chars
+          DEV_TOKEN_PASSWORD: local-only-postgres-test-password
+        run: python -m pytest backend/tests_postgres -q
 
   android-ui-tests:
     needs: backend-contracts
