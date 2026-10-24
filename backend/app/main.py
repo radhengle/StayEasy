@@ -290,6 +290,20 @@ def require_property_manager(db: Session, actor: dict[str, Any], property_id: in
         raise HTTPException(403, "You do not have access to this property for that operation")
     return prop
 
+def visible_property_ids(db: Session, actor: dict[str, Any], resource: str) -> list[int] | None:
+    """Return property scope for list endpoints; None means the actor is an admin."""
+    if actor["role"] == "admin":
+        return None
+    subject = actor_user_id(actor)
+    if actor["role"] == "owner":
+        return list(db.scalars(select(m.Property.id).where(m.Property.owner_id == subject)))
+    allowed = {f"{resource}.view", f"{resource}.manage", "*"}
+    assignments = db.scalars(select(m.StaffAssignment).where(
+        m.StaffAssignment.staff_user_id == subject,
+        m.StaffAssignment.status == "active"
+    ))
+    return sorted({assignment.property_id for assignment in assignments if allowed.intersection(assignment.permissions or [])})
+
 def property_dict(p: m.Property, db: Session | None = None) -> dict:
     out = {"id": p.id, "owner_id": p.owner_id, "name": p.name, "description": p.description, "address": p.address,
            "locality": p.locality, "city": p.city, "pin_code": p.pin_code, "latitude": p.latitude, "longitude": p.longitude,
@@ -487,10 +501,11 @@ def create_enquiry(body: EnquiryCreate, actor: dict = Depends(require_roles("cus
 @app.get("/enquiries")
 def list_enquiries(property_id: int | None = None, actor: dict = Depends(get_actor), db: Session = Depends(get_db)):
     stmt = select(m.Enquiry)
-    if actor["role"] == "customer": stmt = stmt.where(m.Enquiry.customer_id == actor_user_id(actor))
+    if actor["role"] == "customer":
+        stmt = stmt.where(m.Enquiry.customer_id == actor_user_id(actor))
     elif actor["role"] != "admin":
-        owned = select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))
-        stmt = stmt.where(m.Enquiry.property_id.in_(owned))
+        scoped_ids = visible_property_ids(db, actor, "enquiries") or []
+        stmt = stmt.where(m.Enquiry.property_id.in_(scoped_ids))
     if property_id: stmt = stmt.where(m.Enquiry.property_id == property_id)
     rows = list(db.scalars(stmt.order_by(m.Enquiry.created_at.desc()).limit(300)))
     property_ids = {e.property_id for e in rows}
@@ -532,8 +547,11 @@ def create_visit(body: VisitCreate, actor: dict = Depends(require_roles("custome
 @app.get("/visits")
 def list_visits(actor: dict = Depends(get_actor), db: Session = Depends(get_db)):
     stmt = select(m.Visit)
-    if actor["role"] == "customer": stmt = stmt.where(m.Visit.customer_id == actor_user_id(actor))
-    elif actor["role"] != "admin": stmt = stmt.where(m.Visit.property_id.in_(select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))))
+    if actor["role"] == "customer":
+        stmt = stmt.where(m.Visit.customer_id == actor_user_id(actor))
+    elif actor["role"] != "admin":
+        scoped_ids = visible_property_ids(db, actor, "visits") or []
+        stmt = stmt.where(m.Visit.property_id.in_(scoped_ids))
     rows = list(db.scalars(stmt.order_by(m.Visit.preferred_at).limit(300)))
     property_ids = {v.property_id for v in rows}
     property_names = {p.id: p.name for p in db.scalars(select(m.Property).where(m.Property.id.in_(property_ids)))} if property_ids else {}
@@ -580,8 +598,11 @@ def create_reservation(body: ReservationCreate, actor: dict = Depends(require_ro
 @app.get("/reservations")
 def list_reservations(property_id: int | None = None, actor: dict = Depends(get_actor), db: Session = Depends(get_db)):
     stmt = select(m.Reservation)
-    if actor["role"] == "customer": stmt = stmt.where(m.Reservation.customer_id == actor_user_id(actor))
-    elif actor["role"] != "admin": stmt = stmt.where(m.Reservation.property_id.in_(select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))))
+    if actor["role"] == "customer":
+        stmt = stmt.where(m.Reservation.customer_id == actor_user_id(actor))
+    elif actor["role"] != "admin":
+        scoped_ids = visible_property_ids(db, actor, "reservations") or []
+        stmt = stmt.where(m.Reservation.property_id.in_(scoped_ids))
     if property_id: stmt = stmt.where(m.Reservation.property_id == property_id)
     rows = list(db.scalars(stmt.order_by(m.Reservation.created_at.desc()).limit(300)))
     property_ids = {r.property_id for r in rows}
@@ -1067,9 +1088,15 @@ def list_saved_searches(actor: dict = Depends(require_roles("customer")), db: Se
 
 @app.get("/owner/dashboard")
 def owner_dashboard(actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
-    prop_stmt = select(m.Property.id)
-    if actor["role"] != "admin": prop_stmt = prop_stmt.where(m.Property.owner_id == actor_user_id(actor))
-    prop_ids = list(db.scalars(prop_stmt))
+    if actor["role"] == "admin":
+        prop_ids = list(db.scalars(select(m.Property.id)))
+    elif actor["role"] == "owner":
+        prop_ids = list(db.scalars(select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))))
+    else:
+        prop_ids = sorted(set(db.scalars(select(m.StaffAssignment.property_id).where(
+            m.StaffAssignment.staff_user_id == actor_user_id(actor),
+            m.StaffAssignment.status == "active"
+        ))))
     if not prop_ids: return {"property_count": 0, "units": {"total": 0, "available": 0, "reserved": 0, "occupied": 0, "maintenance": 0}, "enquiries_new": 0, "reservations_pending": 0, "issues_open": 0, "rent_due": 0}
     units = list(db.scalars(select(m.PropertyUnit).where(m.PropertyUnit.property_id.in_(prop_ids))))
     return {"property_count": len(prop_ids), "units": {"total": len(units), "available": sum(x.status == "available" for x in units), "reserved": sum(x.status == "reserved" for x in units), "occupied": sum(x.status == "occupied" for x in units), "maintenance": sum(x.status == "maintenance" for x in units)},
