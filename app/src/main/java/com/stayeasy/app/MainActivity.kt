@@ -728,7 +728,29 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "profile" -> ProfileScreen(signedInAccount, { workspaceReturnRoute = "profile"; route = "account_type" }, { notificationsReturnRoute = "profile"; route = "notifications" }, { route = "feature_hub" }, { route = "account_auth" })
                 "account_type" -> AccountTypeScreen(
                     onTenant = { ownerMode = false; route = "home" },
-                    onOwner = { ownerReturnRoute = workspaceReturnRoute; ownerMode = true; route = "owner_dashboard" },
+                    onOwner = {
+                        val accountRole = signedInAccount?.optString("role").orEmpty()
+                        if (accountRole in setOf("owner", "admin")) {
+                            ownerReturnRoute = workspaceReturnRoute
+                            ownerMode = true
+                            route = "owner_dashboard"
+                        } else if (signedInAccount != null) {
+                            ownerMode = false
+                            notify(
+                                if (signedInAccount?.optString("owner_access_status") == "pending_approval") {
+                                    "Owner access is still pending. You can continue in Tenant mode while an administrator reviews your request."
+                                } else {
+                                    "Request Owner access from your account first. Server-backed Owner actions stay locked until approval."
+                                }
+                            )
+                            route = "account_auth"
+                        } else {
+                            ownerReturnRoute = workspaceReturnRoute
+                            ownerMode = true
+                            route = "owner_dashboard"
+                            notify("Owner preview only. Sign in with an approved Owner/Admin account for server-backed actions.")
+                        }
+                    },
                     onBack = { route = workspaceReturnRoute }
                 )
                 "account_auth" -> AccountAuthScreen(
