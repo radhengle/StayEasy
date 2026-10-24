@@ -733,7 +733,9 @@ internal object StayApiClient {
         billingPeriod: String,
         dueDate: String,
         paymentReference: String,
-        description: String
+        description: String,
+        reservationId: Long? = null,
+        amountPaise: Long? = null
     ): JSONObject {
         require(propertyId > 0L) { "Enter a valid server property ID." }
         require(amount > 0) { "Enter an amount greater than zero." }
@@ -762,6 +764,11 @@ internal object StayApiClient {
             .put("provider_status", "manual_record")
             .put("description", description.trim())
             .put("status", safeStatus)
+        amountPaise?.let {
+            require(it > 0L) { "Enter an amount greater than zero." }
+            body.put("amount_paise", it)
+        }
+        reservationId?.takeIf { it > 0L }?.let { body.put("reservation_id", it) }
         if (residentStayId != null) {
             require(residentStayId > 0L) { "Enter a valid resident stay ID." }
             body.put("resident_stay_id", residentStayId)
