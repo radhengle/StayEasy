@@ -397,6 +397,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@Composable
 private fun ThemeBackdrop(modifier: Modifier = Modifier) {
     Canvas(modifier) {
         val width = size.width
