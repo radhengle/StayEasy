@@ -402,6 +402,16 @@ def get_public_property(property_id: int, db: Session = Depends(get_db)):
     if prop.status != "published": raise HTTPException(404, "Property not found")
     return property_dict(prop, db)
 
+@app.get("/owner/properties")
+def list_owner_properties(actor: dict = Depends(require_roles("owner", "admin")), db: Session = Depends(get_db)):
+    """List the caller's own full property/inventory records, including drafts and pending review."""
+    stmt = select(m.Property)
+    if actor["role"] != "admin":
+        stmt = stmt.where(m.Property.owner_id == actor_user_id(actor))
+    rows = list(db.scalars(stmt.order_by(m.Property.id.desc())))
+    return [property_dict(prop, db) for prop in rows]
+
+
 @app.post("/owner/properties", status_code=201)
 def create_property(body: PropertyCreate, actor: dict = Depends(require_roles("owner", "admin")), db: Session = Depends(get_db)):
     prop = m.Property(owner_id=actor_user_id(actor), **body.model_dump(), status="draft", verification_status="unverified")

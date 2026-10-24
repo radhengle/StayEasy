@@ -56,7 +56,7 @@ for marker in [
 for marker in ['SharedPreferences', 'StayRecord', 'apiBaseUrl', 'favorites', 'recentLocations']:
     assert marker.lower() in store_text.lower(), f"Missing local store marker: {marker}"
 assert 'putString("apiBaseUrl", value.apiBaseUrl)' in store_text, "API base URL preference is not persisted"
-for marker in ['/health', '/properties?city=$encodedCity', 'distanceIsVerified = false', 'https', '/auth/register', '/auth/verify-email', '/auth/login', '/auth/forgot-password', '/auth/logout', 'AndroidKeyStore', 'restoreAccountSession', 'ownerLedger', 'myLedger', 'createManualLedgerEntry', 'generateRentCharges']:
+for marker in ['/health', '/properties?city=$encodedCity', 'ownerProperties', 'updateUnitStatus', 'distanceIsVerified = false', 'https', '/auth/register', '/auth/verify-email', '/auth/login', '/auth/forgot-password', '/auth/logout', 'AndroidKeyStore', 'restoreAccountSession', 'ownerLedger', 'myLedger', 'createManualLedgerEntry', 'generateRentCharges']:
     assert marker.lower() in client_text.lower(), f"Missing API client marker: {marker}"
 for route in [
     '"/register"', '"/verify-email"', '"/resend-verification"', '"/login"',
