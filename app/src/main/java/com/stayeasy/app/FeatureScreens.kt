@@ -1115,6 +1115,11 @@ private fun serverStatusOptions(category: String, current: String): List<String>
         "reopened" -> listOf("In progress", "Resolved", "Escalated")
         else -> emptyList()
     }
+    "stays" -> when (current.trim().lowercase(Locale.ROOT).replace('_', ' ')) {
+        "active" -> listOf("Notice given", "Completed")
+        "notice given" -> listOf("Active", "Completed")
+        else -> emptyList()
+    }
     else -> emptyList()
 }
 
