@@ -474,12 +474,14 @@ private fun StayEasyTheme(preferences: StayPreferences, content: @Composable () 
 @Composable
 private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (StayPreferences) -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val incomingInvitationLink = remember { (context as? android.app.Activity)?.intent?.dataString.orEmpty() }
+    val hasInvitationDeepLink = incomingInvitationLink.startsWith("stayeasy://invitation/", ignoreCase = true)
     val customListings = remember { mutableStateListOf<PgListing>().apply { addAll(ListingStore.load(context)) } }
     val remoteListings = remember { mutableStateListOf<PgListing>() }
     val remoteOwnerListings = remember { mutableStateListOf<PgListing>() }
     var ownerInventoryLoaded by remember { mutableStateOf(false) }
     val favorites = remember { mutableStateListOf<Long>().apply { addAll(StayUserDataStore.loadFavorites(context)) } }
-    var route by remember { mutableStateOf("auth_entry") }
+    var route by remember { mutableStateOf(if (hasInvitationDeepLink) "tenant_invitations" else "auth_entry") }
     var workspaceReturnRoute by remember { mutableStateOf("home") }
     var detailsReturnRoute by remember { mutableStateOf("search") }
     var filtersReturnRoute by remember { mutableStateOf("search") }
@@ -487,7 +489,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     var ownerMode by remember { mutableStateOf(false) }
     var authStartMode by remember { mutableStateOf("signin") }
     var authWorkspace by remember { mutableStateOf("tenant") }
-    var authReturnRoute by remember { mutableStateOf("auth_entry") }
+    var authReturnRoute by remember { mutableStateOf(if (hasInvitationDeepLink) "tenant_invitations" else "auth_entry") }
     var apiConnectionReturnRoute by remember { mutableStateOf("feature_hub") }
     LaunchedEffect(preferences.apiBaseUrl) {
         val baseUrl = preferences.apiBaseUrl.trim()
@@ -620,7 +622,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     }.let { rows -> when (advancedFilters.sortBy) {
         "Price: low to high" -> rows.sortedBy { it.monthlyRent }; "Distance" -> rows.filter { it.distanceIsVerified }.sortedBy { it.distanceKm } + rows.filterNot { it.distanceIsVerified }; "Availability" -> rows.sortedByDescending { it.availableBeds }; "Rating" -> rows.sortedByDescending { it.rating }; else -> rows.sortedWith(compareByDescending<PgListing> { it.featuredListing }.thenByDescending { it.availableBeds })
     } }
-    val hideNav = route in setOf("auth_entry", "add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account_auth", "account_type", "admin_owner_requests") || route.startsWith("records:")
+    val hideNav = route in setOf("auth_entry", "add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account_auth", "account_type", "admin_owner_requests", "tenant_invitations") || route.startsWith("records:")
 
     // Nested routes return to their parent instead of finishing the Activity.
     // The property wizard registers a more specific handler for its own steps.
@@ -648,6 +650,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "enquiries" -> if (ownerMode) "owner_dashboard" else "search"
             "notifications" -> notificationsReturnRoute
             "profile" -> "home"
+            "tenant_invitations" -> "profile"
             "account_type" -> workspaceReturnRoute
             "account_auth" -> authReturnRoute
             "admin_owner_requests" -> "account_auth"
@@ -839,7 +842,15 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }
                     }
                 })
-                "profile" -> ProfileScreen(signedInAccount, { workspaceReturnRoute = "profile"; route = "account_type" }, { notificationsReturnRoute = "profile"; route = "notifications" }, { route = "feature_hub" }, { authStartMode = "signin"; authWorkspace = "tenant"; authReturnRoute = "profile"; route = "account_auth" })
+                "profile" -> ProfileScreen(signedInAccount, { workspaceReturnRoute = "profile"; route = "account_type" }, { notificationsReturnRoute = "profile"; route = "notifications" }, { route = "feature_hub" }, { authStartMode = "signin"; authWorkspace = "tenant"; authReturnRoute = "profile"; route = "account_auth" }, { route = "tenant_invitations" })
+                "tenant_invitations" -> TenantInvitationRegistrationScreen(
+                    preferences.apiBaseUrl,
+                    StayApiClient.currentSessionToken(preferences.apiBaseUrl),
+                    incomingInvitationLink,
+                    { authStartMode = "signin"; authWorkspace = "tenant"; authReturnRoute = "tenant_invitations"; route = "account_auth" },
+                    { route = "profile" },
+                    notify
+                )
                 "account_type" -> AccountTypeScreen(
                     onTenant = { ownerMode = false; route = "home" },
                     onOwner = {
@@ -2280,7 +2291,8 @@ private fun ProfileScreen(
     onOwner: () -> Unit,
     onNotifications: () -> Unit,
     onSettings: () -> Unit,
-    onAccount: () -> Unit
+    onAccount: () -> Unit,
+    onInvitations: () -> Unit
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
         ScreenHeader("Your profile", "Your StayEasy account")
@@ -2303,6 +2315,7 @@ private fun ProfileScreen(
         Spacer(Modifier.height(16.dp))
         MenuRow(if (account == null) "Sign in / Create account" else "Account & security", if (account == null) "Verify your email and sync your account" else "View account, refresh session or sign out", Icons.Filled.Lock, onAccount)
         MenuRow("Notifications", "Manage alerts and updates", Icons.Filled.Notifications, onNotifications)
+        MenuRow("Registration invitations", "Review a proposed bed, upload only requested documents and confirm first rent", Icons.Filled.MailOutline, onInvitations)
         MenuRow("All tools & preferences", "Saved searches, compare, bookings, themes and privacy", Icons.Filled.Tune, onSettings)
         MenuRow("Privacy & security", "Controls and account data", Icons.Filled.Lock, onSettings)
         MenuRow("Help & support", "Get help with a stay", Icons.Filled.ReportProblem, onSettings)
