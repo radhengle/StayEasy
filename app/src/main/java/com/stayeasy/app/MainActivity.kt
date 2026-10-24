@@ -395,7 +395,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     }.let { rows -> when (advancedFilters.sortBy) {
         "Price: low to high" -> rows.sortedBy { it.monthlyRent }; "Distance" -> rows.filter { it.distanceIsVerified }.sortedBy { it.distanceKm } + rows.filterNot { it.distanceIsVerified }; "Availability" -> rows.sortedByDescending { it.availableBeds }; "Rating" -> rows.sortedByDescending { it.rating }; else -> rows.sortedWith(compareByDescending<PgListing> { it.featuredListing }.thenByDescending { it.availableBeds })
     } }
-    val hideNav = route in setOf("add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection") || route.startsWith("records:")
+    val hideNav = route in setOf("add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account_type") || route.startsWith("records:")
 
     Scaffold(
         containerColor = SE.Background,
@@ -432,7 +432,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (route) {
-                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { route = "filters" }, { ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "profile" })
+                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { route = "filters" }, { route = "account_type" }, { route = "notifications" }, { route = "profile" })
                 "search" -> SearchResultsScreen(location, { location = it; route = "search_location" }, searchQuery, { searchQuery = it }, guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, filteredListings, favorites, { selectedId = it; route = "details" }, { route = "map" }, { route = "filters" }, toggleFavorite, {
                     val criteria = "Location: $location; query: ${searchQuery.ifBlank { "any PG" }}; eligibility: $guestChoice; max rent: ${money(maxBudget.toInt())}; room types: ${advancedFilters.roomTypes.joinToString().ifBlank { "any" }}; amenities: ${chosenAmenities.joinToString().ifBlank { "any" }}; availability: ${if (advancedFilters.availableOnly) "available now" else advancedFilters.moveInDate.ifBlank { "any" }}; sort: ${advancedFilters.sortBy}"
                     StayRecordStore.add(context, StayRecord(category = "saved_searches", title = "${location.substringBefore(",")}: ${guestChoice} stays", details = criteria, property = location, amount = maxBudget.toInt(), status = "Active"))
@@ -564,7 +564,12 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }
                     }
                 })
-                "profile" -> ProfileScreen({ ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "feature_hub" })
+                "profile" -> ProfileScreen({ route = "account_type" }, { route = "notifications" }, { route = "feature_hub" })
+                "account_type" -> AccountTypeScreen(
+                    onTenant = { ownerMode = false; route = "home" },
+                    onOwner = { ownerMode = true; route = "owner_dashboard" },
+                    onBack = { route = if (ownerMode) "owner_more" else "profile" }
+                )
                 "notifications" -> FeatureRecordsScreen("notifications", ownerMode) { route = if (ownerMode) "feature_hub" else "feature_hub" }
                 "feature_hub" -> FeatureHubScreen(ownerMode, { route = "records:$it" }, { comparisonIds = favorites.take(3); route = "compare" }, { route = "theme_settings" }, { route = "api_connection" }, { route = if (ownerMode) "owner_more" else "profile" })
                 "api_connection" -> ApiConnectionScreen(preferences.apiBaseUrl,
@@ -1189,13 +1194,112 @@ private fun IssueScreen(onBack: () -> Unit, onSubmit: (String, String, String) -
 }
 
 @Composable
-private fun ProfileScreen(onOwner: () -> Unit, onNotifications: () -> Unit, onSettings: () -> Unit) {
+private fun AccountTypeScreen(onTenant: () -> Unit, onOwner: () -> Unit, onBack: () -> Unit) {
+    Column(Modifier.fillMaxSize().background(SE.Background).verticalScroll(rememberScrollState()).padding(18.dp)) {
+        ScreenHeader("Choose your workspace", "How would you like to use StayEasy?", onBack = onBack)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Pick the experience that fits you. You can switch workspaces later.",
+            color = SE.Muted, fontSize = 12.sp, lineHeight = 18.sp
+        )
+        Spacer(Modifier.height(18.dp))
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = SE.Surface),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(Modifier.padding(17.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(48.dp).clip(RoundedCornerShape(15.dp)).background(SE.BlueSoft), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.Search, null, tint = SE.Blue, modifier = Modifier.size(24.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("I'm looking for a place", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text("Tenant workspace", color = SE.Blue, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Explore PGs, compare rent and deposits, contact owners, arrange visits and manage your stay.",
+                    color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp
+                )
+                Spacer(Modifier.height(14.dp))
+                PrimaryButton("Continue as Tenant", Icons.AutoMirrored.Filled.ArrowForward, onTenant)
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = SE.Ink),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(Modifier.padding(17.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.size(48.dp).clip(RoundedCornerShape(15.dp)).background(Color.White.copy(alpha = .12f)), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Filled.Apartment, null, tint = Color.White, modifier = Modifier.size(24.dp))
+                    }
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text("I have a property to rent", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                        Text("Owner workspace", color = Color.White.copy(alpha = .76f), fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                    }
+                }
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Manage listings, rooms and beds, resident stays, rent charges, payments and deposits.",
+                    color = Color.White.copy(alpha = .78f), fontSize = 11.sp, lineHeight = 16.sp
+                )
+                Spacer(Modifier.height(14.dp))
+                Button(
+                    onClick = onOwner,
+                    modifier = Modifier.fillMaxWidth().height(52.dp),
+                    shape = RoundedCornerShape(15.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)
+                ) {
+                    Text("Continue as Owner", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Spacer(Modifier.width(8.dp))
+                    Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color.White, modifier = Modifier.size(18.dp))
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Card(
+            shape = RoundedCornerShape(14.dp),
+            colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) {
+                Icon(Icons.Filled.Lock, null, tint = SE.Orange, modifier = Modifier.size(17.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    "Preview mode: these choices open the relevant workspace. Account registration, verified identity and secure sign-in are not connected yet.",
+                    color = SE.Text, fontSize = 10.sp, lineHeight = 15.sp
+                )
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun ProfileScreen(onAccountType: () -> Unit, onNotifications: () -> Unit, onSettings: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
         ScreenHeader("Your profile", "Your StayEasy account")
         Spacer(Modifier.height(16.dp))
         Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(SE.Surface).padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(58.dp).clip(CircleShape).background(SE.BlueSoft), contentAlignment = Alignment.Center) { Icon(Icons.Filled.Person, null, tint = SE.Blue, modifier = Modifier.size(29.dp)) }; Spacer(Modifier.width(13.dp)); Column(Modifier.weight(1f)) { Text("Guest explorer", fontWeight = FontWeight.Bold, color = SE.Ink, fontSize = 17.sp); Text("Demo profile · not signed in", color = SE.Muted, fontSize = 11.sp) }; StatusPill("DEMO", SE.OrangeSoft, SE.Orange) }
         Spacer(Modifier.height(16.dp)); MenuRow("Notifications", "Manage alerts and updates", Icons.Filled.Notifications, onNotifications); MenuRow("All tools & preferences", "Saved searches, compare, bookings, themes and privacy", Icons.Filled.Tune, onSettings); MenuRow("Privacy & security", "Controls and account data", Icons.Filled.Lock, onSettings); MenuRow("Help & support", "Get help with a stay", Icons.Filled.ReportProblem, onSettings); MenuRow("Share StayEasy", "Invite someone to explore", Icons.Filled.Share, onSettings)
-        Spacer(Modifier.height(18.dp)); Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth().clickable(onClick = onOwner)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.Apartment, null, tint = Color.White, modifier = Modifier.size(28.dp)); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("Are you a PG owner?", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp); Text("Manage properties, beds and rent", color = Color.White.copy(alpha = 0.72f), fontSize = 11.sp) }; Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color.White) } }
+        Spacer(Modifier.height(18.dp)); Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth().clickable(onClick = onAccountType)) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Apartment, null, tint = Color.White, modifier = Modifier.size(28.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Choose your workspace", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text("Continue as a tenant or property owner", color = Color.White.copy(alpha = 0.72f), fontSize = 11.sp)
+                }
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color.White)
+            }
+        }
         Spacer(Modifier.height(18.dp)); Text("StayEasy UI prototype · v0.1", color = SE.Muted, fontSize = 10.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
     }
 }
