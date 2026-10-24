@@ -36,11 +36,21 @@ class StayEasySmokeTest {
     }
 
     @Test
+    fun systemBackReturnsFromExploreToHomeInsteadOfClosingActivity() {
+        composeRule.onNodeWithText("Explore").performClick()
+        composeRule.onNodeWithText("Explore stays").assertIsDisplayed()
+        composeRule.activity.onBackPressedDispatcher.onBackPressed()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Find a place that").assertIsDisplayed()
+    }
+
+    @Test
     fun customerCanOpenExploreAndSeeSearchControls() {
         composeRule.onNodeWithText("Explore").performClick()
         composeRule.onNodeWithText("Explore stays").assertIsDisplayed()
         composeRule.onNodeWithText("Filters").assertIsDisplayed()
         composeRule.onNodeWithText("Map").assertIsDisplayed()
+        composeRule.onNode(hasText("Monthly rent", substring = true)).assertIsDisplayed()
     }
 
     @Test
