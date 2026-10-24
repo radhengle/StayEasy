@@ -14,8 +14,10 @@ def validate_database_configuration(environ: Mapping[str, str] | None = None) ->
     if not url:
         raise RuntimeError("DATABASE_URL must be explicitly configured for staging/production.")
     driver = url.partition("://")[0]
-    if driver not in {"postgresql", "postgresql+psycopg", "postgresql+psycopg2"}:
-        raise RuntimeError("Staging/production requires PostgreSQL with a supported synchronous driver.")
+    # requirements.txt installs psycopg 3, not psycopg2. Requiring an explicit
+    # driver prevents a bare postgresql:// URL from selecting the absent psycopg2 driver.
+    if driver != "postgresql+psycopg":
+        raise RuntimeError("Staging/production requires a postgresql+psycopg:// URL (psycopg 3).")
 
 
 def validate_runtime_configuration(environ: Mapping[str, str] | None = None) -> None:
