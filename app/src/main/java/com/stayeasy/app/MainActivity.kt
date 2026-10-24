@@ -445,7 +445,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "details" -> ListingDetailsScreen(selectedListing, favorites.contains(selectedListing.id), { toggleFavorite(selectedListing.id) }, { route = "chat" }, { route = "request_visit" }, { route = "search" }, { route = "request_booking" })
                 "request_visit" -> VisitRequestScreen(selectedListing, { route = "details" }) { moveIn, roomType, visitSlot, note ->
                     val serverId = selectedListing.serverPropertyId
-                    val token = StayApiClient.currentSessionToken()
+                    val token = StayApiClient.currentSessionToken(preferences.apiBaseUrl)
                     if (serverId != null && preferences.apiBaseUrl.isNotBlank()) {
                         if (token == null) { notify("Connect StayEasy API and set a customer token before sending a server visit request."); route = "api_connection" }
                         else scope.launch {
@@ -471,7 +471,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 }
                 "request_booking" -> RequestBookingScreen(selectedListing, { route = "details" }) { roomType, moveInDate, unit, note ->
                     val serverId = selectedListing.serverPropertyId
-                    val token = StayApiClient.currentSessionToken()
+                    val token = StayApiClient.currentSessionToken(preferences.apiBaseUrl)
                     if (serverId != null && preferences.apiBaseUrl.isNotBlank()) {
                         if (token == null) { notify("Connect StayEasy API and set a customer token before sending a server reservation."); route = "api_connection" }
                         else {
@@ -535,7 +535,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "owner_properties" -> OwnerPropertiesScreen(ownerListings, { route = "add_pg" }, { selectedId = it; route = "owner_beds" }, { selectedId = it; route = "edit_pg" })
                 "add_pg" -> AddPropertyWizard(onPublish = { listing ->
                     val baseUrl = preferences.apiBaseUrl
-                    val token = StayApiClient.currentSessionToken()
+                    val token = StayApiClient.currentSessionToken(preferences.apiBaseUrl)
                     if (baseUrl.isNotBlank() && token != null) {
                         route = "owner_properties"
                         scope.launch {
