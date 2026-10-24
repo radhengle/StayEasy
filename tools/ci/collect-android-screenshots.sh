@@ -8,11 +8,14 @@ TEST_STATUS=0
 mkdir -p app/build/ui-screenshots
 for name in customer-home explore-search owner-workspace-preview; do
   destination="app/build/ui-screenshots/${name}.png"
-  if adb exec-out run-as com.stayeasy.app cat "files/stayeasy-screenshots/${name}.png" > "$destination"; then
-    if [ ! -s "$destination" ]; then
+  rm -f "$destination"
+  if adb pull "/sdcard/Download/stayeasy-screenshots/${name}.png" "$destination"; then
+    if [ ! -s "$destination" ] || ! file "$destination" | grep -q "PNG image data"; then
+      echo "Invalid screenshot for $name; removing it."
       rm -f "$destination"
     fi
   else
+    echo "No screenshot was captured for $name."
     rm -f "$destination"
   fi
 done
