@@ -741,7 +741,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     StayRecordStore.notify(context, "Resident added", "$name · $bed")
                     notify("Resident and stay records saved; $bed marked occupied")
                     route = "records:residents"
-                }, { route = "records:residents" })
+                }, { route = "owner_beds" })
                 "owner_payments" -> FeatureRecordsScreen("payments", ownerMode = true) { route = "feature_hub" }
                 "owner_issues" -> FeatureRecordsScreen("issues", ownerMode = true) { route = "feature_hub" }
                 "owner_analytics" -> FeatureRecordsScreen("reports", ownerMode = true) { route = "feature_hub" }
