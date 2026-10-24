@@ -1,7 +1,9 @@
 package com.stayeasy.app
 
+import android.content.ContentValues
 import android.graphics.Bitmap
-import android.os.ParcelFileDescriptor
+import android.os.Environment
+import android.provider.MediaStore
 import java.io.ByteArrayOutputStream
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
@@ -32,11 +34,13 @@ class StayEasySmokeTest {
         composeRule.onNode(hasText(label, substring = true) and hasClickAction()).performScrollTo().performClick()
     }
 
-    /** Streams a genuine emulator-display PNG to persistent shared storage before test cleanup. */
+    /** Publishes a genuine emulator-display PNG to Downloads, outside app data cleanup. */
     private fun captureScreenshot(name: String) {
         composeRule.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val resolver = instrumentation.targetContext.contentResolver
         val bitmap = instrumentation.uiAutomation.takeScreenshot()
+        var destinationUri: android.net.Uri? = null
         try {
             val image = ByteArrayOutputStream().use { bytes ->
                 assertTrue(
@@ -47,24 +51,32 @@ class StayEasySmokeTest {
             }
             assertTrue("Emulator screenshot $name is unexpectedly small", image.size > 1024)
 
-            val destination = "/sdcard/Download/stayeasy-screenshots/$name.png"
-            val pipes = instrumentation.uiAutomation.executeShellCommandRwe(
-                "mkdir -p /sdcard/Download/stayeasy-screenshots && cat > '$destination' && test -s '$destination' && echo SCREENSHOT_OK"
-            )
-            assertTrue("Shell did not provide screenshot I/O pipes", pipes.size >= 3)
-            try {
-                ParcelFileDescriptor.AutoCloseOutputStream(pipes[0]).use { it.write(image) }
-                val output = ParcelFileDescriptor.AutoCloseInputStream(pipes[1])
-                    .bufferedReader().use { it.readText() }
-                val error = ParcelFileDescriptor.AutoCloseInputStream(pipes[2])
-                    .bufferedReader().use { it.readText() }
-                assertTrue(
-                    "Unable to export emulator screenshot $name. stdout=$output stderr=$error",
-                    output.contains("SCREENSHOT_OK")
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, "$name.png")
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                put(
+                    MediaStore.MediaColumns.RELATIVE_PATH,
+                    "${Environment.DIRECTORY_DOWNLOADS}/stayeasy-screenshots"
                 )
-            } finally {
-                pipes.forEach { descriptor -> runCatching { descriptor.close() } }
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw AssertionError("MediaStore could not create a Downloads entry for $name")
+            destinationUri = uri
+            resolver.openOutputStream(uri, "w").use { output ->
+                assertTrue("Unable to open output stream for $name", output != null)
+                output!!.write(image)
+                output.flush()
+            }
+            val published = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+            assertTrue("Unable to publish emulator screenshot $name", resolver.update(uri, published, null, null) == 1)
+            resolver.query(uri, arrayOf(MediaStore.MediaColumns.SIZE), null, null, null).use { cursor ->
+                assertTrue("Screenshot metadata missing for $name", cursor != null && cursor.moveToFirst())
+                assertTrue("Screenshot size missing for $name", cursor!!.getLong(0) > 1024)
+            }
+        } catch (error: Throwable) {
+            destinationUri?.let { runCatching { resolver.delete(it, null, null) } }
+            throw error
         } finally {
             bitmap.recycle()
         }
