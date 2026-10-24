@@ -117,7 +117,7 @@ class ReservationCreate(BaseModel):
     terms_snapshot: dict[str, Any] = Field(default_factory=dict)
 
 class ReservationStatus(BaseModel):
-    status: str = Field(pattern="^(confirmed|cancelled|expired|checked_in)$")
+    status: str = Field(pattern="^(confirmed|cancelled|expired|checked_in|completed)$")
     expires_at: datetime | None = None
     cancellation_reason: str = ""
 
@@ -377,10 +377,10 @@ def unit_inventory_dict(db: Session, unit: m.PropertyUnit, include_private: bool
         "deposit": unit.deposit,
         "status": state["status"],
         "expected_vacancy": unit.expected_vacancy.isoformat() if unit.expected_vacancy else None,
-        "reservation_id": state["reservation"].id if state["reservation"] else None,
-        "resident_stay_id": state["resident_stay"].id if state["resident_stay"] else None,
     }
     if include_private:
+        out["reservation_id"] = state["reservation"].id if state["reservation"] else None
+        out["resident_stay_id"] = state["resident_stay"].id if state["resident_stay"] else None
         out["occupant"] = {
             "user_id": state["resident_stay"].resident_id if state["resident_stay"] else None,
             "display_name": state["resident_name"],
@@ -1187,7 +1187,8 @@ def update_reservation(reservation_id: int, body: ReservationStatus, actor: dict
     allowed_transitions = {
         "pending": {"confirmed", "cancelled", "expired"},
         "confirmed": {"checked_in", "cancelled", "expired"},
-        "checked_in": set(),
+        "checked_in": {"completed", "cancelled"},
+        "completed": set(),
         "cancelled": set(),
         "expired": set(),
     }
@@ -1262,13 +1263,31 @@ def create_stay(body: StayCreate, actor: dict = Depends(require_roles("owner", "
         raise HTTPException(422, "Choose an active customer account with a verified email before assigning a resident stay")
     unit = db.scalar(select(m.PropertyUnit).where(m.PropertyUnit.id == body.unit_id).with_for_update())
     if not unit or unit.property_id != body.property_id: raise HTTPException(404, "Unit not found")
-    if unit.status not in {"available", "reserved"}: raise HTTPException(409, f"Unit cannot be assigned while {unit.status}")
+    unit_state = resolve_unit_inventory(db, unit)
+    if unit_state["status"] not in {"available", "reserved"}: raise HTTPException(409, f"Unit cannot be assigned while {unit_state['status']}")
     reservation = db.get(m.Reservation, body.reservation_id) if body.reservation_id else None
+    active_reservation = db.scalar(select(m.Reservation).where(
+        m.Reservation.unit_id == body.unit_id,
+        or_(
+            m.Reservation.status.in_(["confirmed", "checked_in"]),
+            and_(m.Reservation.status == "pending",
+                 or_(m.Reservation.expires_at.is_(None), m.Reservation.expires_at > datetime.now(timezone.utc)))
+        )
+    ).with_for_update())
     if reservation and (reservation.property_id != body.property_id or reservation.unit_id not in {None, body.unit_id} or reservation.customer_id != body.resident_id or reservation.status not in {"confirmed", "pending"}):
         raise HTTPException(409, "Reservation is not eligible for this resident and unit assignment")
+    if active_reservation and active_reservation.customer_id != body.resident_id:
+        raise HTTPException(409, "This bed is reserved for another tenant; cancel or reassign that reservation first")
+    if active_reservation and reservation and active_reservation.id != reservation.id:
+        raise HTTPException(409, "The supplied reservation does not match the active hold for this bed")
+    if reservation is None and active_reservation is not None:
+        reservation = active_reservation
     active = db.scalar(select(m.ResidentStay.id).where(m.ResidentStay.unit_id == body.unit_id, m.ResidentStay.status.in_(["active", "notice_given"])))
     if active: raise HTTPException(409, "Unit already has an active resident stay")
-    stay = m.ResidentStay(**body.model_dump(), status="active")
+    stay_payload = body.model_dump()
+    if reservation is not None:
+        stay_payload["reservation_id"] = reservation.id
+    stay = m.ResidentStay(**stay_payload, status="active")
     db.add(stay); unit.status = "occupied"
     if reservation: reservation.status = "checked_in"; reservation.unit_id = unit.id
     db.flush()
@@ -1328,7 +1347,16 @@ def update_stay(stay_id: int, body: StayPatch, actor: dict = Depends(require_rol
     if body.move_out_date is not None:
         stay.move_out_date = body.move_out_date
     if unit is not None:
-        unit.status = "available"
+        if stay.reservation_id:
+            reservation = db.get(m.Reservation, stay.reservation_id)
+            if reservation and reservation.status == "checked_in":
+                reservation.status = "completed" if body.status == "completed" else "cancelled"
+                if body.status == "cancelled":
+                    reservation.cancellation_reason = "Stay cancelled by owner."
+                audit(db, actor, "reservation", reservation.id, "stay_closed", old={"status": "checked_in"},
+                      new={"status": reservation.status, "resident_stay_id": stay.id})
+        db.flush()
+        unit.status = resolve_unit_inventory(db, unit)["status"]
     new = {"status": stay.status, "notice_date": stay.notice_date.isoformat() if stay.notice_date else None,
            "move_out_date": stay.move_out_date.isoformat() if stay.move_out_date else None}
     audit(db, actor, "resident_stay", stay.id, "status_changed", old=old, new=new)
