@@ -307,10 +307,10 @@ private fun money(amount: Int) = "₹" + String.format(Locale.getDefault(), "%,d
 // Nonlinear rent scale: most slider travel stays useful below ₹30,000.
 private fun rentSliderPosition(amount: Int): Float {
     val normalized = (amount.coerceIn(100, 100000) - 100) / 99900f
-    return normalized.coerceIn(0f, 1f).pow(0.25f)
+    return normalized.coerceIn(0f, 1f).pow(0.16f)
 }
 private fun rentFromSlider(position: Float): Float =
-    (100f + 99900f * position.coerceIn(0f, 1f).pow(4f)).roundToInt().toFloat()
+    (100f + 99900f * position.coerceIn(0f, 1f).pow(6.25f)).roundToInt().toFloat()
 
 @Composable
 private fun RentBudgetSlider(value: Float, onValueChange: (Float) -> Unit) {
