@@ -464,6 +464,13 @@ internal object StayApiClient {
         return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
     }
 
+    /** Server-authoritative resident stays, limited by the backend to the actor's resident-view scope. */
+    fun ownerStays(baseUrl: String, token: String, propertyId: Long? = null): List<JSONObject> {
+        val path = propertyId?.let { "/owner/stays?property_id=$it" } ?: "/owner/stays"
+        val result = JSONArray(request(baseUrl, path, token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
     fun createIssue(
         baseUrl: String,
         token: String,
