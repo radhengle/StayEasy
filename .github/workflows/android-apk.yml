@@ -85,6 +85,29 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
           script: ./gradlew --no-daemon --stacktrace connectedDebugAndroidTest
 
+      - name: Collect emulator UI screenshots
+        if: always()
+        run: |
+          mkdir -p app/build/ui-screenshots
+          for name in customer-home explore-search owner-workspace-preview; do
+            destination="app/build/ui-screenshots/${name}.png"
+            if adb exec-out run-as com.stayeasy.app cat "files/stayeasy-screenshots/${name}.png" > "$destination"; then
+              if [ ! -s "$destination" ]; then rm -f "$destination"; fi
+            else
+              rm -f "$destination"
+            fi
+          done
+          find app/build/ui-screenshots -maxdepth 1 -type f -name '*.png' -print
+
+      - name: Upload Android UI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stayeasy-android-screenshots
+          path: app/build/ui-screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Upload Android UI test reports
         if: always()
         uses: actions/upload-artifact@v4
