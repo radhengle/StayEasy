@@ -985,6 +985,7 @@ private fun FilterScreen(
     var maxDepositText by remember { mutableStateOf(if (filters.filterDeposit && filters.maxDeposit < 100000) filters.maxDeposit.toString() else "") }
     var depositEnabled by remember { mutableStateOf(filters.filterDeposit) }
     var distanceEnabled by remember { mutableStateOf(filters.filterDistance) }
+    BackHandler { onFilters(draft); onApply() }
     val amenities = listOf(
         "Wi-Fi", "AC", "Meals", "Attached bath", "Laundry", "Parking", "Power backup",
         "Housekeeping", "Study desk", "Hot water", "Lift", "Washing machine",
@@ -1980,11 +1981,17 @@ private fun OwnerBedsScreen(listings: List<PgListing>, initialPropertyId: Long, 
             }
         }
         PrimaryButton("Assign a resident", Icons.Filled.PersonAdd) {
-            val options = roomLabels.flatMapIndexed { index, room ->
+            val declaredOptions = roomLabels.flatMapIndexed { index, room ->
                 val roomBeds = (declaredBedCount / roomCount + if (index < declaredBedCount % roomCount) 1 else 0).coerceIn(0, 6)
                 bedLetters.take(roomBeds).map { letter -> "$room · Bed $letter" }
             }
-            onAddResident(listing.name, options)
+            val existingStatus = StayRecordStore.load(context, "beds")
+                .filter { it.property == listing.name }
+                .associate { it.unit to it.status }
+            val availableOptions = declaredOptions.filter { unit ->
+                existingStatus[unit] == null || existingStatus[unit].equals("Available", ignoreCase = true)
+            }
+            onAddResident(listing.name, availableOptions)
         }
         Spacer(Modifier.height(8.dp))
     }
@@ -2087,7 +2094,7 @@ private fun AddResidentScreen(propertyName: String, bedOptions: List<String>, on
         Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
             Column(Modifier.padding(14.dp)) {
                 Text("2. Room assignment", color = SE.Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                Text("Choose one of the beds declared for $propertyName.", color = SE.Muted, fontSize = 11.sp)
+                Text(if (bedOptions.isEmpty()) "There are no beds currently marked available. Update a bed's status in Rooms & beds before assigning a resident." else "Choose an available bed in $propertyName.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
                 Spacer(Modifier.height(8.dp))
                 bedOptions.chunked(2).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
@@ -2120,6 +2127,7 @@ private fun AddResidentScreen(propertyName: String, bedOptions: List<String>, on
             val digits = phone.count(Char::isDigit)
             validationMessage = when {
                 name.isBlank() -> "Enter the resident's full name."
+                bedOptions.isEmpty() || bed.isBlank() -> "No available bed is selected. Update a bed to Available in Rooms & beds first."
                 digits !in 10..13 -> "Enter a valid mobile number with 10–13 digits."
                 (rent.toIntOrNull() ?: 0) !in 100..100000 -> "Enter a monthly rent between ₹100 and ₹1,00,000."
                 join.isBlank() -> "Enter the joining date, or a date to be confirmed."
