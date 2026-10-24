@@ -523,6 +523,15 @@ def update_enquiry(enquiry_id: int, body: dict, actor: dict = Depends(require_ro
     allowed_status = {"new", "contacted", "visit_scheduled", "converted", "closed"}
     status_value = body.get("status", item.status)
     if status_value not in allowed_status: raise HTTPException(422, "Invalid enquiry status")
+    allowed_transitions = {
+        "new": {"contacted", "visit_scheduled", "closed"},
+        "contacted": {"visit_scheduled", "converted", "closed"},
+        "visit_scheduled": {"contacted", "converted", "closed"},
+        "converted": {"closed"},
+        "closed": set(),
+    }
+    if status_value != item.status and status_value not in allowed_transitions.get(item.status, set()):
+        raise HTTPException(409, f"Cannot move enquiry from {item.status} to {status_value}")
     old = {"status": item.status}; item.status = status_value; item.owner_response = str(body.get("owner_response", item.owner_response))[:4000]
     audit(db, actor, "enquiry", item.id, "updated", old=old, new={"status": item.status}); db.commit(); return {"id": item.id, "status": item.status, "owner_response": item.owner_response}
 
@@ -563,6 +572,15 @@ def update_visit_status_action(visit_id: int, body: VisitStatus, actor: dict = D
     item = db.get(m.Visit, visit_id)
     if not item: raise HTTPException(404, "Visit not found")
     require_property_manager(db, actor, item.property_id, "visits.manage")
+    allowed_transitions = {
+        "requested": {"confirmed", "cancelled"},
+        "confirmed": {"completed", "cancelled", "no_show"},
+        "completed": set(),
+        "cancelled": set(),
+        "no_show": set(),
+    }
+    if body.status != item.status and body.status not in allowed_transitions.get(item.status, set()):
+        raise HTTPException(409, f"Cannot move visit from {item.status} to {body.status}")
     old = {"status": item.status, "outcome": item.outcome}
     item.status = body.status
     item.outcome = body.outcome
@@ -617,6 +635,15 @@ def update_reservation(reservation_id: int, body: ReservationStatus, actor: dict
     item = db.get(m.Reservation, reservation_id)
     if not item: raise HTTPException(404, "Reservation not found")
     require_property_manager(db, actor, item.property_id, "reservations.manage")
+    allowed_transitions = {
+        "pending": {"confirmed", "cancelled", "expired"},
+        "confirmed": {"checked_in", "cancelled", "expired"},
+        "checked_in": set(),
+        "cancelled": set(),
+        "expired": set(),
+    }
+    if body.status != item.status and body.status not in allowed_transitions.get(item.status, set()):
+        raise HTTPException(409, f"Cannot move reservation from {item.status} to {body.status}")
     old = {"status": item.status}; item.status = body.status; item.expires_at = body.expires_at or item.expires_at; item.cancellation_reason = body.cancellation_reason
     if item.unit_id:
         unit = db.get(m.PropertyUnit, item.unit_id)
