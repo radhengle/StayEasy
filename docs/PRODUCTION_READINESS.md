@@ -12,8 +12,8 @@
 
 ## Must be completed before public launch
 
-- Integrate Android with the API using a typed network client, TLS, safe token storage, expiry/refresh/revocation and clear server-confirmed UI state. Do not assume local demo records have synced.
-- The account API now includes password registration, expiring email verification codes, sign-in, reset codes, account profile and server-side session invalidation. Before launch, wire the Android screens to these routes, configure and verify production email delivery, implement approved owner onboarding and operator MFA, and add edge/rate-limit protections.
+- Finish production Android/API integration using the server-backed finance ledger as the current vertical slice. Add refresh-token rotation, device/session management, explicit server-confirmed state and consistent loading/error/offline reconciliation across every workflow. Do not assume local demo records have synced.
+- The account API includes verified registration, email verification, sign-in, password recovery and server-side session invalidation. Before launch, configure and verify production email delivery, implement approved owner onboarding and operator MFA, add external rate limits/edge protections, and complete end-to-end sync for every workflow. Owner workspace intent must never confer permissions..
 - Apply Alembic migrations; do not rely on ORM `create_all()` after real customer data exists. Back up the database and rehearse restore/PITR.
 - Add secure object storage with signed uploads/downloads, image type/size validation, malware screening, compression, moderation and access controls for documents.
 - Configure Maps SDK, Places API and routing only with restricted keys, billing controls, data minimization and attribution. Never display uncomputed distances as facts.
@@ -28,4 +28,4 @@
 
 ## Scope explicitly not claimed as complete
 
-The current package is an implementation foundation, not a public launch-ready marketplace: Google Maps/Places, real payment processing, push notification delivery, document/object storage, Android↔API syncing, production authentication, full multi-lingual resources, iOS app and subscription billing are not active integrations.
+The current package is an implementation foundation, not a public launch-ready marketplace. A development-session-backed finance sync and manual ledger flow exist, but production identity/session management and end-to-end sync for every workflow are not complete. Google Maps/Places, real payment processing/webhooks, push notification delivery, document/object storage, database migrations, production deployment, full multilingual resources, iOS and subscription billing are not active integrations.
