@@ -148,9 +148,18 @@ internal object SE {
     var RedSoft by mutableStateOf(Color(0xFFFFE9EA)); private set
     var Red by mutableStateOf(Color(0xFFB63A4B)); private set
     var isDark by mutableStateOf(false); private set
+    var DesignFamily by mutableStateOf("Bento"); private set
 
     fun applyPalette(theme: String, dark: Boolean) {
         isDark = dark
+        DesignFamily = when (theme) {
+            "Ocean" -> "Coastal"
+            "Violet" -> "Studio Editorial"
+            "Graphite" -> "Industrial Grid"
+            "Porcelain" -> "Gallery Minimal"
+            "Copper" -> "Courtyard Heritage"
+            else -> "Bento Night"
+        }
         val accent = when (theme) {
             "Ocean" -> Color(0xFF087F9E)
             "Violet" -> Color(0xFF7556D9)
@@ -180,6 +189,32 @@ internal object SE {
         Lavender = if (dark) Color(0xFF302B47) else Color(0xFFF0ECFF)
         RedSoft = if (dark) Color(0xFF482A38) else Color(0xFFFFE9EA)
         Red = if (dark) Color(0xFFFF9BAC) else Color(0xFFB63A4B)
+    }
+
+    fun cardShape(base: Dp): androidx.compose.ui.graphics.Shape = when (DesignFamily) {
+        "Coastal" -> RoundedCornerShape(base * 1.35f)
+        "Studio Editorial" -> RoundedCornerShape(topStart = base, topEnd = base, bottomEnd = base * 0.25f, bottomStart = base * 0.25f)
+        "Industrial Grid" -> RoundedCornerShape(4.dp)
+        "Gallery Minimal" -> RoundedCornerShape(2.dp)
+        "Courtyard Heritage" -> RoundedCornerShape(topStart = base, topEnd = 6.dp, bottomEnd = base, bottomStart = 6.dp)
+        else -> RoundedCornerShape(base)
+    }
+
+    fun controlShape(base: Dp): androidx.compose.ui.graphics.Shape = when (DesignFamily) {
+        "Industrial Grid", "Gallery Minimal" -> RoundedCornerShape(6.dp)
+        "Studio Editorial" -> RoundedCornerShape(topStart = base, topEnd = base, bottomEnd = 5.dp, bottomStart = 5.dp)
+        "Courtyard Heritage" -> RoundedCornerShape(topStart = base, topEnd = 5.dp, bottomEnd = base, bottomStart = 5.dp)
+        "Coastal" -> RoundedCornerShape(base * 1.15f)
+        else -> RoundedCornerShape(base)
+    }
+
+    fun headlineSize(base: Float): Float = when (DesignFamily) {
+        "Studio Editorial" -> base + 3f
+        "Industrial Grid" -> base - 1f
+        "Gallery Minimal" -> base - .5f
+        "Courtyard Heritage" -> base + 1.5f
+        "Coastal" -> base + .5f
+        else -> base + 1f
     }
 }
 
@@ -592,7 +627,8 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             }
         }
     ) { padding ->
-        Box(Modifier.fillMaxSize().padding(padding)) {
+        Box(Modifier.fillMaxSize().background(SE.Background).padding(padding)) {
+            ThemeBackdrop(Modifier.matchParentSize())
             when (route) {
                 "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { detailsReturnRoute = "home"; selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { filtersReturnRoute = "home"; route = "filters" }, { workspaceReturnRoute = "home"; route = "account_type" }, { notificationsReturnRoute = "home"; route = "notifications" }, { route = "profile" })
                 "search" -> SearchResultsScreen(location, { location = it; route = "search_location" }, searchQuery, { searchQuery = it }, guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, filteredListings, favorites, { detailsReturnRoute = "search"; selectedId = it; route = "details" }, { route = "map" }, { filtersReturnRoute = "search"; route = "filters" }, toggleFavorite, {
@@ -3542,7 +3578,15 @@ private fun FlowChips(options: List<String>, selected: MutableList<String>, sele
 private fun ScreenHeader(title: String, subtitle: String? = null, onBack: (() -> Unit)? = null, trailing: (@Composable () -> Unit)? = null) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         if (onBack != null) { RoundIconButton(Icons.AutoMirrored.Filled.ArrowBack, onBack); Spacer(Modifier.width(10.dp)) }
-        Column(Modifier.weight(1f)) { Text(title, color = SE.Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold, lineHeight = 26.sp); if (subtitle != null) Text(subtitle, color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp) }
+        Column(Modifier.weight(1f)) {
+            Text(
+                title, color = SE.Ink, fontSize = SE.headlineSize(22f).sp,
+                fontWeight = if (SE.DesignFamily == "Studio Editorial") FontWeight.ExtraBold else FontWeight.Bold,
+                lineHeight = SE.headlineSize(26f).sp,
+                letterSpacing = if (SE.DesignFamily == "Industrial Grid") (-0.3).sp else 0.sp
+            )
+            if (subtitle != null) Text(subtitle, color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
+        }
         if (trailing != null) trailing()
     }
 }
@@ -3554,7 +3598,7 @@ private fun RoundIconButton(icon: androidx.compose.ui.graphics.vector.ImageVecto
 
 @Composable
 private fun PrimaryButton(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector? = null, onClick: () -> Unit) {
-    Button(onClick = onClick, modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue), contentPadding = PaddingValues(horizontal = 17.dp)) {
+    Button(onClick = onClick, modifier = Modifier.fillMaxWidth().height(52.dp), shape = SE.controlShape(15.dp), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue), contentPadding = PaddingValues(horizontal = 17.dp)) {
         Text(text, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp); if (icon != null) { Spacer(Modifier.width(8.dp)); Icon(icon, null, tint = Color.White, modifier = Modifier.size(18.dp)) }
     }
 }
