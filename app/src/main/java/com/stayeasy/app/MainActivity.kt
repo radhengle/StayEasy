@@ -1920,15 +1920,18 @@ private fun OwnerBedsScreen(listings: List<PgListing>, initialPropertyId: Long, 
     var propertyIndex by remember(initialPropertyId) { mutableIntStateOf(listings.indexOfFirst { it.id == initialPropertyId }.coerceAtLeast(0)) }
     var roomIndex by remember { mutableIntStateOf(0) }
     val listing = listings.getOrNull(propertyIndex) ?: demoListings.first()
-    val roomLabels = (1..listing.totalRooms.coerceIn(1, 30)).map { "Room " + (100 + it) }
-    val roomLabel = roomLabels[roomIndex.coerceIn(0, roomLabels.lastIndex)]
-    val bedsPerRoom = ((listing.totalBeds + listing.totalRooms.coerceAtLeast(1) - 1) / listing.totalRooms.coerceAtLeast(1)).coerceIn(1, 6)
-    val bedLetters = listOf("A", "B", "C", "D", "E", "F").take(bedsPerRoom)
+    val roomCount = listing.totalRooms.coerceIn(1, 30)
+    val declaredBedCount = listing.totalBeds.coerceAtLeast(0)
+    val roomLabels = (1..roomCount).map { "Room " + (100 + it) }
+    val currentRoomIndex = roomIndex.coerceIn(0, roomLabels.lastIndex)
+    val roomLabel = roomLabels[currentRoomIndex]
+    val bedsPerRoom = (declaredBedCount / roomCount + if (currentRoomIndex < declaredBedCount % roomCount) 1 else 0).coerceIn(0, 6)
+    val bedLetters = listOf("A", "B", "C", "D", "E", "F")
     val bedRecords = remember(listing.id, roomLabel) {
         val stored = StayRecordStore.load(context, "beds")
         val current = stored.filter { it.property == listing.name && it.unit.startsWith("$roomLabel ·", true) }.associateBy { it.unit.substringAfter("·").trim() }
         mutableStateListOf<StayRecord>().apply {
-            bedLetters.forEachIndexed { index, letter ->
+            bedLetters.take(bedsPerRoom).forEachIndexed { index, letter ->
                 val unit = "$roomLabel · Bed $letter"
                 val record = current["Bed $letter"] ?: StayRecord(category = "beds", title = "Bed $letter", details = if (listing.isDemo) "Sample inventory · no resident assignment verified" else "New bed unit", property = listing.name, unit = unit, status = listOf("Occupied", "Available", "Reserved", "Occupied", "Maintenance", "Available")[index % 6])
                 add(record)
@@ -1977,7 +1980,10 @@ private fun OwnerBedsScreen(listings: List<PgListing>, initialPropertyId: Long, 
             }
         }
         PrimaryButton("Assign a resident", Icons.Filled.PersonAdd) {
-            val options = roomLabels.flatMap { room -> bedLetters.map { letter -> "$room · Bed $letter" } }
+            val options = roomLabels.flatMapIndexed { index, room ->
+                val roomBeds = (declaredBedCount / roomCount + if (index < declaredBedCount % roomCount) 1 else 0).coerceIn(0, 6)
+                bedLetters.take(roomBeds).map { letter -> "$room · Bed $letter" }
+            }
             onAddResident(listing.name, options)
         }
         Spacer(Modifier.height(8.dp))
