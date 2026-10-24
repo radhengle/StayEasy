@@ -517,10 +517,52 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 })
                 "payments" -> FeatureRecordsScreen("payments", ownerMode = false) { route = "stay" }
                 "issue" -> IssueScreen({ route = "stay" }, { category, details, urgency ->
-                    val record = StayRecord(category = "issues", title = category, details = details, priority = urgency, property = "My current stay", status = "Open")
-                    StayRecordStore.add(context, record)
-                    StayRecordStore.notify(context, "Maintenance issue submitted", "$category · $urgency priority", "My current stay")
-                    notify("Issue saved on this device"); route = "records:issues"
+                    val apiBaseUrl = preferences.apiBaseUrl
+                    val token = StayApiClient.currentSessionToken(apiBaseUrl)
+                    fun saveLocalIssue() {
+                        val record = StayRecord(category = "issues", title = category, details = details, priority = urgency,
+                            property = "My current stay", status = "Open", source = "Local demo")
+                        StayRecordStore.add(context, record)
+                        StayRecordStore.notify(context, "Maintenance issue saved locally", "$category · $urgency priority", "My current stay")
+                    }
+                    if (apiBaseUrl.isBlank() || token.isNullOrBlank()) {
+                        saveLocalIssue()
+                        notify("Saved on this device only. Connect the API and a customer session to submit a shared ticket.")
+                        route = "records:issues"
+                    } else scope.launch {
+                        try {
+                            val activeStay = withContext(Dispatchers.IO) {
+                                StayApiClient.myStays(apiBaseUrl, token).firstOrNull {
+                                    it.optString("status").lowercase(Locale.ROOT) in setOf("active", "notice_given")
+                                }
+                            }
+                            if (activeStay == null) {
+                                saveLocalIssue()
+                                notify("No active server-backed stay found; this issue was saved locally only.")
+                                route = "records:issues"
+                                return@launch
+                            }
+                            val propertyId = activeStay.optLong("property_id")
+                            require(propertyId > 0L) { "The active stay did not include a valid property." }
+                            val unitId = activeStay.optLong("unit_id").takeIf { it > 0L }
+                            val response = withContext(Dispatchers.IO) {
+                                StayApiClient.createIssue(apiBaseUrl, token, propertyId, unitId, category, category, details, urgency)
+                            }
+                            val issueId = response.optLong("id")
+                            require(issueId > 0L) { "The API did not return a maintenance ticket ID." }
+                            val status = response.optString("status", "open").replace('_', ' ').replaceFirstChar { it.uppercase() }
+                            StayRecordStore.addIfAbsent(context, StayRecord(
+                                id = "server-issue-$issueId", category = "issues", title = category, details = details,
+                                status = status, priority = urgency, property = "Property #$propertyId",
+                                unit = unitId?.toString().orEmpty(), source = "Server"
+                            ))
+                            StayRecordStore.notify(context, "Maintenance ticket submitted", "$category · $urgency priority", "Property #$propertyId")
+                            notify("Maintenance ticket #$issueId sent to the owner.")
+                            route = "records:issues"
+                        } catch (e: Exception) {
+                            notify("Issue was not submitted: ${e.message ?: "check the customer session and API connection"}. No local copy was created.")
+                        }
+                    }
                 })
                 "profile" -> ProfileScreen({ ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "feature_hub" })
                 "notifications" -> FeatureRecordsScreen("notifications", ownerMode) { route = if (ownerMode) "feature_hub" else "feature_hub" }
@@ -1142,7 +1184,7 @@ private fun IssueScreen(onBack: () -> Unit, onSubmit: (String, String, String) -
         OutlinedTextField(value = description, onValueChange = { description = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp), placeholder = { Text("What happened? Where should the manager look?") }, shape = RoundedCornerShape(15.dp), colors = fieldColors())
         Spacer(Modifier.height(12.dp)); Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().clickable { }) { Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.CameraAlt, null, tint = SE.Blue); Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text("Add photos", color = SE.Ink, fontWeight = FontWeight.SemiBold); Text("Attach evidence if it helps explain the problem", color = SE.Muted, fontSize = 10.sp) }; Icon(Icons.Filled.Add, null, tint = SE.Blue) } }
         Spacer(Modifier.height(22.dp)); PrimaryButton("Submit issue", Icons.AutoMirrored.Filled.ArrowForward) { if (description.isBlank()) { description = "Please add a description before submitting." } else onSubmit(category, description, urgency) }
-        Spacer(Modifier.height(10.dp)); Text("This is a UI-only demo. No real maintenance ticket is sent.", color = SE.Muted, fontSize = 10.sp)
+        Spacer(Modifier.height(10.dp)); Text("A shared ticket requires a connected customer session and an active server-backed stay. Otherwise, this report remains on this device.", color = SE.Muted, fontSize = 10.sp, lineHeight = 15.sp)
     }
 }
 

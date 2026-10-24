@@ -275,6 +275,46 @@ internal object StayApiClient {
         return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
     }
 
+    fun myStays(baseUrl: String, token: String): List<JSONObject> {
+        val result = JSONArray(request(baseUrl, "/stays/me", token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun createIssue(
+        baseUrl: String,
+        token: String,
+        propertyId: Long,
+        unitId: Long?,
+        category: String,
+        title: String,
+        description: String,
+        priority: String
+    ): JSONObject {
+        val safeCategory = category.lowercase(Locale.ROOT)
+            .replace(Regex("[^a-z0-9]+"), "_").trim('_').take(70).ifBlank { "other" }
+        val safePriority = priority.lowercase(Locale.ROOT)
+            .takeIf { it in setOf("low", "normal", "high", "urgent") } ?: "normal"
+        val body = JSONObject()
+            .put("property_id", propertyId)
+            .put("category", safeCategory)
+            .put("title", title.trim().take(180))
+            .put("description", description.trim().take(5000))
+            .put("priority", safePriority)
+        unitId?.let { body.put("unit_id", it) }
+        return JSONObject(request(baseUrl, "/issues", token, "POST", body))
+    }
+
+    fun issues(baseUrl: String, token: String, propertyId: Long? = null): List<JSONObject> {
+        val path = propertyId?.let { "/issues?property_id=$it" } ?: "/issues"
+        val result = JSONArray(request(baseUrl, path, token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun updateIssue(baseUrl: String, token: String, issueId: Long, status: String): JSONObject {
+        val normalized = status.lowercase(Locale.ROOT).replace(' ', '_').replace('-', '_')
+        return JSONObject(request(baseUrl, "/owner/issues/$issueId", token, "PATCH", JSONObject().put("status", normalized)))
+    }
+
     fun visitTimeFromLabel(label: String): String {
         val now = java.time.ZonedDateTime.now()
         val date = when {
