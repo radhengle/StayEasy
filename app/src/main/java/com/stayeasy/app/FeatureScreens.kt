@@ -478,6 +478,17 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp), shape = RoundedCornerShape(11.dp)) { Icon(Icons.Filled.Download, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("Export") }
         }
         Spacer(Modifier.height(8.dp))
+        if (category == "charges" && serverFinanceMode) {
+            OutlinedButton(
+                onClick = { billingError = ""; showBillingDialog = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(13.dp)
+            ) {
+                Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(17.dp))
+                Spacer(Modifier.width(7.dp))
+                Text("Generate monthly rent charges")
+            }
+        }
         OutlinedTextField(value = query, onValueChange = { query = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Icon(Icons.Filled.Search, null) }, placeholder = { Text("Search records, people or units") }, shape = RoundedCornerShape(14.dp))
         Spacer(Modifier.height(7.dp))
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -687,6 +698,85 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             containerColor = SE.Surface
         )
     }
+    if (showBillingDialog) {
+        AlertDialog(
+            onDismissRequest = { if (!generatingBilling) showBillingDialog = false },
+            title = { Text("Generate monthly rent", color = SE.Ink, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Text("Create rent charges for eligible stays at one property. Existing charges for the same stay and month are skipped. No payment is collected.", color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                    OutlinedTextField(
+                        billingPropertyIdText,
+                        { billingPropertyIdText = it.filter(Char::isDigit).take(12) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Server property ID") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        billingPeriodText,
+                        { billingPeriodText = it.filter { ch -> ch.isDigit() || ch == '-' }.take(7) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Billing period (YYYY-MM)") },
+                        placeholder = { Text("2026-11") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        billingDueDateText,
+                        { billingDueDateText = it.take(30) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Rent due date") },
+                        placeholder = { Text("2026-11-05") },
+                        singleLine = true
+                    )
+                    if (billingError.isNotBlank()) Text(billingError, color = SE.Red, fontSize = 11.sp)
+                }
+            },
+            confirmButton = {
+                TextButton(enabled = !generatingBilling, onClick = {
+                    val propertyId = billingPropertyIdText.toLongOrNull()
+                    if (propertyId == null || propertyId <= 0L) {
+                        billingError = "Enter a valid server property ID."
+                        return@TextButton
+                    }
+                    if (!Regex("^\\d{4}-(0[1-9]|1[0-2])$").matches(billingPeriodText.trim())) {
+                        billingError = "Enter the billing period as YYYY-MM, for example 2026-11."
+                        return@TextButton
+                    }
+                    if (billingDueDateText.isBlank()) {
+                        billingError = "Enter the rent due date."
+                        return@TextButton
+                    }
+                    if (generatingBilling) return@TextButton
+                    generatingBilling = true
+                    billingError = ""
+                    remoteScope.launch {
+                        try {
+                            val result = withContext(Dispatchers.IO) {
+                                StayApiClient.generateRentCharges(
+                                    apiPreferences.apiBaseUrl, sessionToken!!, propertyId,
+                                    billingPeriodText.trim(), billingDueDateText.trim()
+                                )
+                            }
+                            val rows = withContext(Dispatchers.IO) {
+                                StayApiClient.ownerLedger(apiPreferences.apiBaseUrl, sessionToken!!)
+                            }
+                            StayRecordStore.replaceServerRecords(context, category, mapLedgerRows(rows), preserveLocal = false)
+                            refresh()
+                            remoteSyncMessage = "Billing complete: ${result.optInt("created_count")} created, ${result.optInt("skipped_existing")} existing skipped."
+                            showBillingDialog = false
+                        } catch (e: Exception) {
+                            billingError = "Billing failed: ${e.message ?: "check the API session, property ID and dates"}"
+                        } finally {
+                            generatingBilling = false
+                        }
+                    }
+                }) { Text(if (generatingBilling) "Generating…" else "Generate charges") }
+            },
+            dismissButton = { TextButton(enabled = !generatingBilling, onClick = { showBillingDialog = false }) { Text("Cancel") } },
+            containerColor = SE.Surface
+        )
+    }
+
     if (showDeleteId != null) {
         AlertDialog(onDismissRequest = { showDeleteId = null }, title = { Text("Remove this record?", color = SE.Ink) }, text = { Text("This only removes the local prototype record from this device.", color = SE.Muted) },
             confirmButton = { TextButton(onClick = { showDeleteId?.let { StayRecordStore.remove(context, category, it) }; refresh(); showDeleteId = null }) { Text("Remove", color = SE.Red) } },
