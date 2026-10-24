@@ -10,12 +10,14 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from .config import validate_runtime_configuration
+validate_runtime_configuration()
 from .database import Base, engine, get_db
 from . import models as m
 from .security import create_access_token, get_actor, require_roles, check_dev_password, APP_ENV
 
-# Auto-create tables only for local/test development. Production schemas must be migrated explicitly.
-if APP_ENV != "production":
+# Auto-create tables only in local development/test. Staging and production must run Alembic.
+if APP_ENV in {"development", "test"}:
     Base.metadata.create_all(bind=engine)
 app = FastAPI(title="StayEasy API", version="0.2.0", description="Role-protected PG marketplace and property operations API")
 from .auth import router as auth_router

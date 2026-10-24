@@ -22,6 +22,7 @@ from backend.app.database import Base, engine, SessionLocal
 from backend.app.security import create_access_token, get_actor, verify_password
 from backend.app import models as m
 from backend.app import auth as auth_routes
+from backend.app.config import validate_runtime_configuration
 from backend.scripts.provision_admin import provision_admin
 
 client = TestClient(api.app)
@@ -78,6 +79,42 @@ def setup_function():
 
 def teardown_function():
     api.app.dependency_overrides.clear()
+
+
+def test_production_configuration_fails_closed_and_development_defaults_remain_usable():
+    valid = {
+        "APP_ENV": "production",
+        "DATABASE_URL": "postgresql+psycopg://stayeasy:placeholder@db.example.test/stayeasy",
+        "JWT_SECRET": "prod-token-signing-secret-with-more-than-32-characters",
+        "SMTP_HOST": "smtp.example.test",
+        "SMTP_FROM_EMAIL": "noreply@example.test",
+        "SMTP_PORT": "587",
+        "CORS_ORIGINS": "https://app.example.test,https://admin.example.test",
+    }
+    validate_runtime_configuration(valid)
+
+    invalid_cases = [
+        ({k: v for k, v in valid.items() if k != "DATABASE_URL"}, "DATABASE_URL must be explicitly configured"),
+        ({**valid, "DATABASE_URL": "sqlite:///./stayeasy.db"}, "postgresql+psycopg:// URL"),
+        ({**valid, "DATABASE_URL": "postgresql://stayeasy:placeholder@db.example.test/stayeasy"}, "postgresql+psycopg:// URL"),
+        ({**valid, "DATABASE_URL": "postgresql+unknown://db.example.test/stayeasy"}, "postgresql+psycopg:// URL"),
+        ({k: v for k, v in valid.items() if k != "CORS_ORIGINS"}, "CORS_ORIGINS must be explicitly configured"),
+        ({**valid, "JWT_SECRET": "short"}, "unique JWT_SECRET"),
+        ({k: v for k, v in valid.items() if k != "SMTP_HOST"}, "Configure SMTP_HOST and SMTP_FROM_EMAIL"),
+        ({**valid, "SMTP_PORT": "not-a-port"}, "SMTP_PORT must be a valid"),
+        ({**valid, "SMTP_PORT": "70000"}, "between 1 and 65535"),
+        ({**valid, "CORS_ORIGINS": "*"}, "Wildcard CORS origins"),
+        ({**valid, "CORS_ORIGINS": "http://app.example.test"}, "must use HTTPS"),
+        ({**valid, "APP_ENV": "unknown"}, "APP_ENV must be one of"),
+    ]
+    for environment, expected_message in invalid_cases:
+        try:
+            validate_runtime_configuration(environment)
+            assert False, f"Invalid deployment configuration was accepted: {expected_message}"
+        except RuntimeError as exc:
+            assert expected_message in str(exc)
+
+    validate_runtime_configuration({"APP_ENV": "development", "DATABASE_URL": "sqlite:///./local.db"})
 
 
 def test_health_and_admin_authorization():
