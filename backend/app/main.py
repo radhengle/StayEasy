@@ -546,8 +546,8 @@ def update_unit_status(unit_id: int, body: StatusPatch, actor: dict = Depends(re
     if body.status not in allowed:
         raise HTTPException(422, "Set only availability or maintenance blocks manually; reservation and stay records control reserved/occupied state.")
     current = resolve_unit_inventory(db, unit)
-    if body.status == "available" and current["status"] in {"reserved", "occupied"}:
-        raise HTTPException(409, "An active reservation or resident stay controls this unit. Close that workflow before releasing it.")
+    if current["status"] in {"reserved", "occupied"}:
+        raise HTTPException(409, "An active reservation or resident stay controls this unit. Close, cancel, or reassign that workflow before changing availability.")
     old = unit.status
     unit.status = body.status
     audit(db, actor, "unit", unit.id, "status_changed", old={"status": old}, new={"status": body.status})
