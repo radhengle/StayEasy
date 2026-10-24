@@ -5,7 +5,7 @@ SQLite verifies API contracts; PostgreSQL concurrency testing is still required 
 """
 import os
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 DB_PATH = Path(tempfile.gettempdir()) / f"stayeasy_test_{os.getpid()}.db"
@@ -133,6 +133,29 @@ def test_reservations_block_duplicate_active_unit():
     status_update = client.post(f"/owner/reservations/{first.json()['id']}/status", json={"status": "confirmed"})
     assert status_update.status_code == 200, status_update.text
     assert status_update.json()["status"] == "confirmed"
+
+
+def test_expired_pending_reservation_releases_unit():
+    prop, unit = setup_property()
+    set_actor("customer-1", "customer")
+    payload = {
+        "property_id": prop["id"], "unit_id": unit["id"],
+        "move_in_date": (date.today() + timedelta(days=7)).isoformat(),
+        "terms_snapshot": {"currency": "INR"}
+    }
+    first = client.post("/reservations", json=payload)
+    assert first.status_code == 201, first.text
+
+    with SessionLocal() as db:
+        held = db.get(m.Reservation, first.json()["id"])
+        held.expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        db.commit()
+
+    set_actor("customer-2", "customer")
+    second = client.post("/reservations", json=payload)
+    assert second.status_code == 201, second.text
+    with SessionLocal() as db:
+        assert db.get(m.Reservation, first.json()["id"]).status == "expired"
 
 
 def test_assigned_manager_reads_only_scoped_marketplace_records():
