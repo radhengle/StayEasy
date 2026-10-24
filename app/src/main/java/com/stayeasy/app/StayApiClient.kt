@@ -345,5 +345,90 @@ internal object StayApiClient {
         return null
     }
 
+    /** Read the shared owner ledger, optionally scoped to one property. */
+    fun ownerLedger(baseUrl: String, token: String, propertyId: Long? = null): List<JSONObject> {
+        val path = propertyId?.let { "/owner/ledger?property_id=$it" } ?: "/owner/ledger"
+        val result = JSONArray(request(baseUrl, path, token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    /** Residents can only read entries linked to their own server-backed stays. */
+    fun myLedger(baseUrl: String, token: String): List<JSONObject> {
+        val result = JSONArray(request(baseUrl, "/ledger/me", token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    /** Financial records remain manual until a real payment provider and webhook verification exist. */
+    fun createManualLedgerEntry(
+        baseUrl: String,
+        token: String,
+        propertyId: Long,
+        residentStayId: Long?,
+        category: String,
+        amount: Int,
+        billingPeriod: String,
+        dueDate: String,
+        paymentReference: String,
+        description: String
+    ): JSONObject {
+        require(propertyId > 0L) { "Enter a valid server property ID." }
+        require(amount > 0) { "Enter an amount greater than zero." }
+        val allowedCategories = setOf("rent_charge", "payment", "deposit", "refund", "deduction", "expense", "food", "utility", "late_fee")
+        require(category in allowedCategories) { "Unsupported financial record type." }
+        val period = billingPeriod.trim()
+        if (category == "rent_charge" || period.isNotBlank()) {
+            require(Regex("^\\d{4}-(0[1-9]|1[0-2])$").matches(period)) { "Enter the billing period as YYYY-MM, for example 2026-11." }
+        }
+        val normalizedDueDate = if (dueDate.isBlank()) null else
+            normalizeDate(dueDate) ?: throw IllegalArgumentException("Enter a valid due date, for example 2026-11-05.")
+        val safeStatus = when (category) {
+            "rent_charge", "food", "utility", "late_fee", "expense" -> "open"
+            "deposit" -> "held"
+            "payment" -> "recorded"
+            "refund", "deduction" -> "recorded"
+            else -> "open"
+        }
+        val body = JSONObject()
+            .put("property_id", propertyId)
+            .put("category", category)
+            .put("amount", amount)
+            .put("billing_period", period)
+            .put("payment_method", "manual")
+            .put("payment_reference", paymentReference.trim())
+            .put("provider_status", "manual_record")
+            .put("description", description.trim())
+            .put("status", safeStatus)
+        if (residentStayId != null) {
+            require(residentStayId > 0L) { "Enter a valid resident stay ID." }
+            body.put("resident_stay_id", residentStayId)
+        }
+        if (normalizedDueDate != null) body.put("due_date", normalizedDueDate)
+        return JSONObject(request(baseUrl, "/owner/ledger", token, "POST", body))
+    }
+
+    /** Idempotent server-side rent generation for a property's billing period. */
+    fun generateRentCharges(
+        baseUrl: String,
+        token: String,
+        propertyId: Long,
+        billingPeriod: String,
+        dueDate: String,
+        proRataPolicy: String = "actual_days"
+    ): JSONObject {
+        require(propertyId > 0L) { "Enter a valid server property ID." }
+        require(Regex("^\\d{4}-(0[1-9]|1[0-2])$").matches(billingPeriod.trim())) {
+            "Enter the billing period as YYYY-MM, for example 2026-11."
+        }
+        val normalizedDueDate = normalizeDate(dueDate)
+            ?: throw IllegalArgumentException("Enter a valid due date, for example 2026-11-05.")
+        require(proRataPolicy in setOf("actual_days", "fixed_30")) { "Unsupported pro-rata policy." }
+        val body = JSONObject()
+            .put("property_id", propertyId)
+            .put("billing_period", billingPeriod.trim())
+            .put("due_date", normalizedDueDate)
+            .put("pro_rata_policy", proRataPolicy)
+        return JSONObject(request(baseUrl, "/owner/billing/generate", token, "POST", body))
+    }
+
     fun ownerDashboard(baseUrl: String, token: String): JSONObject = JSONObject(request(baseUrl, "/owner/dashboard", token))
 }
