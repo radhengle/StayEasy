@@ -735,6 +735,21 @@ internal fun RequestBookingScreen(
     var unit by remember(listing.id) { mutableStateOf("") }
     var note by remember(listing.id) { mutableStateOf("Please confirm the selected room type, total move-in charges and cancellation terms.") }
     var agreed by remember(listing.id) { mutableStateOf(false) }
+    val availableServerUnits = listing.serverUnits.filter { it.status.equals("available", ignoreCase = true) }
+    fun roomTypeForUnit(slot: RemoteUnit): String = when {
+        slot.rentableType.equals("room", ignoreCase = true) -> "Private room"
+        slot.sharingCapacity <= 1 -> "Individual bed"
+        else -> "${slot.sharingCapacity} sharing"
+    }
+    val serverRoomTypes = availableServerUnits.map(::roomTypeForUnit).distinct()
+    val roomTypeOptions = if (listing.serverPropertyId != null) serverRoomTypes else listOf(listing.sharing, "Private room", "Individual bed", "Flexible").distinct()
+    val selectableServerUnits = availableServerUnits.filter { roomTypeForUnit(it) == roomType }
+    LaunchedEffect(listing.id, roomTypeOptions) {
+        if (listing.serverPropertyId != null && roomType !in roomTypeOptions) {
+            roomType = roomTypeOptions.firstOrNull() ?: listing.sharing
+            unit = ""
+        }
+    }
     Column(Modifier.fillMaxSize().background(SE.Background).verticalScroll(rememberScrollState()).padding(17.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Request a reservation", color = SE.Ink, fontSize = 23.sp, fontWeight = FontWeight.Bold); Text("The owner must confirm the exact unit and terms", color = SE.Muted, fontSize = 11.sp) }; OutlinedButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null); Text("Back") } }
         Spacer(Modifier.height(14.dp))
@@ -751,22 +766,34 @@ internal fun RequestBookingScreen(
             }
         }
         Spacer(Modifier.height(14.dp)); Text("ROOM / BED OPTION", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .8.sp)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf(listing.sharing, "Private room", "Individual bed", "Flexible").distinct().forEach { FilterChip(selected = roomType == it, onClick = { roomType = it }, label = { Text(it, fontSize = 10.sp) }) } }
+        if (roomTypeOptions.isEmpty()) {
+            Text("No room or bed types are currently available. Refresh availability before requesting a reservation.", color = SE.Orange, fontSize = 11.sp, lineHeight = 15.sp)
+        } else {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                roomTypeOptions.forEach { option ->
+                    FilterChip(selected = roomType == option, onClick = {
+                        if (roomType != option) {
+                            roomType = option
+                            unit = ""
+                        }
+                    }, label = { Text(option, fontSize = 10.sp) })
+                }
+            }
+        }
         Spacer(Modifier.height(12.dp)); Text("MOVE-IN DATE", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .8.sp)
         OutlinedTextField(moveInDate, { moveInDate = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("e.g. 15 Nov 2026") }, shape = RoundedCornerShape(12.dp))
         Spacer(Modifier.height(12.dp)); Text(if (listing.serverPropertyId != null) "SELECT AN AVAILABLE ROOM / BED" else "SPECIFIC ROOM / BED (OPTIONAL)", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .8.sp)
-        val availableServerUnits = listing.serverUnits.filter { it.status == "available" }
         if (listing.serverPropertyId != null) {
-            if (availableServerUnits.isEmpty()) {
-                Text("No individually available room / bed slots are currently published. Refresh availability or contact the owner.", color = SE.Orange, fontSize = 11.sp, lineHeight = 15.sp)
+            if (selectableServerUnits.isEmpty()) {
+                Text("No available slot matches this room type. Choose another available type or refresh availability.", color = SE.Orange, fontSize = 11.sp, lineHeight = 15.sp)
             } else {
                 Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    availableServerUnits.take(20).forEach { slot ->
+                    selectableServerUnits.take(20).forEach { slot ->
                         val label = "${slot.roomCode} · ${slot.unitCode}"
                         FilterChip(selected = unit == label, onClick = { unit = label }, label = { Text("${slot.unitCode} · ₹${slot.monthlyRent}", fontSize = 10.sp) })
                     }
                 }
-                Text("The selected slot ID is sent to the backend, which checks availability atomically to prevent duplicate active reservations.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
+                Text("Only slots matching the selected room type are shown. The backend checks availability atomically when the request is submitted.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
             }
         } else {
             OutlinedTextField(unit, { unit = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("e.g. Room 204 · Bed B") }, shape = RoundedCornerShape(12.dp))
@@ -774,7 +801,7 @@ internal fun RequestBookingScreen(
         Spacer(Modifier.height(12.dp)); Text("NOTE TO OWNER", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .8.sp)
         OutlinedTextField(note, { note = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 90.dp), shape = RoundedCornerShape(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically) { Checkbox(checked = agreed, onCheckedChange = { agreed = it }); Text("I understand this is a request, not a confirmed booking or payment.", color = SE.Text, fontSize = 11.sp, lineHeight = 15.sp) }
-        Spacer(Modifier.height(8.dp)); Button(onClick = { if (moveInDate.isNotBlank() && agreed) onSubmit(roomType, moveInDate, unit.trim(), note.trim()) }, enabled = moveInDate.isNotBlank() && agreed && (listing.serverPropertyId == null || (availableServerUnits.isNotEmpty() && unit.isNotBlank())), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) { Icon(Icons.Filled.CheckCircle, null); Spacer(Modifier.width(7.dp)); Text("Send reservation request") }
+        Spacer(Modifier.height(8.dp)); Button(onClick = { if (moveInDate.isNotBlank() && agreed) onSubmit(roomType, moveInDate, unit.trim(), note.trim()) }, enabled = moveInDate.isNotBlank() && agreed && (listing.serverPropertyId == null || (selectableServerUnits.any { "${it.roomCode} · ${it.unitCode}" == unit })), modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) { Icon(Icons.Filled.CheckCircle, null); Spacer(Modifier.width(7.dp)); Text("Send reservation request") }
         Spacer(Modifier.height(9.dp)); Text(if (listing.serverPropertyId != null) "No payment is taken here. The server holds the selected unit request for 24 hours and rejects conflicting active reservations; the owner must confirm the terms." else "No payment is taken here. Local demo requests do not reserve real inventory.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
     }
 }
