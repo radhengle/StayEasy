@@ -6,6 +6,8 @@ import android.os.Environment
 import android.provider.MediaStore
 import java.io.ByteArrayOutputStream
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertExists
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
