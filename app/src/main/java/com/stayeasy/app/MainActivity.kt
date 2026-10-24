@@ -697,9 +697,9 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "owner_beds" -> OwnerBedsScreen(ownerListings, selectedId, { route = "add_resident" }, { notify(it) }, { route = "owner_properties" })
                 "owner_enquiries" -> FeatureRecordsScreen("enquiries", ownerMode = true) { route = "feature_hub" }
                 "owner_residents" -> FeatureRecordsScreen("residents", ownerMode = true) { route = "feature_hub" }
-                "add_resident" -> AddResidentScreen({ name, phone, rent, bed ->
-                    StayRecordStore.add(context, StayRecord(category = "residents", title = name, person = phone, amount = rent, unit = bed, status = "Active", details = "Resident manually added in the local prototype."))
-                    StayRecordStore.add(context, StayRecord(category = "stays", title = "Stay · $name", details = "Resident assigned to $bed. Confirm move-in date and agreement terms.", person = name, unit = bed, amount = rent, status = "Active"))
+                "add_resident" -> AddResidentScreen({ name, phone, rent, bed, joiningDate ->
+                    StayRecordStore.add(context, StayRecord(category = "residents", title = name, person = phone, amount = rent, unit = bed, status = "Active", details = "Resident manually added in the local prototype. Joining date: $joiningDate. Monthly rent: ${money(rent)}."))
+                    StayRecordStore.add(context, StayRecord(category = "stays", title = "Stay · $name", details = "Resident assigned to $bed. Joining date: $joiningDate. Confirm agreement terms and first payment.", person = name, unit = bed, date = joiningDate, amount = rent, status = "Active"))
                     StayRecordStore.notify(context, "Resident added", "$name · $bed")
                     notify("Resident and stay records saved on this device")
                     route = "records:residents"
@@ -1744,8 +1744,8 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
     var couples by remember(initial?.id) { mutableStateOf(initial?.couplesAllowed ?: false) }
     var sharing by remember(initial?.id) { mutableStateOf(initial?.sharing ?: "2 sharing") }
     var rentText by remember(initial?.id) { mutableStateOf((initial?.monthlyRent ?: 9500).toString()) }
-    var depositText by remember(initial?.id) { mutableStateOf((initial?.deposit ?: 18000).toString()) }
-    var foodText by remember(initial?.id) { mutableStateOf((initial?.foodMonthly ?: 1800).toString()) }
+    var depositText by remember(initial?.id) { mutableStateOf(initial?.deposit?.takeIf { it > 0 }?.toString() ?: "") }
+    var foodText by remember(initial?.id) { mutableStateOf((initial?.foodMonthly ?: 0).toString()) }
     var roomsText by remember(initial?.id) { mutableStateOf((initial?.totalRooms ?: 6).toString()) }
     var bedsText by remember(initial?.id) { mutableStateOf((initial?.totalBeds ?: 18).toString()) }
     var photoUri by remember(initial?.id) { mutableStateOf(initial?.photoUri ?: "") }
@@ -1763,7 +1763,7 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
     var utilityText by remember(initial?.id) { mutableStateOf((initial?.utilityMonthlyEstimate ?: 0).toString()) }
     var expectedVacancy by remember(initial?.id) { mutableStateOf(initial?.expectedVacancy ?: "Available now") }
     var foodPolicy by remember(initial?.id) { mutableStateOf(initial?.foodPolicy ?: if ((initial?.foodMonthly ?: 0) > 0) "Optional" else "Not offered") }
-    val amenities = remember(initial?.id) { mutableStateListOf<String>().apply { addAll(initial?.amenities ?: listOf("Wi-Fi", "Meals", "Housekeeping")) } }
+    val amenities = remember(initial?.id) { mutableStateListOf<String>().apply { addAll(initial?.amenities ?: emptyList()) } }
     val context = androidx.compose.ui.platform.LocalContext.current
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) {
@@ -1771,9 +1771,10 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
             photoUri = uri.toString()
         }
     }
-    val steps = listOf("Basics", "Stay policy", "Rooms & pricing", "Review")
+    val steps = listOf("Property", "Stay rules", "Rooms & rent", "Review")
+    BackHandler(enabled = step > 0) { step = (step - 1).coerceAtLeast(0) }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(17.dp)) {
-        ScreenHeader(if (initial == null) "Add your PG" else "Edit your PG", "Create a clear, attractive listing", onBack = if (step > 0) ({ step -= 1 }) else onCancel, trailing = { TextButton(onClick = {
+        ScreenHeader(if (initial == null) "Add a property" else "Edit property", "Step ${step + 1} of ${steps.size} · optional details can be added later", onBack = if (step > 0) ({ step -= 1 }) else onCancel, trailing = { TextButton(onClick = {
             StayRecordStore.add(context, StayRecord(category = "quality", title = name.ifBlank { "Untitled PG draft" },
                 details = "Draft listing · Area: $area · Policy: $policy · Sharing: $sharing · Rent: ₹${rentText.ifBlank { "0" }} · Deposit: ₹${depositText.ifBlank { "0" }} · Amenities: ${amenities.joinToString()}",
                 status = "Draft", property = area, amount = rentText.toDoubleOrNull()?.toInt() ?: 0))
@@ -1783,7 +1784,7 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
         Spacer(Modifier.height(18.dp))
         when (step) {
             0 -> {
-                Text("First, let's introduce your place", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                Text("Tell residents about your property", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                 Text("A few clear details help the right residents find you.", color = SE.Muted, fontSize = 12.sp)
                 Spacer(Modifier.height(16.dp))
                 Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().clickable { photoPicker.launch(arrayOf("image/*")) }) {
@@ -1792,8 +1793,8 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
                         Box(Modifier.align(Alignment.BottomEnd).padding(11.dp).clip(RoundedCornerShape(12.dp)).background(SE.Ink).padding(horizontal = 12.dp, vertical = 9.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.CameraAlt, null, tint = Color.White, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(6.dp)); Text(if (photoUri.isBlank()) "Add cover photo" else "Change cover", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 11.sp) } }
                     }
                 }
-                Spacer(Modifier.height(13.dp)); FormLabel("PG / property name"); OutlinedTextField(name, { name = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("e.g. The Courtyard Co-Living") }, shape = RoundedCornerShape(14.dp), colors = fieldColors())
-                Spacer(Modifier.height(11.dp)); FormLabel("Area and address"); OutlinedTextField(area, { area = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Icon(Icons.Filled.LocationOn, null) }, placeholder = { Text("Locality, city") }, shape = RoundedCornerShape(14.dp), colors = fieldColors())
+                Spacer(Modifier.height(13.dp)); FormLabel("PROPERTY NAME · REQUIRED"); OutlinedTextField(name, { name = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("e.g. The Courtyard Co-Living") }, shape = RoundedCornerShape(14.dp), colors = fieldColors())
+                Spacer(Modifier.height(11.dp)); FormLabel("LOCALITY / ADDRESS · REQUIRED"); OutlinedTextField(area, { area = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Icon(Icons.Filled.LocationOn, null) }, placeholder = { Text("Locality, city") }, shape = RoundedCornerShape(14.dp), colors = fieldColors())
                 Spacer(Modifier.height(8.dp)); Text("Choose the nearest locality now; precise map pin selection will be connected with Google Maps later.", color = SE.Muted, fontSize = 10.sp)
                 Spacer(Modifier.height(5.dp)); OutlinedButton(onClick = { showAreaPicker = true }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) { Icon(Icons.Filled.Map, null); Spacer(Modifier.width(7.dp)); Text("Choose locality / map area") }
                 Spacer(Modifier.height(10.dp)); FormLabel("PIN CODE (OPTIONAL)"); OutlinedTextField(pinCode, { pinCode = it.filter(Char::isDigit).take(6) }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("e.g. 411057") }, shape = RoundedCornerShape(14.dp), colors = fieldColors())
@@ -1823,8 +1824,8 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
                 Text("Set clear terms", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 20.sp); Text("Transparent details reduce unnecessary calls and disputes.", color = SE.Muted, fontSize = 12.sp)
                 Spacer(Modifier.height(17.dp)); FormLabel("ROOM TYPE")
                 FlowChips(listOf("1 sharing", "2 sharing", "3 sharing", "4+ sharing", "Private room"), remember { mutableStateListOf(sharing) }, singleSelection = true) { sharing = it }
-                Spacer(Modifier.height(14.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Column(Modifier.weight(1f)) { FormLabel("MONTHLY RENT / PERSON"); OutlinedTextField(rentText, { rentText = it.filter(Char::isDigit) }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Text("₹") }, shape = RoundedCornerShape(13.dp), colors = fieldColors()) }; Column(Modifier.weight(1f)) { FormLabel("SECURITY DEPOSIT"); OutlinedTextField(depositText, { depositText = it.filter(Char::isDigit) }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Text("₹") }, shape = RoundedCornerShape(13.dp), colors = fieldColors()) } }
-                Spacer(Modifier.height(12.dp)); FormLabel("MONTHLY FOOD CHARGE (0 IF NOT OFFERED)"); OutlinedTextField(foodText, { foodText = it.filter(Char::isDigit) }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Text("₹") }, shape = RoundedCornerShape(13.dp), colors = fieldColors())
+                Spacer(Modifier.height(14.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Column(Modifier.weight(1f)) { FormLabel("MONTHLY RENT PER PERSON · REQUIRED (₹100–₹1,00,000)"); OutlinedTextField(rentText, { rentText = it.filter(Char::isDigit) }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Text("₹") }, shape = RoundedCornerShape(13.dp), colors = fieldColors()) }; Column(Modifier.weight(1f)) { FormLabel("SECURITY DEPOSIT (OPTIONAL)"); OutlinedTextField(depositText, { depositText = it.filter(Char::isDigit) }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Text("₹") }, shape = RoundedCornerShape(13.dp), colors = fieldColors()) } }
+                Spacer(Modifier.height(12.dp)); FormLabel("FOOD CHARGE PER MONTH (OPTIONAL)"); OutlinedTextField(foodText, { foodText = it.filter(Char::isDigit) }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Text("₹") }, shape = RoundedCornerShape(13.dp), colors = fieldColors())
                 Spacer(Modifier.height(10.dp)); FormLabel("FOOD CHARGE POLICY"); FlowChips(listOf("Included", "Optional", "Extra charge", "Not offered"), remember(foodPolicy) { mutableStateListOf(foodPolicy) }, singleSelection = true) { foodPolicy = it }
                 Spacer(Modifier.height(10.dp)); FormLabel("ESTIMATED MONTHLY UTILITIES / ELECTRICITY (₹, OPTIONAL)"); OutlinedTextField(utilityText, { utilityText = it.filter(Char::isDigit).take(8) }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(13.dp), colors = fieldColors())
                 Spacer(Modifier.height(10.dp)); Text("FURNISHING", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold); Row(verticalAlignment = Alignment.CenterVertically) { Text(if (furnished) "Furnished" else "Unfurnished", color = SE.Ink, fontSize = 12.sp, modifier = Modifier.weight(1f)); Switch(checked = furnished, onCheckedChange = { furnished = it }) }
@@ -1832,10 +1833,11 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
                 Spacer(Modifier.height(10.dp)); FormLabel("EXPECTED VACANCY"); FlowChips(listOf("Available now", "Next month", "Date to confirm"), remember(expectedVacancy) { mutableStateListOf(expectedVacancy) }, singleSelection = true) { expectedVacancy = it }
                 if (expectedVacancy == "Date to confirm") OutlinedTextField(expectedVacancy, { expectedVacancy = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Expected date") }, singleLine = true)
                 Spacer(Modifier.height(10.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Column(Modifier.weight(1f)) { FormLabel("MINIMUM STAY (MONTHS)"); OutlinedTextField(minimumStayText, { minimumStayText = it.filter(Char::isDigit).take(2) }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(13.dp), colors = fieldColors()) }; Column(Modifier.weight(1f)) { FormLabel("NOTICE PERIOD (DAYS)"); OutlinedTextField(noticeDaysText, { noticeDaysText = it.filter(Char::isDigit).take(3) }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(13.dp), colors = fieldColors()) } }
-                Spacer(Modifier.height(12.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Column(Modifier.weight(1f)) { FormLabel("ROOMS"); OutlinedTextField(roomsText, { roomsText = it.filter(Char::isDigit) }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Icon(Icons.Filled.Apartment, null) }, shape = RoundedCornerShape(13.dp), colors = fieldColors()) }; Column(Modifier.weight(1f)) { FormLabel("TOTAL BEDS"); OutlinedTextField(bedsText, { bedsText = it.filter(Char::isDigit) }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Icon(Icons.Filled.Bed, null) }, shape = RoundedCornerShape(13.dp), colors = fieldColors()) } }
-                Spacer(Modifier.height(15.dp)); FormLabel("FACILITIES")
-                FlowChips(listOf("Wi-Fi", "AC", "Meals", "Attached bath", "Laundry", "Parking", "Power backup", "Housekeeping", "Study desk", "Lift"), amenities)
-                Spacer(Modifier.height(9.dp)); Text("You can add room-by-room rates and bed inventories after creating the property.", color = SE.Muted, fontSize = 10.sp)
+                Spacer(Modifier.height(12.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Column(Modifier.weight(1f)) { FormLabel("ROOMS · REQUIRED"); OutlinedTextField(roomsText, { roomsText = it.filter(Char::isDigit) }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Icon(Icons.Filled.Apartment, null) }, shape = RoundedCornerShape(13.dp), colors = fieldColors()) }; Column(Modifier.weight(1f)) { FormLabel("TOTAL BEDS · REQUIRED"); OutlinedTextField(bedsText, { bedsText = it.filter(Char::isDigit) }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Icon(Icons.Filled.Bed, null) }, shape = RoundedCornerShape(13.dp), colors = fieldColors()) } }
+                Text("Total beds means every bed across all rooms. Example: 6 rooms × 3 beds = 18 beds.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
+                 Spacer(Modifier.height(15.dp)); FormLabel("AMENITIES (OPTIONAL)")
+                FlowChips(listOf("Wi-Fi", "AC", "Meals", "Attached bath", "Laundry", "Parking", "Power backup", "Housekeeping", "Study desk", "Lift", "Hot water", "Washing machine", "Refrigerator", "CCTV / security", "Water purifier", "Geyser", "Balcony", "Kitchen access", "Gym", "Work desk"), amenities)
+                Spacer(Modifier.height(9.dp)); Text("Select the facilities you actually offer. With none selected, you can add amenities later.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
             }
             else -> {
                 Text("Ready to publish?", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 22.sp)
@@ -1850,7 +1852,7 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
                             Text(area.ifBlank { "Area, Pune" }, color = SE.Muted, fontSize = 12.sp); Spacer(Modifier.height(8.dp))
                             Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) { StatusPill(policy, SE.BlueSoft, SE.Blue); if (couples) StatusPill("Couples welcome", SE.OrangeSoft, SE.Orange) }
                             Spacer(Modifier.height(11.dp)); Text("${money(rent)} / month", color = SE.Ink, fontWeight = FontWeight.ExtraBold, fontSize = 23.sp)
-                            Text("Deposit ${money(depositText.toIntOrNull() ?: 0)} · Food ${money(foodText.toIntOrNull() ?: 0)} / month", color = SE.Muted, fontSize = 11.sp)
+                            Text("Deposit ${depositText.toIntOrNull()?.takeIf { it > 0 }?.let { money(it) } ?: "not specified"} · Food ${money(foodText.toIntOrNull() ?: 0)} / month", color = SE.Muted, fontSize = 11.sp)
                             Spacer(Modifier.height(10.dp)); Text("$sharing · ${bedsText.toIntOrNull() ?: 0} beds · ${(amenities.toList().take(4)).joinToString(" · ")}", color = SE.Muted, fontSize = 11.sp)
                             if (description.isNotBlank()) { Spacer(Modifier.height(8.dp)); Text(description, color = SE.Text, fontSize = 12.sp) }
                         }
@@ -1869,7 +1871,7 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
         }
         Spacer(Modifier.height(20.dp))
         if (step < 3) PrimaryButton(if (step == 2) "Review listing" else "Continue", Icons.AutoMirrored.Filled.ArrowForward) {
-            validationMessage = when { step == 0 && name.isBlank() -> "Enter a property name before continuing."; step == 0 && area.isBlank() -> "Enter the property locality."; step == 2 && (rentText.toIntOrNull() ?: 0) <= 0 -> "Enter a monthly rent greater than zero."; step == 2 && (bedsText.toIntOrNull() ?: 0) <= 0 -> "Enter at least one bed."; else -> "" }
+            validationMessage = when { step == 0 && name.isBlank() -> "Enter a property name before continuing."; step == 0 && area.isBlank() -> "Enter the property locality."; step == 2 && ((rentText.toIntOrNull() ?: 0) !in 100..100000) -> "Enter a monthly rent between ₹100 and ₹1,00,000."; step == 2 && (bedsText.toIntOrNull() ?: 0) <= 0 -> "Enter at least one bed."; else -> "" }
             if (validationMessage.isBlank()) step += 1
         } else PrimaryButton(if (initial == null) "Publish demo listing" else "Save listing changes", Icons.Filled.CheckCircle) {
             val id = initial?.id ?: System.currentTimeMillis()
@@ -1912,9 +1914,10 @@ private fun OwnerBedsScreen(listings: List<PgListing>, initialPropertyId: Long, 
     var propertyIndex by remember(initialPropertyId) { mutableIntStateOf(listings.indexOfFirst { it.id == initialPropertyId }.coerceAtLeast(0)) }
     var roomIndex by remember { mutableIntStateOf(0) }
     val listing = listings.getOrNull(propertyIndex) ?: demoListings.first()
-    val roomLabels = listOf("Room 101", "Room 102", "Room 103")
-    val roomLabel = roomLabels[roomIndex]
-    val bedLetters = listOf("A", "B", "C", "D", "E", "F")
+    val roomLabels = (1..listing.totalRooms.coerceIn(1, 30)).map { "Room " + (100 + it) }
+    val roomLabel = roomLabels[roomIndex.coerceIn(0, roomLabels.lastIndex)]
+    val bedsPerRoom = ((listing.totalBeds + listing.totalRooms.coerceAtLeast(1) - 1) / listing.totalRooms.coerceAtLeast(1)).coerceIn(1, 6)
+    val bedLetters = listOf("A", "B", "C", "D", "E", "F").take(bedsPerRoom)
     val bedRecords = remember(listing.id, roomLabel) {
         val stored = StayRecordStore.load(context, "beds")
         val current = stored.filter { it.property == listing.name && it.unit.startsWith("$roomLabel ·", true) }.associateBy { it.unit.substringAfter("·").trim() }
@@ -1942,7 +1945,7 @@ private fun OwnerBedsScreen(listings: List<PgListing>, initialPropertyId: Long, 
         notify("${record.unit} set to $status in local inventory")
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        Spacer(Modifier.height(13.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Room & bed inventory", color = SE.Ink, fontSize = 23.sp, fontWeight = FontWeight.Bold); Text("Select a unit to see available actions", color = SE.Muted, fontSize = 11.sp) }; RoundIconButton(Icons.Filled.Tune, onProperties, tint = SE.Blue) }
+        Spacer(Modifier.height(13.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Rooms & beds", color = SE.Ink, fontSize = 23.sp, fontWeight = FontWeight.Bold); Text("1. Choose a property  2. Choose a room  3. Update a bed or assign a resident.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp) }; RoundIconButton(Icons.Filled.Tune, onProperties, tint = SE.Blue) }
         Spacer(Modifier.height(12.dp)); Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) { listings.forEachIndexed { index, p -> FilterChip(selected = propertyIndex == index, onClick = { propertyIndex = index; roomIndex = 0 }, label = { Text(p.name, maxLines = 1) }) } }
         Spacer(Modifier.height(13.dp)); Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(13.dp)) {
@@ -1955,7 +1958,7 @@ private fun OwnerBedsScreen(listings: List<PgListing>, initialPropertyId: Long, 
             }
         }
         Spacer(Modifier.height(13.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { roomLabels.forEachIndexed { i, room -> FilterChip(selected = roomIndex == i, onClick = { roomIndex = i }, label = { Text(room) }) } }
-        Spacer(Modifier.height(7.dp)); Text("Each sample room contains six editable local bed records. Real assignment and concurrent booking validation must be handled by the backend.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
+        Spacer(Modifier.height(7.dp)); Text("Room and bed choices follow the counts entered for this property. Changes are stored locally in this prototype; a connected backend is needed to prevent double-bookings across devices.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
         Spacer(Modifier.height(9.dp)); LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp)) {
             items(bedRecords, key = { it.id }) { record ->
                 val status = record.status
@@ -1967,7 +1970,7 @@ private fun OwnerBedsScreen(listings: List<PgListing>, initialPropertyId: Long, 
                 }
             }
         }
-        PrimaryButton("Assign / add resident", Icons.Filled.PersonAdd, onAddResident)
+        PrimaryButton("Assign a resident", Icons.Filled.PersonAdd, onAddResident)
         Spacer(Modifier.height(8.dp))
     }
     if (showBedActions && activeBed != null) {
@@ -2030,21 +2033,89 @@ private fun ResidentsScreen(onAdd: () -> Unit, notify: (String) -> Unit) {
 }
 private data class ResidentData(val name: String, val bed: String, val rent: String, val status: String)
 
+
 @Composable
-private fun AddResidentScreen(onSave: (String, String, Int, String) -> Unit, onCancel: () -> Unit) {
-    var name by remember { mutableStateOf("") }; var phone by remember { mutableStateOf("") }; var rent by remember { mutableStateOf("9000") }; var bed by remember { mutableStateOf("Room 101 · Bed B") }; var join by remember { mutableStateOf("1 Nov 2026") }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
-        ScreenHeader("Add a resident", "Create a stay record", onBack = onCancel)
-        Spacer(Modifier.height(17.dp)); FormLabel("FULL NAME"); OutlinedTextField(name, { name = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Resident's name") }, shape = RoundedCornerShape(14.dp), colors = fieldColors())
-        Spacer(Modifier.height(10.dp)); FormLabel("PHONE NUMBER"); OutlinedTextField(phone, { phone = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("+91  mobile number") }, shape = RoundedCornerShape(14.dp), colors = fieldColors())
-        Spacer(Modifier.height(10.dp)); FormLabel("BED ASSIGNMENT"); OutlinedTextField(bed, { bed = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, trailingIcon = { Icon(Icons.Filled.ExpandMore, null) }, shape = RoundedCornerShape(14.dp), colors = fieldColors())
-        Spacer(Modifier.height(10.dp)); Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) { Column(Modifier.weight(1f)) { FormLabel("JOINING DATE"); OutlinedTextField(join, { join = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, shape = RoundedCornerShape(14.dp), colors = fieldColors()) }; Column(Modifier.weight(1f)) { FormLabel("MONTHLY RENT"); OutlinedTextField(rent, { rent = it.filter(Char::isDigit) }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Text("₹") }, shape = RoundedCornerShape(14.dp), colors = fieldColors()) } }
-        Spacer(Modifier.height(15.dp)); Card(shape = RoundedCornerShape(15.dp), colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft)) { Text("A resident record is different from an enquiry or reservation. Real onboarding should also capture the agreed charges and consented documents.", Modifier.padding(13.dp), color = SE.Text, fontSize = 11.sp, lineHeight = 16.sp) }
-        Spacer(Modifier.height(20.dp)); PrimaryButton("Save resident", Icons.Filled.CheckCircle) { if (name.isNotBlank()) onSave(name, phone, rent.toIntOrNull() ?: 0, bed) }
-        if (name.isBlank()) Text("Enter the resident's name to save this demo record.", color = SE.Muted, fontSize = 10.sp, modifier = Modifier.padding(top = 7.dp))
+private fun AddResidentScreen(onSave: (String, String, Int, String, String) -> Unit, onCancel: () -> Unit) {
+    var name by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var rent by remember { mutableStateOf("9000") }
+    var bed by remember { mutableStateOf("Room 101 · Bed A") }
+    var join by remember { mutableStateOf("1 Nov 2026") }
+    var validationMessage by remember { mutableStateOf("") }
+    val bedOptions = listOf("Room 101 · Bed A", "Room 101 · Bed B", "Room 102 · Bed A", "Room 102 · Bed B", "Private room")
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        ScreenHeader("Add a resident", "A clear record of who is staying, where, and at what rent.", onBack = onCancel)
+        Spacer(Modifier.height(14.dp))
+        Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) {
+            Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.PersonAdd, null, tint = SE.Blue, modifier = Modifier.size(24.dp))
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("Start with the resident", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("Add contact details first, then assign a room and enter the agreed rent.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
+                }
+            }
+        }
+        Spacer(Modifier.height(13.dp))
+        Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+            Column(Modifier.padding(14.dp)) {
+                Text("1. Contact information", color = SE.Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Spacer(Modifier.height(9.dp))
+                FormLabel("FULL NAME · REQUIRED")
+                OutlinedTextField(name, { name = it; validationMessage = "" }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Resident's full name") }, shape = RoundedCornerShape(13.dp), colors = fieldColors())
+                Spacer(Modifier.height(10.dp))
+                FormLabel("MOBILE NUMBER · REQUIRED")
+                OutlinedTextField(phone, { phone = it.filter { ch -> ch.isDigit() || ch == '+' }.take(15); validationMessage = "" }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("+91 98765 43210") }, shape = RoundedCornerShape(13.dp), colors = fieldColors())
+            }
+        }
+        Spacer(Modifier.height(11.dp))
+        Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+            Column(Modifier.padding(14.dp)) {
+                Text("2. Room assignment", color = SE.Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("Select the room or bed this resident will use.", color = SE.Muted, fontSize = 11.sp)
+                Spacer(Modifier.height(8.dp))
+                bedOptions.chunked(2).forEach { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
+                        row.forEach { option -> FilterChip(selected = bed == option, onClick = { bed = option }, label = { Text(option, fontSize = 10.sp) }) }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(11.dp))
+        Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+            Column(Modifier.padding(14.dp)) {
+                Text("3. Rent & move-in", color = SE.Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                Text("Use the amount and date agreed with the resident.", color = SE.Muted, fontSize = 11.sp)
+                Spacer(Modifier.height(9.dp))
+                FormLabel("MONTHLY RENT (₹)")
+                OutlinedTextField(rent, { rent = it.filter(Char::isDigit).take(7); validationMessage = "" }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Text("₹") }, placeholder = { Text("9000") }, shape = RoundedCornerShape(13.dp), colors = fieldColors())
+                Spacer(Modifier.height(9.dp))
+                FormLabel("JOINING DATE")
+                OutlinedTextField(join, { join = it; validationMessage = "" }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("e.g. 1 Nov 2026") }, shape = RoundedCornerShape(13.dp), colors = fieldColors())
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Text("This prototype saves the resident locally. Confirm availability, agreement, deposit and identity before treating a move-in as final.", color = SE.Muted, fontSize = 10.sp, lineHeight = 15.sp)
+        if (validationMessage.isNotBlank()) {
+            Spacer(Modifier.height(7.dp))
+            Text(validationMessage, color = SE.Red, fontSize = 11.sp)
+        }
+        Spacer(Modifier.height(15.dp))
+        PrimaryButton("Save resident record", Icons.Filled.CheckCircle) {
+            val digits = phone.count(Char::isDigit)
+            validationMessage = when {
+                name.isBlank() -> "Enter the resident's full name."
+                digits !in 10..13 -> "Enter a valid mobile number with 10–13 digits."
+                (rent.toIntOrNull() ?: 0) !in 100..100000 -> "Enter a monthly rent between ₹100 and ₹1,00,000."
+                join.isBlank() -> "Enter the joining date, or a date to be confirmed."
+                else -> ""
+            }
+            if (validationMessage.isBlank()) onSave(name.trim(), phone.trim(), rent.toIntOrNull() ?: 0, bed, join.trim())
+        }
+        Spacer(Modifier.height(18.dp))
     }
 }
-
 @Composable
 private fun OwnerPaymentsScreen(notify: (String) -> Unit) {
     var tab by remember { mutableStateOf("Pending") }
