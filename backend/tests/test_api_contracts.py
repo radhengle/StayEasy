@@ -15,7 +15,7 @@ os.environ["JWT_SECRET"] = "test-secret-long-enough-for-stayeasy-api-contract-te
 os.environ["DEV_TOKEN_PASSWORD"] = "local-test-only-password"
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from backend.app import main as api
 from backend.app.database import Base, engine, SessionLocal
