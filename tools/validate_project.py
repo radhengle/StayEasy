@@ -35,7 +35,7 @@ required_routes = [
     '"owner_beds" ->', '"owner_enquiries" ->', '"owner_residents" ->',
     '"add_resident" ->', '"owner_payments" ->', '"owner_issues" ->',
     '"owner_analytics" ->', '"owner_settings" ->', '"feature_hub" ->',
-    '"theme_settings" ->', '"api_connection" ->', '"compare" ->'
+    '"theme_settings" ->', '"api_connection" ->', '"compare" ->', '"account_auth" ->'
 ]
 for route in required_routes:
     assert route in main_text, f"Missing Android route: {route}"
@@ -43,7 +43,8 @@ for marker in [
     '"Boys only"', '"Girls only"', '"Mixed"', 'couplesAllowed',
     'ListingStore.save(context, customListings.toList())', 'takePersistableUriPermission',
     'DemoMapArt', 'distanceIsVerified', 'StayUserDataStore.saveFavorites',
-    'remoteListings', 'LocalDensity'
+    'remoteListings', 'LocalDensity', 'AccountAuthScreen', 'restoreAccountSession',
+    'Sign in / Create account', 'Verify email', 'Forgot password?'
 ]:
     assert marker in main_text, f"Missing Android behaviour marker: {marker}"
 for marker in [
@@ -55,7 +56,7 @@ for marker in [
 for marker in ['SharedPreferences', 'StayRecord', 'apiBaseUrl', 'favorites', 'recentLocations']:
     assert marker.lower() in store_text.lower(), f"Missing local store marker: {marker}"
 assert 'putString("apiBaseUrl", value.apiBaseUrl)' in store_text, "API base URL preference is not persisted"
-for marker in ['/health', '/properties?city=$encodedCity', 'distanceIsVerified = false', 'https', '/auth/register', '/auth/verify-email', '/auth/login', '/auth/forgot-password', '/auth/logout']:
+for marker in ['/health', '/properties?city=$encodedCity', 'distanceIsVerified = false', 'https', '/auth/register', '/auth/verify-email', '/auth/login', '/auth/forgot-password', '/auth/logout', 'AndroidKeyStore', 'restoreAccountSession']:
     assert marker.lower() in client_text.lower(), f"Missing API client marker: {marker}"
 for route in [
     '"/register"', '"/verify-email"', '"/resend-verification"', '"/login"',
