@@ -13,8 +13,9 @@ def validate_database_configuration(environ: Mapping[str, str] | None = None) ->
     url = env.get("DATABASE_URL", "").strip()
     if not url:
         raise RuntimeError("DATABASE_URL must be explicitly configured for staging/production.")
-    if not (url.startswith("postgresql://") or url.startswith("postgresql+")):
-        raise RuntimeError("Staging/production requires PostgreSQL; SQLite is not a production database.")
+    driver = url.partition("://")[0]
+    if driver not in {"postgresql", "postgresql+psycopg", "postgresql+psycopg2"}:
+        raise RuntimeError("Staging/production requires PostgreSQL with a supported synchronous driver.")
 
 
 def validate_runtime_configuration(environ: Mapping[str, str] | None = None) -> None:
@@ -41,9 +42,12 @@ def validate_runtime_configuration(environ: Mapping[str, str] | None = None) -> 
         raise RuntimeError("SMTP_PORT must be between 1 and 65535.")
 
     raw_origins = env.get("CORS_ORIGINS", "").strip()
-    if raw_origins:
-        origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
-        if "*" in origins:
-            raise RuntimeError("Wildcard CORS origins are not allowed in staging/production.")
-        if any(not origin.startswith("https://") for origin in origins):
-            raise RuntimeError("Staging/production CORS origins must use HTTPS.")
+    if not raw_origins:
+        raise RuntimeError("CORS_ORIGINS must be explicitly configured for staging/production.")
+    origins = [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
+    if not origins:
+        raise RuntimeError("CORS_ORIGINS must contain at least one browser origin.")
+    if "*" in origins:
+        raise RuntimeError("Wildcard CORS origins are not allowed in staging/production.")
+    if any(not origin.startswith("https://") for origin in origins):
+        raise RuntimeError("Staging/production CORS origins must use HTTPS.")
