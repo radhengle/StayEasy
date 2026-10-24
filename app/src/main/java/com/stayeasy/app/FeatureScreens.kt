@@ -239,10 +239,14 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
     val sessionToken = StayApiClient.currentSessionToken(apiPreferences.apiBaseUrl)
     val remoteScope = rememberCoroutineScope()
     var remoteSyncMessage by remember(category) { mutableStateOf("") }
+    var remoteSyncing by remember(category) { mutableStateOf(false) }
+    var serverRefreshRequest by remember(category) { mutableIntStateOf(0) }
     val financeCategories = setOf("payments", "charges", "deposits", "expenses", "food")
     val isFinanceCategory = category in financeCategories
     val serverFinanceMode = ownerMode && isFinanceCategory && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()
     val readOnlyServerFinance = !ownerMode && isFinanceCategory && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()
+    val serverOwnerStayMode = ownerMode && category in setOf("residents", "stays") &&
+        apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()
     var showBillingDialog by remember(category) { mutableStateOf(false) }
     var billingPropertyIdText by remember(category) { mutableStateOf("") }
     var billingPeriodText by remember(category) { mutableStateOf(java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM"))) }
@@ -304,8 +308,9 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             source = "Server"
         )
     }
-    LaunchedEffect(category, apiPreferences.apiBaseUrl, sessionToken, ownerMode) {
-        if ((category in setOf("enquiries", "reservations", "visits", "issues") || isFinanceCategory) && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()) {
+    LaunchedEffect(category, apiPreferences.apiBaseUrl, sessionToken, ownerMode, serverRefreshRequest) {
+        if ((category in setOf("enquiries", "reservations", "visits", "issues") || isFinanceCategory || serverOwnerStayMode) && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()) {
+            remoteSyncing = true
             try {
                 val pulled = withContext(Dispatchers.IO) {
                     when (category) {
@@ -350,6 +355,68 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                                 source = "Server"
                             )
                         }
+                        "residents", "stays" -> {
+                            val stayRows = StayApiClient.ownerStays(apiPreferences.apiBaseUrl, sessionToken)
+                            val displayRows = if (category == "residents") {
+                                stayRows.distinctBy { row -> "${row.optLong("property_id")}:${row.optString("resident_id")}" }
+                            } else stayRows
+                            displayRows.mapNotNull { row ->
+                            val stayId = row.optLong("id")
+                            if (stayId <= 0L) return@mapNotNull null
+                            val residentName = row.optString("resident_name").ifBlank { "Resident ${row.optString("resident_id").take(8)}" }
+                            val residentEmail = row.optString("resident_email")
+                            val propertyName = row.optString("property_name", "Property #${row.optLong("property_id")}")
+                            val roomCode = row.optString("room_code")
+                            val unitCode = row.optString("unit_code")
+                            val unitLabel = listOf(roomCode, unitCode).filter { it.isNotBlank() }.joinToString(" · ")
+                            val rawStatus = row.optString("status", "active").lowercase(Locale.ROOT).replace('_', ' ')
+                            val displayStatus = if (category == "residents") {
+                                when (rawStatus) {
+                                    "active" -> "Active"
+                                    "notice given" -> "Notice given"
+                                    "completed", "cancelled" -> "Former"
+                                    else -> "Upcoming"
+                                }
+                            } else {
+                                when (rawStatus) {
+                                    "active" -> "Active"
+                                    "notice given" -> "Notice given"
+                                    "completed" -> "Completed"
+                                    "cancelled" -> "Cancelled"
+                                    else -> rawStatus.replaceFirstChar { it.uppercase(Locale.ROOT) }
+                                }
+                            }
+                            val details = buildString {
+                                append("Server-confirmed stay #").append(stayId)
+                                if (residentEmail.isNotBlank()) append("\nCustomer email: ").append(residentEmail)
+                                if (row.optInt("deposit_held") > 0) append("\nSecurity deposit recorded: ").append(moneyText(row.optInt("deposit_held")))
+                                val noticeDate = row.optString("notice_date")
+                                if (noticeDate.isNotBlank()) append("\nNotice date: ").append(noticeDate)
+                                val moveOutDate = row.optString("move_out_date")
+                                if (moveOutDate.isNotBlank()) append("\nMove-out date: ").append(moveOutDate)
+                                val agreement = row.optString("agreement_reference")
+                                if (agreement.isNotBlank()) append("\nAgreement reference: ").append(agreement)
+                            }
+                            val timestamp = runCatching {
+                                java.time.Instant.parse(row.optString("created_at")).toEpochMilli()
+                            }.getOrDefault(System.currentTimeMillis())
+                            StayRecord(
+                                id = if (category == "residents") "server-resident-stay-$stayId" else "server-stay-$stayId",
+                                category = category,
+                                title = if (category == "residents") residentName else "Stay · $residentName",
+                                details = details,
+                                status = displayStatus,
+                                amount = row.optInt("agreed_monthly_rent"),
+                                person = residentEmail,
+                                property = propertyName,
+                                unit = unitLabel,
+                                date = row.optString("joining_date"),
+                                createdAt = timestamp,
+                                updatedAt = timestamp,
+                                source = "Server"
+                            )
+                            }
+                        }
                         "payments", "charges", "deposits", "expenses", "food" -> {
                             val ledgerRows = if (ownerMode) StayApiClient.ownerLedger(apiPreferences.apiBaseUrl, sessionToken)
                                 else StayApiClient.myLedger(apiPreferences.apiBaseUrl, sessionToken)
@@ -368,12 +435,21 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                         }
                     }
                 }
-                StayRecordStore.replaceServerRecords(context, category, pulled, preserveLocal = category !in financeCategories)
+                StayRecordStore.replaceServerRecords(
+                    context,
+                    category,
+                    pulled,
+                    preserveLocal = category !in financeCategories && !serverOwnerStayMode
+                )
                 records.clear(); records.addAll(StayRecordStore.load(context, category))
                 remoteSyncMessage = "Synced ${pulled.size} server record(s)"
             } catch (e: Exception) {
                 remoteSyncMessage = "Server sync unavailable: ${e.message ?: "check the current API session"}"
+            } finally {
+                remoteSyncing = false
             }
+        } else {
+            remoteSyncing = false
         }
     }
     var showEditor by remember(category) { mutableStateOf(false) }
@@ -462,6 +538,18 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                 if (isFinanceCategory && !serverFinanceMode && !readOnlyServerFinance) {
                     Text("Demo-only records · connect the API and a valid account session for shared financial data.", color = SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
                 }
+                if (category in setOf("residents", "stays") && !serverOwnerStayMode) {
+                    Text("Local records are device-only. Connect the API and sign in with an authorized owner account to view shared stay history.", color = SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
+                }
+                if (serverOwnerStayMode) {
+                    val staySyncCopy = when {
+                        remoteSyncing -> "Loading server-backed records…"
+                        remoteSyncMessage.startsWith("Synced") -> "Server-synced · records come from properties you are authorized to manage."
+                        remoteSyncMessage.startsWith("Server sync unavailable") -> "Server refresh failed. Cached rows may be shown; refresh before acting on this information."
+                        else -> "Waiting for the first server refresh."
+                    }
+                    Text(staySyncCopy, color = if (remoteSyncMessage.startsWith("Server sync unavailable")) SE.Orange else SE.Blue, fontSize = 9.sp, lineHeight = 13.sp)
+                }
                 if (readOnlyServerFinance) Text("Read-only · these entries are linked to your server-backed stay.", color = SE.Blue, fontSize = 9.sp, lineHeight = 13.sp)
                 if (remoteSyncMessage.isNotBlank()) Text(remoteSyncMessage, color = if (remoteSyncMessage.startsWith("Synced") || remoteSyncMessage.startsWith("Server confirmed") || remoteSyncMessage.startsWith("Saved to server")) SE.Blue else SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
             }
@@ -483,6 +571,18 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp), shape = RoundedCornerShape(11.dp)) { Icon(Icons.Filled.Download, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("Export") }
         }
         Spacer(Modifier.height(8.dp))
+        if (serverOwnerStayMode) {
+            OutlinedButton(
+                onClick = { serverRefreshRequest++ },
+                enabled = !remoteSyncing,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(13.dp)
+            ) {
+                Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(17.dp))
+                Spacer(Modifier.width(7.dp))
+                Text(if (remoteSyncing) "Refreshing from server…" else "Refresh from server")
+            }
+        }
         if (category == "charges" && serverFinanceMode) {
             OutlinedButton(
                 onClick = { billingError = ""; showBillingDialog = true },
@@ -504,9 +604,31 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Filled.FilterAlt, null, tint = SE.Blue, modifier = Modifier.size(30.dp)); Spacer(Modifier.height(7.dp))
-                    Text(if (records.isEmpty()) "No records yet" else "No matching records", color = SE.Ink, fontWeight = FontWeight.Bold)
-                    Text(if (records.isEmpty()) "Create the first record to start this workflow. Data will remain on this device in the prototype." else "Try clearing the filter or search text.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
-                    if (records.isEmpty() && !readOnlyServerFinance) { Spacer(Modifier.height(8.dp)); Button(onClick = { openCreate() }, colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(5.dp)); Text("Add record") } }
+                    Text(
+                        if (records.isEmpty()) {
+                            if (serverOwnerStayMode) "No server-backed stays found" else "No records yet"
+                        } else "No matching records",
+                        color = SE.Ink,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        if (records.isEmpty() && serverOwnerStayMode) {
+                            "Refresh to check the authorized server records, or assign a verified resident from Rooms & beds. Empty server results are not replaced with demo residents."
+                        } else if (records.isEmpty()) {
+                            "Create the first record to start this workflow. Data will remain on this device in the prototype."
+                        } else "Try clearing the filter or search text.",
+                        color = SE.Muted,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+                    if (records.isEmpty() && !readOnlyServerFinance && !serverOwnerStayMode) {
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = { openCreate() }, colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) {
+                            Icon(Icons.Filled.Add, null)
+                            Spacer(Modifier.width(5.dp))
+                            Text("Add record")
+                        }
+                    }
                 }
             }
         } else {
@@ -548,7 +670,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                 }
             }
         }
-        if (visible.isNotEmpty() && !readOnlyServerFinance) {
+        if (visible.isNotEmpty() && !readOnlyServerFinance && !serverOwnerStayMode) {
             Spacer(Modifier.height(6.dp))
             Button(onClick = { openCreate() }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(7.dp)); Text(if (serverFinanceMode) "Add manual ledger entry" else "Add ${title.removeSuffix("s").lowercase(Locale.getDefault())}") }
         }

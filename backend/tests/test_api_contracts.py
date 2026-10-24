@@ -128,6 +128,44 @@ def test_owner_cannot_assign_unverified_or_unknown_resident_account():
     rejected = client.post("/owner/stays", json=payload)
     assert rejected.status_code == 422, rejected.text
 
+def test_owner_stay_history_includes_resident_and_unit_labels_and_is_property_scoped():
+    property_a, unit_a = setup_property(owner_id="owner-1")
+    set_actor("owner-1", "owner")
+    stay_a = create_test_stay({
+        "property_id": property_a["id"], "unit_id": unit_a["id"], "resident_id": "resident-alpha",
+        "joining_date": date.today().isoformat(), "agreed_monthly_rent": 9100, "deposit_held": 12000,
+    })
+    assert stay_a.status_code == 201, stay_a.text
+
+    property_b, unit_b = setup_property(owner_id="owner-2")
+    set_actor("owner-2", "owner")
+    stay_b = create_test_stay({
+        "property_id": property_b["id"], "unit_id": unit_b["id"], "resident_id": "resident-beta",
+        "joining_date": date.today().isoformat(), "agreed_monthly_rent": 8200, "deposit_held": 8000,
+    })
+    assert stay_b.status_code == 201, stay_b.text
+
+    set_actor("owner-1", "owner")
+    response = client.get("/owner/stays")
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    assert [row["id"] for row in rows] == [stay_a.json()["id"]]
+    row = rows[0]
+    assert row["resident_name"] == "resident-alpha"
+    assert row["resident_email"] == "resident-alpha@example.test"
+    assert row["property_name"] == "Test House"
+    assert row["room_code"] == "101"
+    assert row["unit_code"] == "101-A"
+    assert row["agreed_monthly_rent"] == 9100
+    assert row["deposit_held"] == 12000
+
+    scoped = client.get("/owner/stays", params={"property_id": property_a["id"]})
+    assert scoped.status_code == 200, scoped.text
+    assert [row["id"] for row in scoped.json()] == [stay_a.json()["id"]]
+    forbidden = client.get("/owner/stays", params={"property_id": property_b["id"]})
+    assert forbidden.status_code == 403
+
+
 def test_owner_property_inventory_is_scoped_and_contains_server_units():
     first_property, first_unit = setup_property(owner_id="owner-1")
     second_property, _ = setup_property(owner_id="owner-2")

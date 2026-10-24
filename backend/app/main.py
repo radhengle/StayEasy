@@ -502,16 +502,40 @@ def list_owner_resident_candidates(property_id: int, actor: dict = Depends(requi
 
 @app.get("/owner/stays")
 def list_owner_stays(property_id: int | None = None, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
-    stmt = select(m.ResidentStay)
-    if actor["role"] != "admin": stmt = stmt.where(m.ResidentStay.property_id.in_(select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))))
+    """Return stay rows only for properties where the actor can view resident records."""
+    stmt = (
+        select(m.ResidentStay, m.User, m.Property, m.PropertyUnit)
+        .join(m.User, m.User.id == m.ResidentStay.resident_id)
+        .join(m.Property, m.Property.id == m.ResidentStay.property_id)
+        .join(m.PropertyUnit, m.PropertyUnit.id == m.ResidentStay.unit_id)
+    )
+    visible_ids = visible_property_ids(db, actor, "residents")
+    if visible_ids is not None:
+        stmt = stmt.where(m.ResidentStay.property_id.in_(visible_ids))
     if property_id is not None:
         require_property_manager(db, actor, property_id, "residents.view")
         stmt = stmt.where(m.ResidentStay.property_id == property_id)
-    rows = list(db.scalars(stmt.order_by(m.ResidentStay.created_at.desc()).limit(1000)))
-    return [{"id": x.id, "property_id": x.property_id, "unit_id": x.unit_id, "resident_id": x.resident_id,
-             "reservation_id": x.reservation_id, "joining_date": x.joining_date.isoformat(), "notice_date": x.notice_date.isoformat() if x.notice_date else None,
-             "move_out_date": x.move_out_date.isoformat() if x.move_out_date else None, "agreed_monthly_rent": x.agreed_monthly_rent,
-             "deposit_held": x.deposit_held, "status": x.status, "agreement_reference": x.agreement_reference} for x in rows]
+    rows = db.execute(stmt.order_by(m.ResidentStay.created_at.desc()).limit(1000)).all()
+    return [{
+        "id": stay.id,
+        "property_id": stay.property_id,
+        "property_name": prop.name,
+        "unit_id": stay.unit_id,
+        "room_code": unit.room_code,
+        "unit_code": unit.unit_code,
+        "resident_id": stay.resident_id,
+        "resident_name": resident.display_name,
+        "resident_email": resident.email,
+        "reservation_id": stay.reservation_id,
+        "joining_date": stay.joining_date.isoformat(),
+        "notice_date": stay.notice_date.isoformat() if stay.notice_date else None,
+        "move_out_date": stay.move_out_date.isoformat() if stay.move_out_date else None,
+        "agreed_monthly_rent": stay.agreed_monthly_rent,
+        "deposit_held": stay.deposit_held,
+        "status": stay.status,
+        "agreement_reference": stay.agreement_reference,
+        "created_at": stay.created_at.isoformat() if stay.created_at else None,
+    } for stay, resident, prop, unit in rows]
 
 @app.get("/stays/me")
 def list_my_stays(actor: dict = Depends(require_roles("customer")), db: Session = Depends(get_db)):
