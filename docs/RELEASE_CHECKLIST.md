@@ -5,8 +5,8 @@ This is the prioritized release backlog. A green build is necessary, but it is n
 ## P0 — required before a public production launch
 
 - [ ] **Authenticated mobile-to-API acceptance:** test the owner flows against a staging API with approved owner credentials, including property scoping, resident candidate loading, successful stay creation, stale/occupied unit rejection, duplicate submission protection, deposit recording, and failure/retry behavior.
-- [ ] **Complete resident/stay synchronization:** hydrate owner stay history from the server after app restart and on a second device; add server-backed notice/move-out lifecycle actions and consistent loading, empty, offline, retry, and conflict states.
-- [ ] **Production account and owner approval:** configure real email delivery, approved owner onboarding/role promotion, operator MFA, token/session policy, and external rate limiting. A workspace selection or development token must never grant production permissions.
+- [ ] **Complete resident/stay synchronization:** owner stay history, customer My Stay, notice/move-out lifecycle and tenant move-out request/review are server-backed. Still prove cross-device/reinstall restoration and authenticated staging behavior; complete consistent offline, retry and conflict handling for all remaining workflows.
+- [ ] **Production account and owner approval:** admin-only Owner requests, audited approve/reject decisions and a secure first-admin bootstrap are implemented. Still verify the full journey on staging; configure real email delivery, operator MFA, token/session policy, and external rate limiting. A workspace selection or development token must never grant production permissions.
 - [ ] **Database and operations:** review/freeze Alembic baseline for the actual target database; prove backup and restore/PITR; test PostgreSQL transaction/race behavior; configure secrets, HTTPS ingress, request tracing, logs, alerts and incident response.
 - [ ] **Security/privacy review:** verify property/staff/customer authorization and tenant isolation, audit sensitive operations, complete retention/export/deletion/consent decisions, document access controls and obtain the required legal/privacy review.
 - [ ] **Accessible, resilient Android acceptance:** test TalkBack, text scaling, contrast, touch targets, small/large screens, process recreation, permissions, poor connectivity, retries, duplicate taps and real-device regression.
@@ -19,7 +19,7 @@ This is the prioritized release backlog. A green build is necessary, but it is n
 - [ ] **Media and documents:** implement secure object storage, signed upload/download, file type/size validation, malware screening, moderation and authorization.
 - [ ] **Notifications and jobs:** configure email/push/SMS delivery, retries and idempotency; schedule reservation expiry, rent billing and reminders with timezone-safe tests.
 - [ ] **Trust and moderation:** complete abuse reporting, listing verification, review moderation/appeals, evidence retention and administrative audit.
-- [ ] **Automated coverage:** add staging/API integration for the server-backed resident journey and key owner/resident lifecycle flows. Preserve Android emulator screenshots (Customer Home, Explore search, Owner workspace preview) as a review artifact on every CI run.
+- [ ] **Automated coverage:** backend contracts now cover resident assignment, customer/owner stay isolation, tenant move-out submission, notice period, duplicate requests, approve/reject and unit occupancy. Still add authenticated end-to-end staging journeys, PostgreSQL concurrency tests and real-device/offline regression. Emulator screenshot PNGs for Customer Home, Explore search and Owner workspace preview are verified on every PR workflow run.
 
 ## P2 — post-launch / separate scope decisions
 
@@ -32,7 +32,7 @@ This is the prioritized release backlog. A green build is necessary, but it is n
 - [x] Backend contract tests, clean-database migration validation and project contract validation passed on PR #12.
 - [x] Android API 35 emulator smoke tests passed on PR #12.
 - [x] Debug APK and unsigned release APK builds passed on PR #12.
-- [ ] CI screenshot artifact: capture/upload workflow is under implementation; verify the artifact on the current pull request before marking complete.
-- [ ] Staging server-backed resident assignment acceptance remains unverified.
+- [x] CI screenshot artifact: three genuine 1080×1920 emulator PNGs verified in [workflow run #274](https://github.com/radhengle/StayEasy/actions/runs/40130310803).
+- [ ] Authenticated staging acceptance for resident assignment, customer My Stay, Owner approval and tenant move-out request/review remains unverified.
 
 **Release rule:** do not call StayEasy production-ready until all P0 items are closed, the relevant P1 items for enabled functionality are complete, and a signed release candidate passes the end-to-end acceptance suite.
