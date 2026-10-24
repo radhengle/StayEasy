@@ -464,6 +464,62 @@ internal object StayApiClient {
         return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
     }
 
+    fun myMoveOutRequests(baseUrl: String, token: String): List<JSONObject> {
+        val result = JSONArray(request(baseUrl, "/stays/me/move-out-requests", token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun requestMoveOut(
+        baseUrl: String,
+        token: String,
+        stayId: Long,
+        requestedMoveOutDate: String,
+        reason: String
+    ): JSONObject {
+        require(stayId > 0L) { "Select a valid active stay." }
+        val normalizedDate = normalizeDate(requestedMoveOutDate)
+            ?: throw IllegalArgumentException("Enter a valid requested move-out date, for example 2026-12-15.")
+        val body = JSONObject()
+            .put("requested_move_out_date", normalizedDate)
+            .put("reason", reason.trim().take(1200))
+        return JSONObject(request(baseUrl, "/stays/me/$stayId/move-out-requests", token, "POST", body))
+    }
+
+    fun ownerMoveOutRequests(
+        baseUrl: String,
+        token: String,
+        status: String = "pending",
+        propertyId: Long? = null
+    ): List<JSONObject> {
+        require(status in setOf("pending", "approved", "rejected", "cancelled", "all")) {
+            "Unsupported move-out request filter."
+        }
+        val query = buildList {
+            add("request_status=$status")
+            propertyId?.let { add("property_id=$it") }
+        }.joinToString("&")
+        val result = JSONArray(request(baseUrl, "/owner/move-out-requests?$query", token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun reviewMoveOutRequest(
+        baseUrl: String,
+        token: String,
+        requestId: Long,
+        decision: String,
+        ownerNote: String = ""
+    ): JSONObject {
+        require(requestId > 0L) { "Select a valid move-out request." }
+        val normalizedDecision = decision.trim().lowercase(Locale.ROOT)
+        require(normalizedDecision in setOf("approve", "reject")) {
+            "Choose approve or reject for a move-out request."
+        }
+        val body = JSONObject()
+            .put("decision", normalizedDecision)
+            .put("owner_note", ownerNote.trim().take(1000))
+        return JSONObject(request(baseUrl, "/owner/move-out-requests/$requestId", token, "PATCH", body))
+    }
+
     /** Server-authoritative resident stays, limited by the backend to the actor's resident-view scope. */
     fun ownerStays(baseUrl: String, token: String, propertyId: Long? = null): List<JSONObject> {
         val path = propertyId?.let { "/owner/stays?property_id=$it" } ?: "/owner/stays"
