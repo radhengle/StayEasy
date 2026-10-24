@@ -143,7 +143,7 @@ object StayPreferenceStore {
 object StayRecordConfig {
     val titles = mapOf(
         "saved_searches" to "Saved searches & alerts", "enquiries" to "Enquiries inbox", "visits" to "Visits & appointments",
-        "reservations" to "Bookings & reservations", "messages" to "Communication history", "stays" to "Resident stays",
+        "reservations" to "Bookings & reservations", "messages" to "Communication history", "stays" to "Resident stays", "move_out_requests" to "Move-out requests",
         "payments" to "Payments ledger", "charges" to "Rent & charges", "deposits" to "Security deposits",
         "expenses" to "Property expenses", "issues" to "Maintenance & support", "residents" to "Residents",
         "beds" to "Room & bed inventory", "staff" to "Staff & permissions", "notices" to "Notices & announcements",
@@ -158,7 +158,8 @@ object StayRecordConfig {
         "visits" to "Schedule, reschedule and record the outcome of property visits.",
         "reservations" to "Record a requested bed or room, confirmation terms and expiry. Active duplicate unit reservations are blocked on this device.",
         "messages" to "Keep communication notes linked to a property and customer enquiry.",
-        "stays" to "View the server-backed owner stay history when connected; move-out, notice and settlement actions still require their own verified server workflow.",
+        "stays" to "View the server-backed owner stay history and manage actual move-out completion after notice is recorded.",
+        "move_out_requests" to "Review tenant move-out requests, save an owner response and record notice. Units remain occupied until actual move-out is completed.",
         "payments" to "Record full or partial payments and the method/reference. Manual records are not bank-confirmed.",
         "charges" to "Record rent, food, utility and other charges with billing periods and due dates.",
         "deposits" to "Track deposits received, deductions, move-out settlement and refund status separately from rent.",
@@ -183,7 +184,7 @@ object StayRecordConfig {
     )
     fun defaultStatus(category: String) = when (category) {
         "enquiries" -> "New"; "visits" -> "Requested"; "reservations" -> "Pending"; "saved_searches" -> "Active"
-        "messages" -> "Sent"; "stays" -> "Upcoming"; "payments" -> "Due"; "charges" -> "Open"; "deposits" -> "Held"
+        "messages" -> "Sent"; "stays" -> "Upcoming"; "move_out_requests" -> "Pending"; "payments" -> "Due"; "charges" -> "Open"; "deposits" -> "Held"
         "expenses" -> "Recorded"; "issues" -> "Open"; "residents" -> "Active"; "beds" -> "Available"
         "staff" -> "Invited"; "notices" -> "Draft"; "food" -> "Available"; "housekeeping" -> "Scheduled"
         "visitors" -> "Expected"; "reports" -> "Ready"; "quality" -> "Needs review"; "tasks" -> "Open"
@@ -196,6 +197,7 @@ object StayRecordConfig {
         "reservations" -> listOf("Pending", "Confirmed", "Cancelled", "Expired", "Checked in")
         "messages" -> listOf("Draft", "Sent", "Delivered", "Responded", "Closed")
         "stays" -> listOf("Upcoming", "Active", "Notice given", "Completed", "Cancelled")
+        "move_out_requests" -> listOf("Pending", "Approved", "Rejected", "Cancelled")
         "payments" -> listOf("Due", "Part paid", "Paid", "Reconciled", "Reversed")
         "charges" -> listOf("Open", "Part paid", "Paid", "Waived", "Overdue")
         "deposits" -> listOf("Held", "Settlement pending", "Deduction proposed", "Refund due", "Refunded", "Disputed")
@@ -220,7 +222,7 @@ object StayRecordConfig {
     }
     fun amountLabel(category: String) = when (category) {
         "payments" -> "Payment amount (₹)"; "charges" -> "Charge amount (₹)"; "deposits" -> "Deposit / refund amount (₹)"
-        "expenses" -> "Expense amount (₹)"; "reservations" -> "Agreed initial amount (₹)"; "stays" -> "Monthly rent (₹)"
+        "expenses" -> "Expense amount (₹)"; "reservations" -> "Agreed initial amount (₹)"; "stays" -> "Monthly rent (₹)"; "move_out_requests" -> "Requested move-out date"
         "food" -> "Monthly charge (₹)"; else -> "Amount (₹, optional)"
     }
     fun usesAmount(category: String) = category in setOf("payments", "charges", "deposits", "expenses", "reservations", "stays", "food")
