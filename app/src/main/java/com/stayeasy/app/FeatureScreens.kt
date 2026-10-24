@@ -326,6 +326,14 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
     var unitText by remember(category) { mutableStateOf("") }
     var amountText by remember(category) { mutableStateOf("") }
     var dateText by remember(category) { mutableStateOf("") }
+    var recordBillingPeriodText by remember(category) { mutableStateOf("") }
+    var paymentReferenceText by remember(category) { mutableStateOf("") }
+    var financialEntryType by remember(category) {
+        mutableStateOf(when (category) {
+            "payments" -> "payment"; "charges" -> "rent_charge"; "deposits" -> "deposit"
+            "expenses" -> "expense"; "food" -> "food"; else -> ""
+        })
+    }
     var priority by remember(category) { mutableStateOf("Normal") }
     var formError by remember(category) { mutableStateOf("") }
     var showDeleteId by remember(category) { mutableStateOf<String?>(null) }
@@ -368,7 +376,13 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
         }
     }
     fun clearForm() {
-        editingId = null; titleText = ""; detailsText = ""; personText = ""; propertyText = ""; unitText = ""; amountText = ""; dateText = ""; priority = "Normal"; formError = ""
+        editingId = null; titleText = ""; detailsText = ""; personText = ""; propertyText = ""; unitText = ""; amountText = ""; dateText = ""; paymentReferenceText = ""
+        recordBillingPeriodText = if (category == "charges") java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM")) else ""
+        financialEntryType = when (category) {
+            "payments" -> "payment"; "charges" -> "rent_charge"; "deposits" -> "deposit"
+            "expenses" -> "expense"; "food" -> "food"; else -> ""
+        }
+        priority = "Normal"; formError = ""
     }
     fun openCreate() { clearForm(); showEditor = true }
     fun openEdit(r: StayRecord) {
@@ -474,10 +488,58 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                     OutlinedTextField(titleText, { titleText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(when (category) { "beds" -> "Bed / unit identifier"; "reservations" -> "Property or booking title"; "saved_searches" -> "Search name"; else -> "Title / subject" }) }, singleLine = true)
                     OutlinedTextField(detailsText, { detailsText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(when (category) { "saved_searches" -> "Search filters / criteria"; "issues" -> "Issue details"; "reservations" -> "Agreed terms / expiry"; "charges" -> "Billing period and description"; else -> "Details / notes" }) }, minLines = 2)
                     OutlinedTextField(personText, { personText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(when (category) { "staff" -> "Staff member and role"; "visitors" -> "Visitor name / purpose"; "saved_searches" -> "Optional alert recipient"; else -> "Person / resident / customer" }) }, singleLine = true)
-                    OutlinedTextField(propertyText, { propertyText = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Property / location") }, singleLine = true)
-                    if (category in setOf("beds", "reservations", "stays", "residents", "issues", "housekeeping", "visitors", "documents")) OutlinedTextField(unitText, { unitText = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Room / bed / unit (if applicable)") }, singleLine = true)
+                    OutlinedTextField(
+                        propertyText,
+                        { propertyText = if (serverFinanceMode) it.filter(Char::isDigit).take(12) else it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(if (serverFinanceMode) "Server property ID" else "Property / location") },
+                        singleLine = true,
+                        placeholder = { if (serverFinanceMode) Text("Numeric ID from your server listing") }
+                    )
+                    if (category in setOf("beds", "reservations", "stays", "residents", "issues", "housekeeping", "visitors", "documents") ||
+                        (serverFinanceMode && category in setOf("payments", "charges", "deposits", "food"))) {
+                        OutlinedTextField(
+                            unitText,
+                            { unitText = if (serverFinanceMode) it.filter(Char::isDigit).take(12) else it },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text(if (serverFinanceMode && category in setOf("payments", "charges", "deposits", "food")) "Resident stay ID" else "Room / bed / unit (if applicable)") },
+                            singleLine = true,
+                            placeholder = { if (serverFinanceMode) Text("Find it in the server-backed stay record") }
+                        )
+                    }
+                    if (category in setOf("payments", "charges", "deposits", "expenses", "food") && serverFinanceMode) {
+                        val entryTypeOptions = when (category) {
+                            "deposits" -> listOf("deposit" to "Deposit", "refund" to "Refund", "deduction" to "Deduction")
+                            else -> listOf(financialEntryType to when (financialEntryType) {
+                                "payment" -> "Manual payment"; "rent_charge" -> "Rent charge"; "expense" -> "Operating expense"; "food" -> "Food charge"; else -> "Record"
+                            })
+                        }
+                        if (category == "deposits") {
+                            Text("ENTRY TYPE", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                entryTypeOptions.forEach { (value, label) ->
+                                    FilterChip(selected = financialEntryType == value, onClick = { financialEntryType = value }, label = { Text(label, fontSize = 10.sp) })
+                                }
+                            }
+                        }
+                        if (category == "charges" || category == "payments") {
+                            if (category == "charges") {
+                                OutlinedTextField(
+                                    recordBillingPeriodText,
+                                    { recordBillingPeriodText = it.filter { ch -> ch.isDigit() || ch == '-' }.take(7) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    label = { Text("Billing period (YYYY-MM)") },
+                                    singleLine = true,
+                                    placeholder = { Text("2026-11") }
+                                )
+                            }
+                            if (category == "payments") {
+                                OutlinedTextField(paymentReferenceText, { paymentReferenceText = it.take(180) }, modifier = Modifier.fillMaxWidth(), label = { Text("Manual receipt / reference (optional)") }, singleLine = true)
+                            }
+                        }
+                    }
                     if (StayRecordConfig.usesAmount(category)) OutlinedTextField(amountText, { amountText = it.filter(Char::isDigit).take(9) }, modifier = Modifier.fillMaxWidth(), label = { Text(StayRecordConfig.amountLabel(category)) }, singleLine = true)
-                    OutlinedTextField(dateText, { dateText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(when (category) { "visits" -> "Visit date & time"; "reservations" -> "Expiry / move-in date"; "payments", "charges" -> "Due / payment date"; "stays" -> "Joining / move-out date"; else -> "Date / due date (optional)" }) }, singleLine = true, placeholder = { Text("e.g. 28 Oct 2026") })
+                    OutlinedTextField(dateText, { dateText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(when (category) { "visits" -> "Visit date & time"; "reservations" -> "Expiry / move-in date"; "payments" -> "Recorded / due date (optional)"; "charges" -> "Rent due date"; "stays" -> "Joining / move-out date"; else -> "Date / due date (optional)" }) }, singleLine = true, placeholder = { Text("e.g. 2026-11-05") })
                     Text("Priority", color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("Low", "Normal", "High", "Urgent").forEach { FilterChip(selected = priority == it, onClick = { priority = it }, label = { Text(it, fontSize = 10.sp) }) } }
                     if (category == "reservations") Text("A matching active reservation for the same property + unit is blocked on this device. Production must enforce this atomically on the server.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
