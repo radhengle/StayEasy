@@ -249,6 +249,8 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
         apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()
     val serverMoveOutRequestMode = ownerMode && category == "move_out_requests" &&
         apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()
+    val serverNotificationMode = category == "notifications" &&
+        apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()
     var showBillingDialog by remember(category) { mutableStateOf(false) }
     var billingPropertyIdText by remember(category) { mutableStateOf("") }
     var billingPeriodText by remember(category) { mutableStateOf(java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM"))) }
@@ -311,11 +313,40 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
         )
     }
     LaunchedEffect(category, apiPreferences.apiBaseUrl, sessionToken, ownerMode, serverRefreshRequest) {
-        if ((category in setOf("enquiries", "reservations", "visits", "issues") || isFinanceCategory || serverOwnerStayMode || serverMoveOutRequestMode) && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()) {
+        if ((category in setOf("enquiries", "reservations", "visits", "issues") || isFinanceCategory || serverOwnerStayMode || serverMoveOutRequestMode || serverNotificationMode) && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()) {
             remoteSyncing = true
             try {
                 val pulled = withContext(Dispatchers.IO) {
                     when (category) {
+                        "notifications" -> StayApiClient.myNotifications(apiPreferences.apiBaseUrl, sessionToken).mapNotNull { row ->
+                            val id = row.optLong("id")
+                            if (id <= 0L) return@mapNotNull null
+                            val rawStatus = row.optString("status", "queued").lowercase(Locale.ROOT)
+                            val displayStatus = when (rawStatus) {
+                                "read" -> "Read"
+                                "failed", "error" -> "Failed"
+                                else -> "Unread"
+                            }
+                            val createdAt = row.optString("created_at")
+                            val timestamp = runCatching {
+                                java.time.Instant.parse(createdAt).toEpochMilli()
+                            }.getOrDefault(System.currentTimeMillis())
+                            val channel = row.optString("channel", "in_app")
+                            StayRecord(
+                                id = "server-notification-$id",
+                                category = "notifications",
+                                title = row.optString("title", "StayEasy notification"),
+                                details = buildString {
+                                    append(row.optString("body"))
+                                    if (channel.isNotBlank()) append("\nChannel: ").append(channel.replace('_', ' '))
+                                },
+                                status = displayStatus,
+                                date = createdAt,
+                                createdAt = timestamp,
+                                updatedAt = timestamp,
+                                source = "Server"
+                            )
+                        }
                         "enquiries" -> StayApiClient.enquiries(apiPreferences.apiBaseUrl, sessionToken).map { row ->
                             val id = row.optLong("id")
                             val property = row.optString("property_name", "Property #${row.optLong("property_id")}")
@@ -473,7 +504,8 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                     context,
                     category,
                     pulled,
-                    preserveLocal = category !in financeCategories && !serverOwnerStayMode && !serverMoveOutRequestMode
+                    preserveLocal = category !in financeCategories && !serverOwnerStayMode &&
+                        !serverMoveOutRequestMode && !serverNotificationMode
                 )
                 records.clear(); records.addAll(StayRecordStore.load(context, category))
                 remoteSyncMessage = "Synced ${pulled.size} server record(s)"
@@ -557,13 +589,14 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                         "move_out_requests" -> StayApiClient.reviewMoveOutRequest(
                             apiPreferences.apiBaseUrl, token, serverId, normalizedStatus, serverOwnerNoteText
                         )
+                        "notifications" -> StayApiClient.markNotificationRead(apiPreferences.apiBaseUrl, token, serverId)
                         else -> StayApiClient.updateEnquiry(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
                     }
                 }
                 val rawStatus = response.optString("status", nextStatus.lowercase(Locale.ROOT).replace(' ', '_'))
                 val displayStatus = rawStatus.replace('_', ' ').replaceFirstChar { it.uppercase() }
-                if (category in setOf("stays", "move_out_requests")) {
-                    // Re-read canonical server state after stay lifecycle or request review.
+                if (category in setOf("stays", "move_out_requests", "notifications")) {
+                    // Re-read canonical server state after stay lifecycle, request review or notification read.
                     serverRefreshRequest++
                 } else {
                     StayRecordStore.update(context, category, record.copy(status = displayStatus, updatedAt = System.currentTimeMillis()))
