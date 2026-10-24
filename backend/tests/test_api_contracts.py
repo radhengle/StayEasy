@@ -394,10 +394,11 @@ def test_email_account_registration_login_role_boundary_logout_and_password_rese
         assert credential.email_verified_at is None
     assert client.post("/auth/login", json={"email": payload["email"], "password": payload["password"]}).status_code == 403
 
-    bad_code = client.post("/auth/verify-email", json={"email": payload["email"], "code": "000000"})
-    if delivered["Verify your StayEasy account"]["code"] != "000000":
-        assert bad_code.status_code == 400
-    code = delivered["Verify your StayEasy account"]["code"]
+    generated_code = delivered["Verify your StayEasy account"]["code"]
+    wrong_code = "000000" if generated_code != "000000" else "000001"
+    bad_code = client.post("/auth/verify-email", json={"email": payload["email"], "code": wrong_code})
+    assert bad_code.status_code == 400
+    code = generated_code
     verified = client.post("/auth/verify-email", json={"email": payload["email"], "code": code})
     assert verified.status_code == 200, verified.text
     logged_in = client.post("/auth/login", json={"email": payload["email"], "password": payload["password"]})
