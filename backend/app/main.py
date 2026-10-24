@@ -14,8 +14,12 @@ from .database import Base, engine, get_db
 from . import models as m
 from .security import create_access_token, get_actor, require_roles, check_dev_password, APP_ENV
 
-Base.metadata.create_all(bind=engine)
+# Auto-create tables only for local/test development. Production schemas must be migrated explicitly.
+if APP_ENV != "production":
+    Base.metadata.create_all(bind=engine)
 app = FastAPI(title="StayEasy API", version="0.2.0", description="Role-protected PG marketplace and property operations API")
+from .auth import router as auth_router
+app.include_router(auth_router)
 origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080").split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
 
