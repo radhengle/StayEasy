@@ -566,6 +566,7 @@ def list_my_stays(actor: dict = Depends(require_roles("customer")), db: Session 
         "property_address": prop.address,
         "locality": prop.locality,
         "city": prop.city,
+        "notice_period_days": prop.notice_period_days,
         "unit_id": stay.unit_id,
         "room_code": unit.room_code,
         "unit_code": unit.unit_code,
