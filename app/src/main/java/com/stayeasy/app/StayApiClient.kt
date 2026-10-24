@@ -505,7 +505,9 @@ internal object StayApiClient {
         recipientName: String,
         recipientPhone: String,
         moveInDate: String,
-        expiresInHours: Int = 168
+        expiresInHours: Int = 168,
+        requiredDocumentCategories: List<String> = emptyList(),
+        documentRequestReason: String = ""
     ): JSONObject {
         require(propertyId > 0L && unitId > 0L) { "Select a property and available bed." }
         require(recipientEmail.contains("@")) { "An invitation email is required." }
@@ -520,6 +522,8 @@ internal object StayApiClient {
             .put("recipient_phone", recipientPhone.trim())
             .put("move_in_date", normalizedDate)
             .put("expires_in_hours", expiresInHours)
+            .put("required_document_categories", JSONArray().apply { requiredDocumentCategories.distinct().forEach { put(it) } })
+            .put("document_request_reason", documentRequestReason.trim())
         enquiryId?.takeIf { it > 0L }?.let { body.put("enquiry_id", it) }
         return JSONObject(request(baseUrl, "/owner/invitations", token, "POST", body))
     }
