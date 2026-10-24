@@ -463,12 +463,101 @@ internal object StayApiClient {
         return JSONObject(request(baseUrl, "/owner/reservations/$reservationId/status", token, "POST", JSONObject().put("status", normalized)))
     }
 
-    fun updateEnquiry(baseUrl: String, token: String, enquiryId: Long, status: String): JSONObject {
+    fun updateEnquiry(
+        baseUrl: String,
+        token: String,
+        enquiryId: Long,
+        status: String,
+        ownerResponse: String? = null
+    ): JSONObject {
+        require(enquiryId > 0L) { "Select a valid enquiry." }
         val normalized = when (status.lowercase(Locale.ROOT)) {
             "visit scheduled" -> "visit_scheduled"
             else -> status.lowercase(Locale.ROOT).replace(' ', '_')
         }
-        return JSONObject(request(baseUrl, "/owner/enquiries/$enquiryId/status", token, "POST", JSONObject().put("status", normalized)))
+        val body = JSONObject().put("status", normalized)
+        ownerResponse?.let { body.put("owner_response", it.trim().take(4000)) }
+        return JSONObject(request(baseUrl, "/owner/enquiries/$enquiryId/status", token, "POST", body))
+    }
+
+    fun createTenantInvitation(
+        baseUrl: String,
+        token: String,
+        propertyId: Long,
+        unitId: Long,
+        enquiryId: Long?,
+        recipientEmail: String,
+        recipientName: String,
+        recipientPhone: String,
+        moveInDate: String,
+        expiresInHours: Int = 168
+    ): JSONObject {
+        require(propertyId > 0L && unitId > 0L) { "Select a property and available bed." }
+        require(recipientEmail.contains("@")) { "An invitation email is required." }
+        require(recipientName.trim().length >= 2) { "Enter the tenant's name." }
+        val normalizedDate = normalizeDate(moveInDate)
+            ?: throw IllegalArgumentException("Enter the proposed move-in date as YYYY-MM-DD.")
+        val body = JSONObject()
+            .put("property_id", propertyId)
+            .put("unit_id", unitId)
+            .put("recipient_email", recipientEmail.trim())
+            .put("recipient_name", recipientName.trim())
+            .put("recipient_phone", recipientPhone.trim())
+            .put("move_in_date", normalizedDate)
+            .put("expires_in_hours", expiresInHours)
+        enquiryId?.takeIf { it > 0L }?.let { body.put("enquiry_id", it) }
+        return JSONObject(request(baseUrl, "/owner/invitations", token, "POST", body))
+    }
+
+    fun ownerInvitations(baseUrl: String, token: String, propertyId: Long? = null): List<JSONObject> {
+        val path = propertyId?.let { "/owner/invitations?property_id=$it" } ?: "/owner/invitations"
+        val result = JSONArray(request(baseUrl, path, token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun reassignTenantInvitation(
+        baseUrl: String,
+        token: String,
+        invitationId: Long,
+        newUnitId: Long,
+        reason: String
+    ): JSONObject {
+        require(invitationId > 0L && newUnitId > 0L) { "Select an invitation and replacement bed." }
+        require(reason.trim().length >= 3) { "Explain why the proposed bed is changing." }
+        val body = JSONObject().put("new_unit_id", newUnitId).put("reason", reason.trim().take(1000))
+        return JSONObject(request(baseUrl, "/owner/invitations/$invitationId/reassign", token, "POST", body))
+    }
+
+        fun resolveTenantInvitation(baseUrl: String, invitationToken: String): JSONObject {
+        require(invitationToken.length in 20..200) { "Invitation link is invalid." }
+        val encoded = java.net.URLEncoder.encode(invitationToken, "UTF-8")
+        return JSONObject(request(baseUrl, "/invitations/resolve?token=$encoded"))
+    }
+
+    fun tenantInvitations(baseUrl: String, token: String): List<JSONObject> {
+        val result = JSONArray(request(baseUrl, "/tenant/invitations", token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun acceptTenantInvitation(
+        baseUrl: String,
+        token: String,
+        invitationToken: String?,
+        invitationId: Long?,
+        billableStartDate: String,
+        billableTermsAcknowledged: Boolean
+    ): JSONObject {
+        require((!invitationToken.isNullOrBlank()) xor (invitationId != null)) {
+            "Use either a share link or an invitation from your account."
+        }
+        val normalizedDate = normalizeDate(billableStartDate)
+            ?: throw IllegalArgumentException("Confirm the billable start date.")
+        val body = JSONObject()
+            .put("billable_start_date", normalizedDate)
+            .put("billable_terms_acknowledged", billableTermsAcknowledged)
+        if (!invitationToken.isNullOrBlank()) body.put("token", invitationToken)
+        invitationId?.takeIf { it > 0L }?.let { body.put("invitation_id", it) }
+        return JSONObject(request(baseUrl, "/invitations/accept", token, "POST", body))
     }
 
     fun updateVisit(baseUrl: String, token: String, visitId: Long, status: String): JSONObject {
@@ -680,7 +769,9 @@ internal object StayApiClient {
         billingPeriod: String,
         dueDate: String,
         paymentReference: String,
-        description: String
+        description: String,
+        reservationId: Long? = null,
+        amountPaise: Long? = null
     ): JSONObject {
         require(propertyId > 0L) { "Enter a valid server property ID." }
         require(amount > 0) { "Enter an amount greater than zero." }
@@ -709,6 +800,11 @@ internal object StayApiClient {
             .put("provider_status", "manual_record")
             .put("description", description.trim())
             .put("status", safeStatus)
+        amountPaise?.let {
+            require(it > 0L) { "Enter an amount greater than zero." }
+            body.put("amount_paise", it)
+        }
+        reservationId?.takeIf { it > 0L }?.let { body.put("reservation_id", it) }
         if (residentStayId != null) {
             require(residentStayId > 0L) { "Enter a valid resident stay ID." }
             body.put("resident_stay_id", residentStayId)
