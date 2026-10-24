@@ -28,11 +28,11 @@ stayeasy_android/
 3. Allow Android Studio to sync dependencies and download the pinned Gradle 8.9 distribution.
 4. Run the `app` configuration on an emulator or Android phone.
 
-The packaging environment used for this build did not have an Android SDK/Gradle distribution and could not resolve external download hosts, so a definitive Android Gradle build or emulator run could not be completed here. The project-level Kotlin syntax pass found no targeted parser errors, but that does not replace a proper Gradle compile. Run the definitive build in Android Studio or CI before release.
+The packaging environment used for this build did not have an Android SDK/Gradle distribution and could not resolve external download hosts. The GitHub Actions workflow is the definitive CI check: Compose UI smoke tests run on an Android API 35 emulator before APK artifacts are released. Passing these smoke tests does not replace real-device acceptance, full accessibility review, or end-to-end tests against a deployed backend.
 
 ## Get the APK from GitHub Actions
 
-Every push to `main` or a `feat/**` branch runs the **Android APK** workflow ([`.github/workflows/android-apk.yml`](.github/workflows/android-apk.yml)), which builds the app with JDK 17 and Gradle and uploads the APKs as build artifacts (kept for 30 days):
+Every push to `main` or a `feat/**` branch runs the **Android APK** workflow ([`.github/workflows/android-apk.yml`](.github/workflows/android-apk.yml)). CI first runs backend contract tests and static project validation, then runs Compose UI smoke tests on an Android API 35 emulator, and only after those pass builds and uploads the APKs as artifacts (kept for 30 days). Test reports are uploaded even if the emulator test fails:
 
 - `stayeasy-debug-apk` — debug build (`app-debug.apk`), installable directly on a phone.
 - `stayeasy-release-unsigned-apk` — release build (`app-release-unsigned.apk`). It is **not signed**, so Android will not install it until it is signed with a release key.
