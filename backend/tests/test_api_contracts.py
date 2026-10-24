@@ -719,14 +719,14 @@ def test_owner_invites_specific_tenant_and_acceptance_reserves_only_once_with_ac
     assert quote["first_period_rent_paise"] >= 0
 
     missing_ack = client.post("/invitations/accept", json={
-        "token": token, "billable_start_date": date.today().isoformat(),
-        "billable_terms_acknowledged": False,
+        "token": token, "phone": "9876543210", "profile_completion_acknowledged": True,
+        "billable_start_date": date.today().isoformat(), "billable_terms_acknowledged": False,
     })
     assert missing_ack.status_code == 422, missing_ack.text
 
     accepted = client.post("/invitations/accept", json={
-        "token": token, "billable_start_date": date.today().isoformat(),
-        "billable_terms_acknowledged": True,
+        "token": token, "phone": "9876543210", "profile_completion_acknowledged": True,
+        "billable_start_date": date.today().isoformat(), "billable_terms_acknowledged": True,
     })
     assert accepted.status_code == 201, accepted.text
     accepted_body = accepted.json()
@@ -752,8 +752,8 @@ def test_owner_invites_specific_tenant_and_acceptance_reserves_only_once_with_ac
 
     set_actor("invite-tenant-2", "customer")
     competing_acceptance = client.post("/invitations/accept", json={
-        "token": second.json()["invitation_url"].split("/")[-1],
-        "billable_start_date": date.today().isoformat(),
+        "token": second.json()["invitation_url"].split("/")[-1], "phone": "9876543210",
+        "profile_completion_acknowledged": True, "billable_start_date": date.today().isoformat(),
         "billable_terms_acknowledged": True,
     })
     assert competing_acceptance.status_code == 409, competing_acceptance.text
@@ -778,8 +778,8 @@ def test_cancelling_unpaid_invitation_reservation_voids_rent_charge():
 
     set_actor("cancel-tenant-1", "customer")
     accepted = client.post("/invitations/accept", json={
-        "token": token, "billable_start_date": date.today().isoformat(),
-        "billable_terms_acknowledged": True,
+        "token": token, "phone": "9876543210", "profile_completion_acknowledged": True,
+        "billable_start_date": date.today().isoformat(), "billable_terms_acknowledged": True,
     })
     assert accepted.status_code == 201, accepted.text
     reservation_id = accepted.json()["reservation_id"]
@@ -809,8 +809,8 @@ def test_registration_charge_cannot_be_voided_after_a_payment_was_recorded():
     token = invitation.json()["invitation_url"].split("/")[-1]
     set_actor("paid-tenant-1", "customer")
     accepted = client.post("/invitations/accept", json={
-        "token": token, "billable_start_date": date.today().isoformat(),
-        "billable_terms_acknowledged": True,
+        "token": token, "phone": "9876543210", "profile_completion_acknowledged": True,
+        "billable_start_date": date.today().isoformat(), "billable_terms_acknowledged": True,
     })
     assert accepted.status_code == 201, accepted.text
     reservation_id = accepted.json()["reservation_id"]
