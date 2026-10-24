@@ -541,10 +541,33 @@ def list_owner_stays(property_id: int | None = None, actor: dict = Depends(requi
 
 @app.get("/stays/me")
 def list_my_stays(actor: dict = Depends(require_roles("customer")), db: Session = Depends(get_db)):
-    rows = list(db.scalars(select(m.ResidentStay).where(m.ResidentStay.resident_id == actor_user_id(actor)).order_by(m.ResidentStay.joining_date.desc())))
-    return [{"id": x.id, "property_id": x.property_id, "unit_id": x.unit_id, "joining_date": x.joining_date.isoformat(),
-             "move_out_date": x.move_out_date.isoformat() if x.move_out_date else None, "agreed_monthly_rent": x.agreed_monthly_rent,
-             "deposit_held": x.deposit_held, "status": x.status} for x in rows]
+    """Return only the authenticated customer's stays, joined with labels suitable for their app."""
+    stmt = (
+        select(m.ResidentStay, m.Property, m.PropertyUnit)
+        .join(m.Property, m.Property.id == m.ResidentStay.property_id)
+        .join(m.PropertyUnit, m.PropertyUnit.id == m.ResidentStay.unit_id)
+        .where(m.ResidentStay.resident_id == actor_user_id(actor))
+        .order_by(m.ResidentStay.joining_date.desc())
+    )
+    rows = db.execute(stmt).all()
+    return [{
+        "id": stay.id,
+        "property_id": stay.property_id,
+        "property_name": prop.name,
+        "property_address": prop.address,
+        "locality": prop.locality,
+        "city": prop.city,
+        "unit_id": stay.unit_id,
+        "room_code": unit.room_code,
+        "unit_code": unit.unit_code,
+        "joining_date": stay.joining_date.isoformat(),
+        "notice_date": stay.notice_date.isoformat() if stay.notice_date else None,
+        "move_out_date": stay.move_out_date.isoformat() if stay.move_out_date else None,
+        "agreed_monthly_rent": stay.agreed_monthly_rent,
+        "deposit_held": stay.deposit_held,
+        "status": stay.status,
+        "agreement_reference": stay.agreement_reference,
+    } for stay, prop, unit in rows]
 
 @app.get("/properties/{property_id}/amenities")
 def list_property_amenities(property_id: int, db: Session = Depends(get_db)):

@@ -235,6 +235,44 @@ def test_owner_cancelling_an_active_stay_releases_its_unit():
     assert units.json()[0]["status"] == "available"
 
 
+def test_customer_stay_history_has_property_labels_and_is_scoped_to_customer():
+    property_a, unit_a = setup_property(owner_id="owner-1")
+    set_actor("owner-1", "owner")
+    stay_a = create_test_stay({
+        "property_id": property_a["id"], "unit_id": unit_a["id"], "resident_id": "resident-alpha",
+        "joining_date": date(2026, 10, 1).isoformat(), "agreed_monthly_rent": 9200, "deposit_held": 15000,
+    })
+    assert stay_a.status_code == 201, stay_a.text
+
+    property_b, unit_b = setup_property(owner_id="owner-2")
+    set_actor("owner-2", "owner")
+    stay_b = create_test_stay({
+        "property_id": property_b["id"], "unit_id": unit_b["id"], "resident_id": "resident-beta",
+        "joining_date": date(2026, 11, 1).isoformat(), "agreed_monthly_rent": 8700, "deposit_held": 10000,
+    })
+    assert stay_b.status_code == 201, stay_b.text
+
+    set_actor("resident-alpha", "customer")
+    response = client.get("/stays/me")
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    assert [row["id"] for row in rows] == [stay_a.json()["id"]]
+    row = rows[0]
+    assert row["property_id"] == property_a["id"]
+    assert row["property_name"] == "Test House"
+    assert row["locality"] == "Wakad"
+    assert row["city"] == "Pune"
+    assert row["room_code"] == "101"
+    assert row["unit_code"] == "101-A"
+    assert row["joining_date"] == "2026-10-01"
+    assert row["agreed_monthly_rent"] == 9200
+    assert row["deposit_held"] == 15000
+
+    set_actor("owner-1", "owner")
+    forbidden = client.get("/stays/me")
+    assert forbidden.status_code == 403
+
+
 def test_owner_property_inventory_is_scoped_and_contains_server_units():
     first_property, first_unit = setup_property(owner_id="owner-1")
     second_property, _ = setup_property(owner_id="owner-2")
