@@ -2345,6 +2345,9 @@ private fun AccountAuthScreen(
     var mode by remember(startMode) { mutableStateOf(startMode) }
     var email by remember { mutableStateOf("") }
     var displayName by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var emergencyContactName by remember { mutableStateOf("") }
+    var emergencyContactPhone by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var verificationCode by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
@@ -2506,7 +2509,14 @@ private fun AccountAuthScreen(
             )
             Spacer(Modifier.height(13.dp))
             if (mode == "signup") {
-                OutlinedTextField(displayName, { displayName = it }, label = { Text("Full name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(displayName, { displayName = it.take(180) }, label = { Text("Full name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(phone, { phone = it.filter { ch -> ch.isDigit() || ch == '+' || ch == ' ' || ch == '-' }.take(40) },
+                    label = { Text("Mobile number") }, supportingText = { Text("Required for tenant registration") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(emergencyContactName, { emergencyContactName = it.take(180) },
+                    label = { Text("Emergency contact name (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(emergencyContactPhone, { emergencyContactPhone = it.filter { ch -> ch.isDigit() || ch == '+' || ch == ' ' || ch == '-' }.take(40) },
+                    label = { Text("Emergency contact number (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             }
             if (mode != "verify" && mode != "reset") {
                 OutlinedTextField(email, { email = it }, label = { Text("Email address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
@@ -2534,10 +2544,15 @@ private fun AccountAuthScreen(
             Spacer(Modifier.height(12.dp))
             when (mode) {
                 "signup" -> Button(onClick = {
-                    if (displayName.trim().length < 2 || !email.contains("@") || password.length < 12) {
-                        showMessage("Enter your name, a valid email, and a password of at least 12 characters.", true)
+                    if (displayName.trim().length < 2 || !email.contains("@") || phone.filter(Char::isDigit).length < 8 || password.length < 12) {
+                        showMessage("Enter your name, a valid email, mobile number, and password of at least 12 characters.", true)
                     } else runRequest {
-                        withContext(Dispatchers.IO) { StayApiClient.registerAccount(baseUrl, email, displayName, password, workspace) }
+                        withContext(Dispatchers.IO) {
+                            StayApiClient.registerAccount(
+                                baseUrl, email, displayName, password, workspace,
+                                phone, emergencyContactName, emergencyContactPhone
+                            )
+                        }
                         mode = "verify"
                         verificationCode = ""
                         showMessage("Verification email requested. Enter the code from your inbox.")
