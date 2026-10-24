@@ -95,7 +95,7 @@ def test_production_configuration_fails_closed_and_development_defaults_remain_u
 
     invalid_cases = [
         ({k: v for k, v in valid.items() if k != "DATABASE_URL"}, "DATABASE_URL must be explicitly configured"),
-        ({**valid, "DATABASE_URL": "sqlite:///./stayeasy.db"}, "requires PostgreSQL"),
+        ({**valid, "DATABASE_URL": "sqlite:///./stayeasy.db"}, "postgresql+psycopg:// URL"),
         ({**valid, "DATABASE_URL": "postgresql://stayeasy:placeholder@db.example.test/stayeasy"}, "postgresql+psycopg:// URL"),
         ({**valid, "DATABASE_URL": "postgresql+unknown://db.example.test/stayeasy"}, "postgresql+psycopg:// URL"),
         ({k: v for k, v in valid.items() if k != "CORS_ORIGINS"}, "CORS_ORIGINS must be explicitly configured"),
