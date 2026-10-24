@@ -398,6 +398,8 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     }
     var ownerMode by remember { mutableStateOf(false) }
     var selectedId by remember { mutableLongStateOf(101L) }
+    var residentPropertyName by remember { mutableStateOf("CityNest Living") }
+    var residentBedOptions by remember { mutableStateOf(listOf("Room 101 · Bed A", "Room 101 · Bed B")) }
     var comparisonIds by remember { mutableStateOf<List<Long>>(emptyList()) }
     var location by remember { mutableStateOf("Pune, Maharashtra") }
     var searchQuery by remember { mutableStateOf("") }
@@ -694,12 +696,16 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     notify("${listing.name} updated in local demo search")
                     route = "owner_properties"
                 }, onCancel = { route = "owner_properties" }, initial = selectedListing)
-                "owner_beds" -> OwnerBedsScreen(ownerListings, selectedId, { route = "add_resident" }, { notify(it) }, { route = "owner_properties" })
+                "owner_beds" -> OwnerBedsScreen(ownerListings, selectedId, { propertyName, bedOptions ->
+                    residentPropertyName = propertyName
+                    residentBedOptions = bedOptions
+                    route = "add_resident"
+                }, { notify(it) }, { route = "owner_properties" })
                 "owner_enquiries" -> FeatureRecordsScreen("enquiries", ownerMode = true) { route = "feature_hub" }
                 "owner_residents" -> FeatureRecordsScreen("residents", ownerMode = true) { route = "feature_hub" }
-                "add_resident" -> AddResidentScreen({ name, phone, rent, bed, joiningDate ->
-                    StayRecordStore.add(context, StayRecord(category = "residents", title = name, person = phone, amount = rent, unit = bed, status = "Active", details = "Resident manually added in the local prototype. Joining date: $joiningDate. Monthly rent: ${money(rent)}."))
-                    StayRecordStore.add(context, StayRecord(category = "stays", title = "Stay · $name", details = "Resident assigned to $bed. Joining date: $joiningDate. Confirm agreement terms and first payment.", person = name, unit = bed, date = joiningDate, amount = rent, status = "Active"))
+                "add_resident" -> AddResidentScreen(residentPropertyName, residentBedOptions, { name, phone, rent, bed, joiningDate ->
+                    StayRecordStore.add(context, StayRecord(category = "residents", title = name, person = phone, property = residentPropertyName, amount = rent, unit = bed, status = "Active", details = "Resident manually added in the local prototype. Joining date: $joiningDate. Monthly rent: ${money(rent)}."))
+                    StayRecordStore.add(context, StayRecord(category = "stays", title = "Stay · $name", details = "Resident assigned to $bed at $residentPropertyName. Joining date: $joiningDate. Confirm agreement terms and first payment.", person = name, property = residentPropertyName, unit = bed, date = joiningDate, amount = rent, status = "Active"))
                     StayRecordStore.notify(context, "Resident added", "$name · $bed")
                     notify("Resident and stay records saved on this device")
                     route = "records:residents"
@@ -1909,7 +1915,7 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
 }
 
 @Composable
-private fun OwnerBedsScreen(listings: List<PgListing>, initialPropertyId: Long, onAddResident: () -> Unit, notify: (String) -> Unit, onProperties: () -> Unit) {
+private fun OwnerBedsScreen(listings: List<PgListing>, initialPropertyId: Long, onAddResident: (String, List<String>) -> Unit, notify: (String) -> Unit, onProperties: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var propertyIndex by remember(initialPropertyId) { mutableIntStateOf(listings.indexOfFirst { it.id == initialPropertyId }.coerceAtLeast(0)) }
     var roomIndex by remember { mutableIntStateOf(0) }
@@ -1970,7 +1976,10 @@ private fun OwnerBedsScreen(listings: List<PgListing>, initialPropertyId: Long, 
                 }
             }
         }
-        PrimaryButton("Assign a resident", Icons.Filled.PersonAdd, onAddResident)
+        PrimaryButton("Assign a resident", Icons.Filled.PersonAdd) {
+            val options = roomLabels.flatMap { room -> bedLetters.map { letter -> "$room · Bed $letter" } }
+            onAddResident(listing.name, options)
+        }
         Spacer(Modifier.height(8.dp))
     }
     if (showBedActions && activeBed != null) {
@@ -2035,17 +2044,16 @@ private data class ResidentData(val name: String, val bed: String, val rent: Str
 
 
 @Composable
-private fun AddResidentScreen(onSave: (String, String, Int, String, String) -> Unit, onCancel: () -> Unit) {
+private fun AddResidentScreen(propertyName: String, bedOptions: List<String>, onSave: (String, String, Int, String, String) -> Unit, onCancel: () -> Unit) {
     var name by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
-    var rent by remember { mutableStateOf("9000") }
-    var bed by remember { mutableStateOf("Room 101 · Bed A") }
-    var join by remember { mutableStateOf("1 Nov 2026") }
+    var rent by remember(propertyName) { mutableStateOf("9000") }
+    var bed by remember(propertyName, bedOptions) { mutableStateOf(bedOptions.firstOrNull() ?: "") }
+    var join by remember(propertyName) { mutableStateOf("1 Nov 2026") }
     var validationMessage by remember { mutableStateOf("") }
-    val bedOptions = listOf("Room 101 · Bed A", "Room 101 · Bed B", "Room 102 · Bed A", "Room 102 · Bed B", "Private room")
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        ScreenHeader("Add a resident", "A clear record of who is staying, where, and at what rent.", onBack = onCancel)
+        ScreenHeader("Add a resident", "Adding a resident to $propertyName", onBack = onCancel)
         Spacer(Modifier.height(14.dp))
         Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) {
             Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -2073,7 +2081,7 @@ private fun AddResidentScreen(onSave: (String, String, Int, String, String) -> U
         Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
             Column(Modifier.padding(14.dp)) {
                 Text("2. Room assignment", color = SE.Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                Text("Select the room or bed this resident will use.", color = SE.Muted, fontSize = 11.sp)
+                Text("Choose one of the beds declared for $propertyName.", color = SE.Muted, fontSize = 11.sp)
                 Spacer(Modifier.height(8.dp))
                 bedOptions.chunked(2).forEach { row ->
                     Row(horizontalArrangement = Arrangement.spacedBy(7.dp), modifier = Modifier.fillMaxWidth()) {
