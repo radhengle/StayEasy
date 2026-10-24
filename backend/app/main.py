@@ -1,14 +1,19 @@
+import base64
 import calendar
 import hashlib
 import os
+import re
 import secrets
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select
@@ -139,6 +144,8 @@ class TenantInvitationCreate(BaseModel):
     recipient_phone: str = Field(default="", max_length=40)
     move_in_date: date
     expires_in_hours: int = Field(default=168, ge=24, le=720)
+    required_document_categories: list[str] = Field(default_factory=list)
+    document_request_reason: str = Field(default="", max_length=1000)
 
 
 class TenantInvitationReassign(BaseModel):
@@ -149,8 +156,18 @@ class TenantInvitationReassign(BaseModel):
 class TenantInvitationAccept(BaseModel):
     invitation_id: int | None = Field(default=None, gt=0)
     token: str | None = Field(default=None, min_length=20, max_length=200)
+    phone: str = Field(default="", max_length=40)
+    emergency_contact_name: str = Field(default="", max_length=180)
+    emergency_contact_phone: str = Field(default="", max_length=40)
+    accommodation_preferences: dict[str, Any] = Field(default_factory=dict)
+    profile_completion_acknowledged: bool = False
     billable_start_date: date
     billable_terms_acknowledged: bool = False
+
+
+class InvitationDocumentReview(BaseModel):
+    status: str = Field(pattern="^(approved|rejected)$")
+    review_note: str = Field(default="", max_length=2000)
 
 
 class StayCreate(BaseModel):
@@ -1150,7 +1167,20 @@ def update_visit_status_action(visit_id: int, body: VisitStatus, actor: dict = D
     db.refresh(item)
     return {"id": item.id, "status": item.status, "outcome": item.outcome, "preferred_at": item.preferred_at.isoformat()}
 
-def invitation_unit_state(db: Session, unit: m.PropertyUnit) -> str:
+def invitation_unit_state(
+    db: Session,
+    unit: m.PropertyUnit,
+    exclude_invitation_id: int | None = None,
+) -> str:
+    proposed_hold = db.scalar(
+        select(m.PropertyInvitation.id).where(
+            m.PropertyInvitation.proposed_unit_id == unit.id,
+            m.PropertyInvitation.status == "reassignment_pending",
+            m.PropertyInvitation.id != (exclude_invitation_id or -1),
+        ).limit(1)
+    )
+    if proposed_hold:
+        return "reserved"
     """Check reservation/stay records before trusting a stored unit availability label."""
     if unit.status in {"maintenance", "inactive"}:
         return unit.status
@@ -1221,6 +1251,9 @@ def invitation_payload(db: Session, invitation: m.PropertyInvitation, include_pr
         "unit_status": state,
         "expires_at": invitation.expires_at.isoformat(),
         "reassignment_reason": invitation.reassignment_reason,
+        "required_document_categories": invitation.required_document_categories or [],
+        "document_request_reason": invitation.document_request_reason,
+        "registration_submitted_at": invitation.registration_submitted_at.isoformat() if invitation.registration_submitted_at else None,
         "can_accept": invitation.status == "pending" and expires_at > now and state == "available",
     }
     if include_private:
@@ -1229,6 +1262,7 @@ def invitation_payload(db: Session, invitation: m.PropertyInvitation, include_pr
             "recipient_name": invitation.recipient_name,
             "recipient_phone": invitation.recipient_phone,
             "recipient_user_id": invitation.recipient_user_id,
+            "registration_profile": invitation.registration_profile or {},
             "enquiry_id": invitation.enquiry_id,
             "reservation_id": invitation.reservation_id,
             "created_at": invitation.created_at.isoformat(),
@@ -1245,6 +1279,12 @@ def create_tenant_invitation(body: TenantInvitationCreate,
         raise HTTPException(409, "Publish and approve this property before inviting a tenant to a bed.")
     if body.move_in_date < date.today():
         raise HTTPException(422, "Move-in date cannot be in the past.")
+    allowed_documents = {"government_id", "address_proof", "pan_optional", "employment_optional", "other"}
+    requested_documents = list(dict.fromkeys(body.required_document_categories))
+    if any(category not in allowed_documents for category in requested_documents):
+        raise HTTPException(422, "Choose from the disclosed supported document categories. Aadhaar is not a default or mandatory category.")
+    if requested_documents and len(body.document_request_reason.strip()) < 10:
+        raise HTTPException(422, "Explain why the requested documents are needed for this property.")
 
     unit = db.scalar(select(m.PropertyUnit).where(
         m.PropertyUnit.id == body.unit_id,
@@ -1292,6 +1332,8 @@ def create_tenant_invitation(body: TenantInvitationCreate,
         move_in_date=body.move_in_date,
         rent_snapshot=unit.monthly_rent or prop.rent_from,
         deposit_snapshot=unit.deposit or prop.deposit_from,
+        required_document_categories=requested_documents,
+        document_request_reason=body.document_request_reason.strip(),
         status="pending",
         expires_at=now + timedelta(hours=body.expires_in_hours),
     )
@@ -1355,7 +1397,13 @@ def list_tenant_invitations(actor: dict = Depends(require_roles("customer")), db
         ),
         m.PropertyInvitation.status == "pending",
     ).order_by(m.PropertyInvitation.created_at.desc()).limit(100)))
-    return [invitation_payload(db, row, include_private=False) for row in rows]
+    return [{
+        **invitation_payload(db, row, include_private=False),
+        "billable_quote": make_proration_quote(row.rent_snapshot, date.today()),
+        "requires_explicit_billable_terms_acknowledgement": True,
+        "required_document_categories": row.required_document_categories or [],
+        "document_request_reason": row.document_request_reason,
+    } for row in rows]
 
 
 @app.get("/invitations/resolve")
@@ -1451,6 +1499,8 @@ def accept_tenant_invitation(body: TenantInvitationAccept,
                              db: Session = Depends(get_db)):
     if (body.invitation_id is None) == (body.token is None):
         raise HTTPException(422, "Provide either an invitation ID from your account list or the invitation token, not both.")
+    if not body.profile_completion_acknowledged:
+        raise HTTPException(422, "Review and confirm your tenant profile before submitting registration.")
     if not body.billable_terms_acknowledged:
         raise HTTPException(422, "Review and acknowledge the billable start date and first-period rent before submitting registration.")
     if body.billable_start_date != date.today():
@@ -1499,6 +1549,34 @@ def accept_tenant_invitation(body: TenantInvitationAccept,
     prop = db.get(m.Property, invitation.property_id)
     if not prop or prop.status != "published":
         raise HTTPException(409, "This property is no longer available for new reservations.")
+    phone = body.phone.strip() or (user.phone or "").strip() or invitation.recipient_phone.strip()
+    if len(phone) < 8:
+        raise HTTPException(422, "Enter a valid mobile number before completing registration.")
+    profile = db.get(m.TenantProfile, user.id)
+    if profile is None:
+        profile = m.TenantProfile(user_id=user.id)
+        db.add(profile)
+    profile.emergency_contact_name = body.emergency_contact_name.strip()
+    profile.emergency_contact_phone = body.emergency_contact_phone.strip()
+    profile.accommodation_preferences = dict(body.accommodation_preferences)
+    user.phone = phone
+    invitation.registration_profile = {
+        "display_name": user.display_name,
+        "email": user.email,
+        "phone": phone,
+        "emergency_contact_name": profile.emergency_contact_name,
+        "emergency_contact_phone": profile.emergency_contact_phone,
+        "accommodation_preferences": profile.accommodation_preferences,
+        "profile_completion_acknowledged": True,
+    }
+    invitation.registration_submitted_at = datetime.now(timezone.utc)
+    uploaded_docs = list(db.scalars(select(m.InvitationDocument).where(
+        m.InvitationDocument.invitation_id == invitation.id
+    )))
+    submitted_categories = {doc.category for doc in uploaded_docs if doc.status in {"submitted", "approved"}}
+    missing_docs = sorted(set(invitation.required_document_categories or []) - submitted_categories)
+    if missing_docs:
+        raise HTTPException(409, "Submit the requested documents before completing registration: " + ", ".join(missing_docs))
     quote = make_proration_quote(invitation.rent_snapshot, body.billable_start_date)
     terms_snapshot = {
         "currency": "INR",
@@ -1506,6 +1584,8 @@ def accept_tenant_invitation(body: TenantInvitationAccept,
         "billable_start_date": quote["billable_start_date"],
         "billable_start_trigger": quote["billing_start_trigger"],
         "billable_terms_acknowledged": True,
+        "profile_completion_acknowledged": True,
+        "profile_completion_acknowledged_at": now.isoformat(),
         "billable_terms_acknowledged_at": now.isoformat(),
         "monthly_rent": quote["monthly_rent"],
         "daily_rate_paise": quote["daily_rate_paise"],
@@ -1533,6 +1613,7 @@ def accept_tenant_invitation(body: TenantInvitationAccept,
     invitation.status = "accepted"
     invitation.accepted_by = user.id
     invitation.accepted_at = now
+    invitation.recipient_user_id = user.id
     try:
         db.flush()
         invitation.reservation_id = reservation.id
@@ -1590,6 +1671,348 @@ def accept_tenant_invitation(body: TenantInvitationAccept,
         "charge_amount_paise": int(quote["first_period_rent_paise"]),
         "message": "Registration was submitted and the prorated rent charge was recorded for the date you explicitly acknowledged. No payment has been collected. Owner review does not change the agreed billable start date.",
     }
+
+
+
+
+MAX_INVITATION_DOCUMENT_BYTES = 5 * 1024 * 1024
+ALLOWED_INVITATION_DOCUMENTS = {"government_id", "address_proof", "pan_optional", "employment_optional", "other"}
+
+
+def _document_storage_config() -> tuple[Path, bytes]:
+    root_value = os.getenv("DOCUMENT_STORAGE_ROOT", "").strip()
+    encoded_key = os.getenv("DOCUMENT_ENCRYPTION_KEY", "").strip()
+    if not root_value or not encoded_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Secure document storage is not configured on this server. Do not email sensitive files; ask the owner to configure encrypted storage.",
+        )
+    try:
+        key = base64.urlsafe_b64decode(encoded_key + ("=" * (-len(encoded_key) % 4)))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Document encryption configuration is invalid.") from exc
+    if len(key) != 32:
+        raise HTTPException(status_code=503, detail="DOCUMENT_ENCRYPTION_KEY must be a URL-safe base64 encoding of 32 random bytes.")
+    root = Path(root_value).expanduser().resolve()
+    try:
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(root, 0o700)
+    except OSError as exc:
+        raise HTTPException(status_code=503, detail="Encrypted document storage is not writable.") from exc
+    return root, key
+
+
+def _document_aad(invitation_id: int, document_id: int) -> bytes:
+    return f"stayeasy-invitation-document-v1:{invitation_id}:{document_id}".encode("utf-8")
+
+
+def _document_path(root: Path, storage_key: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{32}", storage_key):
+        raise HTTPException(status_code=500, detail="Stored document reference is invalid.")
+    path = (root / f"{storage_key}.enc").resolve()
+    if path.parent != root:
+        raise HTTPException(status_code=500, detail="Stored document path is invalid.")
+    return path
+
+
+def _invitation_document_payload(document: m.InvitationDocument) -> dict[str, Any]:
+    return {
+        "id": document.id,
+        "invitation_id": document.invitation_id,
+        "category": document.category,
+        "purpose": document.purpose,
+        "original_filename": document.original_filename,
+        "media_type": document.media_type,
+        "size_bytes": document.size_bytes,
+        "consent_at": document.consent_at.isoformat(),
+        "status": document.status,
+        "reviewed_by": document.reviewed_by,
+        "review_note": document.review_note,
+        "reviewed_at": document.reviewed_at.isoformat() if document.reviewed_at else None,
+        "retention_until": document.retention_until.isoformat(),
+        "created_at": document.created_at.isoformat(),
+        "content_url": f"/invitations/{document.invitation_id}/documents/{document.id}/content",
+    }
+
+
+def _require_invitation_access(
+    db: Session,
+    actor: dict,
+    invitation: m.PropertyInvitation,
+    *,
+    manage: bool = False,
+) -> m.User | None:
+    role = actor.get("role", "")
+    if role == "customer":
+        user = db.get(m.User, actor_user_id(actor))
+        if not user or not user.is_active:
+            raise HTTPException(403, "An active tenant account is required.")
+        if (
+            user.id != invitation.recipient_user_id
+            and user.email.strip().lower() != invitation.recipient_email.strip().lower()
+        ):
+            raise HTTPException(404, "Invitation not found.")
+        return user
+    if role in {"owner", "manager", "staff", "admin"}:
+        require_property_manager(
+            db, actor, invitation.property_id,
+            "reservations.manage" if manage else "reservations.view",
+        )
+        return None
+    raise HTTPException(403, "This account cannot access the invitation documents.")
+
+
+def _encrypted_document_bytes(document: m.InvitationDocument, root: Path, key: bytes) -> bytes:
+    now = datetime.now(timezone.utc)
+    retention = document.retention_until
+    if retention.tzinfo is None:
+        retention = retention.replace(tzinfo=timezone.utc)
+    if retention <= now:
+        raise HTTPException(status_code=410, detail="The document retention period has ended.")
+    path = _document_path(root, document.storage_key)
+    try:
+        encrypted = path.read_bytes()
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="The encrypted document is unavailable.") from exc
+    if len(encrypted) < 3 + 12 + 16 or encrypted[:3] != b"SE1":
+        raise HTTPException(status_code=500, detail="Stored document format is invalid.")
+    try:
+        return AESGCM(key).decrypt(
+            encrypted[3:15],
+            encrypted[15:],
+            _document_aad(document.invitation_id, document.id),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="Document authentication failed. The file was not returned.") from exc
+
+
+@app.post("/tenant/invitations/{invitation_id}/documents", status_code=201)
+async def upload_tenant_invitation_document(
+    invitation_id: int,
+    category: str = Form(...),
+    purpose: str = Form(...),
+    consent_confirmed: bool = Form(False),
+    file: UploadFile = File(...),
+    actor: dict = Depends(require_roles("customer")),
+    db: Session = Depends(get_db),
+):
+    invitation = db.scalar(select(m.PropertyInvitation).where(m.PropertyInvitation.id == invitation_id))
+    if not invitation:
+        raise HTTPException(404, "Invitation not found.")
+    user = _require_invitation_access(db, actor, invitation)
+    if invitation.status != "pending" or invitation.registration_submitted_at is not None:
+        raise HTTPException(409, "Documents can only be uploaded while the invited tenant is completing registration.")
+    if category not in ALLOWED_INVITATION_DOCUMENTS:
+        raise HTTPException(422, "This document category is not supported.")
+    if category not in set(invitation.required_document_categories or []):
+        raise HTTPException(403, "This invitation does not request that document category.")
+    if not consent_confirmed:
+        raise HTTPException(422, "Confirm that you understand why this document is requested before uploading.")
+    if len(purpose.strip()) < 10 or purpose.strip() != invitation.document_request_reason.strip():
+        raise HTTPException(422, "The upload purpose must match the reason disclosed by the property owner.")
+    raw = await file.read(MAX_INVITATION_DOCUMENT_BYTES + 1)
+    await file.close()
+    if not raw:
+        raise HTTPException(422, "Choose a non-empty document.")
+    if len(raw) > MAX_INVITATION_DOCUMENT_BYTES:
+        raise HTTPException(413, "Documents are limited to 5 MiB.")
+    declared_type = (file.content_type or "").split(";", 1)[0].lower().strip()
+    if raw.startswith(b"%PDF-"):
+        media_type = "application/pdf"
+    elif raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        media_type = "image/png"
+    elif raw.startswith(b"\xff\xd8\xff"):
+        media_type = "image/jpeg"
+    else:
+        raise HTTPException(415, "Supported file types are PDF, PNG and JPEG. The file signature did not match.")
+    if declared_type not in {media_type, "application/octet-stream", ""}:
+        raise HTTPException(415, "The declared file type does not match its content.")
+
+    root, key = _document_storage_config()
+    clean_name = re.sub(r"[^A-Za-z0-9._ -]", "_", (file.filename or "document")[:200]).strip() or "document"
+    storage_key = uuid4().hex
+    now = datetime.now(timezone.utc)
+    retention_days = int(os.getenv("DOCUMENT_RETENTION_DAYS", "365"))
+    if not 30 <= retention_days <= 3650:
+        raise HTTPException(503, "DOCUMENT_RETENTION_DAYS must be between 30 and 3650.")
+    document = m.InvitationDocument(
+        invitation_id=invitation.id,
+        uploaded_by=user.id,
+        category=category,
+        purpose=purpose.strip(),
+        storage_key=storage_key,
+        original_filename=clean_name,
+        media_type=media_type,
+        size_bytes=len(raw),
+        consent_at=now,
+        status="submitted",
+        retention_until=now + timedelta(days=retention_days),
+    )
+    db.add(document)
+    stored_path: Path | None = None
+    try:
+        db.flush()
+        nonce = secrets.token_bytes(12)
+        ciphertext = AESGCM(key).encrypt(nonce, raw, _document_aad(invitation.id, document.id))
+        stored_path = _document_path(root, storage_key)
+        fd = os.open(stored_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(b"SE1" + nonce + ciphertext)
+        audit(db, actor, "invitation_document", document.id, "uploaded_with_consent", new={
+            "invitation_id": invitation.id, "category": category, "media_type": media_type,
+            "size_bytes": len(raw), "retention_until": document.retention_until.isoformat(),
+            "consent_at": now.isoformat(),
+        })
+        db.commit()
+        db.refresh(document)
+    except Exception:
+        db.rollback()
+        if stored_path is not None:
+            try:
+                stored_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise
+    return _invitation_document_payload(document)
+
+
+@app.get("/tenant/invitations/{invitation_id}/documents")
+def list_tenant_invitation_documents(
+    invitation_id: int,
+    actor: dict = Depends(require_roles("customer")),
+    db: Session = Depends(get_db),
+):
+    invitation = db.get(m.PropertyInvitation, invitation_id)
+    if not invitation:
+        raise HTTPException(404, "Invitation not found.")
+    _require_invitation_access(db, actor, invitation)
+    rows = list(db.scalars(select(m.InvitationDocument).where(
+        m.InvitationDocument.invitation_id == invitation_id
+    ).order_by(m.InvitationDocument.created_at.desc())))
+    return [_invitation_document_payload(row) for row in rows]
+
+
+@app.get("/owner/invitations/{invitation_id}/documents")
+def list_owner_invitation_documents(
+    invitation_id: int,
+    actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")),
+    db: Session = Depends(get_db),
+):
+    invitation = db.get(m.PropertyInvitation, invitation_id)
+    if not invitation:
+        raise HTTPException(404, "Invitation not found.")
+    _require_invitation_access(db, actor, invitation)
+    rows = list(db.scalars(select(m.InvitationDocument).where(
+        m.InvitationDocument.invitation_id == invitation_id
+    ).order_by(m.InvitationDocument.created_at.desc())))
+    return [_invitation_document_payload(row) for row in rows]
+
+
+@app.post("/owner/invitations/{invitation_id}/documents/{document_id}/review")
+def review_invitation_document(
+    invitation_id: int,
+    document_id: int,
+    body: InvitationDocumentReview,
+    actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")),
+    db: Session = Depends(get_db),
+):
+    invitation = db.get(m.PropertyInvitation, invitation_id)
+    if not invitation:
+        raise HTTPException(404, "Invitation not found.")
+    _require_invitation_access(db, actor, invitation, manage=True)
+    document = db.scalar(select(m.InvitationDocument).where(
+        m.InvitationDocument.id == document_id,
+        m.InvitationDocument.invitation_id == invitation_id,
+    ).with_for_update())
+    if not document:
+        raise HTTPException(404, "Invitation document not found.")
+    if document.status not in {"submitted", "approved", "rejected"}:
+        raise HTTPException(409, "This document is no longer reviewable.")
+    if body.status == "rejected" and len(body.review_note.strip()) < 5:
+        raise HTTPException(422, "Explain why this document was rejected so the tenant can correct it.")
+    old = {"status": document.status}
+    document.status = body.status
+    document.reviewed_by = actor_user_id(actor)
+    document.review_note = body.review_note.strip()
+    document.reviewed_at = datetime.now(timezone.utc)
+    audit(db, actor, "invitation_document", document.id, "reviewed", old=old,
+          new={"status": document.status, "review_note": document.review_note, "invitation_id": invitation_id})
+    if invitation.recipient_user_id:
+        add_notification(
+            db, invitation.recipient_user_id, "Registration document reviewed",
+            f"Your {document.category.replace('_', ' ')} document was {document.status}. " +
+            (f"Review note: {document.review_note}" if document.review_note else "Open the invitation to see the updated status."),
+        )
+    db.commit()
+    db.refresh(document)
+    return _invitation_document_payload(document)
+
+
+@app.get("/invitations/{invitation_id}/documents/{document_id}/content")
+def get_invitation_document_content(
+    invitation_id: int,
+    document_id: int,
+    actor: dict = Depends(get_actor),
+    db: Session = Depends(get_db),
+):
+    invitation = db.get(m.PropertyInvitation, invitation_id)
+    if not invitation:
+        raise HTTPException(404, "Invitation not found.")
+    _require_invitation_access(db, actor, invitation)
+    document = db.scalar(select(m.InvitationDocument).where(
+        m.InvitationDocument.id == document_id,
+        m.InvitationDocument.invitation_id == invitation_id,
+    ))
+    if not document:
+        raise HTTPException(404, "Invitation document not found.")
+    root, key = _document_storage_config()
+    plaintext = _encrypted_document_bytes(document, root, key)
+    filename = re.sub(r'[^A-Za-z0-9._ -]', "_", document.original_filename)[:200] or "document"
+    return Response(
+        content=plaintext,
+        media_type=document.media_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{filename}"',
+            "Cache-Control": "no-store, private",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.delete("/tenant/invitations/{invitation_id}/documents/{document_id}")
+def delete_tenant_invitation_document(
+    invitation_id: int,
+    document_id: int,
+    actor: dict = Depends(require_roles("customer")),
+    db: Session = Depends(get_db),
+):
+    invitation = db.get(m.PropertyInvitation, invitation_id)
+    if not invitation:
+        raise HTTPException(404, "Invitation not found.")
+    user = _require_invitation_access(db, actor, invitation)
+    if invitation.status != "pending" or invitation.registration_submitted_at is not None:
+        raise HTTPException(409, "A submitted registration retains its evidence for review and the configured retention period.")
+    document = db.scalar(select(m.InvitationDocument).where(
+        m.InvitationDocument.id == document_id,
+        m.InvitationDocument.invitation_id == invitation_id,
+        m.InvitationDocument.uploaded_by == user.id,
+    ).with_for_update())
+    if not document:
+        raise HTTPException(404, "Invitation document not found.")
+    root, _ = _document_storage_config()
+    path = _document_path(root, document.storage_key)
+    old = {"status": document.status, "category": document.category}
+    storage_key = document.storage_key
+    db.delete(document)
+    audit(db, actor, "invitation_document", document_id, "deleted_before_registration_submission", old=old,
+          new={"invitation_id": invitation_id})
+    db.commit()
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        # Metadata deletion prevents future reads; orphan cleanup can remove the encrypted blob later.
+        pass
+    return {"id": document_id, "deleted": True, "message": "Document removed before registration submission."}
 
 
 @app.post("/reservations", status_code=201)
@@ -1729,6 +2152,19 @@ def update_reservation_status_action(reservation_id: int, body: ReservationStatu
     item = db.get(m.Reservation, reservation_id)
     if not item:
         raise HTTPException(404, "Reservation not found")
+    if body.status == "confirmed":
+        invitation = db.scalar(select(m.PropertyInvitation).where(m.PropertyInvitation.reservation_id == item.id))
+        if invitation is not None:
+            require_property_manager(db, actor, item.property_id, "reservations.manage")
+            if invitation.registration_submitted_at is None or not invitation.registration_profile.get("profile_completion_acknowledged"):
+                raise HTTPException(409, "The tenant must complete and acknowledge the registration profile before approval.")
+            required_categories = set(invitation.required_document_categories or [])
+            if required_categories:
+                documents = list(db.scalars(select(m.InvitationDocument).where(m.InvitationDocument.invitation_id == invitation.id)))
+                approved = {document.category for document in documents if document.status == "approved"}
+                missing = sorted(required_categories - approved)
+                if missing:
+                    raise HTTPException(409, "Approve all required registration documents before approving this reservation: " + ", ".join(missing))
     if body.status in {"cancelled", "expired"}:
         require_property_manager(db, actor, item.property_id, "reservations.manage")
         recorded_payments = list(db.scalars(select(m.LedgerEntry).where(
