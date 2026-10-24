@@ -471,6 +471,38 @@ internal object StayApiClient {
         return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
     }
 
+    /** Updates a server-backed stay lifecycle and sends only the date fields the owner changed. */
+    fun updateOwnerStay(
+        baseUrl: String,
+        token: String,
+        stayId: Long,
+        status: String,
+        noticeDate: String? = null,
+        moveOutDate: String? = null
+    ): JSONObject {
+        require(stayId > 0L) { "Select a valid server stay." }
+        val normalizedStatus = status.trim().lowercase(Locale.ROOT).replace(' ', '_')
+        require(normalizedStatus in setOf("active", "notice_given", "completed", "cancelled")) {
+            "Unsupported resident stay status."
+        }
+        if (normalizedStatus == "notice_given") {
+            require(!noticeDate.isNullOrBlank()) { "Enter the notice date as YYYY-MM-DD." }
+        }
+        if (normalizedStatus == "completed") {
+            require(!moveOutDate.isNullOrBlank()) { "Enter the move-out date as YYYY-MM-DD." }
+        }
+        val body = JSONObject().put("status", normalizedStatus)
+        if (noticeDate != null) {
+            body.put("notice_date", normalizeDate(noticeDate)
+                ?: throw IllegalArgumentException("Enter a valid notice date, for example 2026-11-01."))
+        }
+        if (moveOutDate != null) {
+            body.put("move_out_date", normalizeDate(moveOutDate)
+                ?: throw IllegalArgumentException("Enter a valid move-out date, for example 2026-11-30."))
+        }
+        return JSONObject(request(baseUrl, "/owner/stays/$stayId", token, "PATCH", body))
+    }
+
     fun createIssue(
         baseUrl: String,
         token: String,
