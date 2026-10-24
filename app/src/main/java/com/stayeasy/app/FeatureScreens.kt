@@ -644,17 +644,28 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                 if (category in setOf("residents", "stays") && !serverOwnerStayMode) {
                     Text("Local records are device-only. Connect the API and sign in with an authorized owner account to view shared stay history.", color = SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
                 }
-                if (serverOwnerStayMode || serverMoveOutRequestMode) {
+                if (serverOwnerStayMode || serverMoveOutRequestMode || serverNotificationMode) {
                     val serverStateCopy = when {
-                        remoteSyncing -> if (serverMoveOutRequestMode) "Loading move-out requests…" else "Loading server-backed records…"
-                        remoteSyncMessage.startsWith("Synced") -> if (serverMoveOutRequestMode) "Server-synced · each decision is saved by StayEasy." else "Server-synced · records come from properties you are authorized to manage."
-                        remoteSyncMessage.startsWith("Server sync unavailable") -> "Server refresh failed. Cached rows may be shown; refresh before acting on this information."
+                        remoteSyncing -> when {
+                            serverMoveOutRequestMode -> "Loading move-out requests…"
+                            serverNotificationMode -> "Loading account notifications…"
+                            else -> "Loading server-backed records…"
+                        }
+                        remoteSyncMessage.startsWith("Synced") -> when {
+                            serverMoveOutRequestMode -> "Server-synced · each decision is saved by StayEasy."
+                            serverNotificationMode -> "Server inbox · notifications are private to this account."
+                            else -> "Server-synced · records come from properties you are authorized to manage."
+                        }
+                        remoteSyncMessage.startsWith("Server sync unavailable") -> "Server refresh failed. Connect with an authorized account and retry."
                         else -> "Waiting for the first server refresh."
                     }
                     Text(serverStateCopy, color = if (remoteSyncMessage.startsWith("Server sync unavailable")) SE.Orange else SE.Blue, fontSize = 9.sp, lineHeight = 13.sp)
                 }
                 if (category == "move_out_requests" && !serverMoveOutRequestMode) {
                     Text("Connect the API and sign in with owner access to review shared move-out requests.", color = SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
+                }
+                if (category == "notifications" && !serverNotificationMode) {
+                    Text("Demo notifications are stored on this device. Connect and sign in to view your shared account inbox.", color = SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
                 }
                 if (readOnlyServerFinance) Text("Read-only · these entries are linked to your server-backed stay.", color = SE.Blue, fontSize = 9.sp, lineHeight = 13.sp)
                 if (remoteSyncMessage.isNotBlank()) Text(remoteSyncMessage, color = if (remoteSyncMessage.startsWith("Synced") || remoteSyncMessage.startsWith("Server confirmed") || remoteSyncMessage.startsWith("Saved to server")) SE.Blue else SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
@@ -677,7 +688,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp), shape = RoundedCornerShape(11.dp)) { Icon(Icons.Filled.Download, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("Export") }
         }
         Spacer(Modifier.height(8.dp))
-        if (serverOwnerStayMode || serverMoveOutRequestMode) {
+        if (serverOwnerStayMode || serverMoveOutRequestMode || serverNotificationMode) {
             OutlinedButton(
                 onClick = { serverRefreshRequest++ },
                 enabled = !remoteSyncing,
@@ -689,6 +700,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                 Text(
                     if (remoteSyncing) "Refreshing from server…"
                     else if (serverMoveOutRequestMode) "Refresh move-out requests"
+                    else if (serverNotificationMode) "Refresh inbox"
                     else "Refresh from server"
                 )
             }
@@ -719,6 +731,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                             when {
                                 serverOwnerStayMode -> "No server-backed stays found"
                                 serverMoveOutRequestMode -> "No move-out requests"
+                                serverNotificationMode -> "No notifications"
                                 else -> "No records yet"
                             }
                         } else "No matching records",
@@ -731,6 +744,8 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                                 "Refresh to check the authorized server records, or assign a verified resident from Rooms & beds. Empty server results are not replaced with demo residents."
                             records.isEmpty() && serverMoveOutRequestMode ->
                                 "New resident requests will appear here. Approving a request records notice; the unit stays occupied until actual move-out is completed."
+                            records.isEmpty() && serverNotificationMode ->
+                                "New account events will appear here, including move-out request responses and owner updates."
                             records.isEmpty() ->
                                 "Create the first record to start this workflow. Data will remain on this device in the prototype."
                             else -> "Try clearing the filter or search text."
@@ -739,7 +754,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                         fontSize = 11.sp,
                         lineHeight = 15.sp
                     )
-                    if (records.isEmpty() && !readOnlyServerFinance && !serverOwnerStayMode && !serverMoveOutRequestMode) {
+                    if (records.isEmpty() && !readOnlyServerFinance && !serverOwnerStayMode && !serverMoveOutRequestMode && !serverNotificationMode) {
                         Spacer(Modifier.height(8.dp))
                         Button(onClick = { openCreate() }, colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) {
                             Icon(Icons.Filled.Add, null)
@@ -802,7 +817,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                 }
             }
         }
-        if (visible.isNotEmpty() && !readOnlyServerFinance && !serverOwnerStayMode && !serverMoveOutRequestMode) {
+        if (visible.isNotEmpty() && !readOnlyServerFinance && !serverOwnerStayMode && !serverMoveOutRequestMode && !serverNotificationMode) {
             Spacer(Modifier.height(6.dp))
             Button(onClick = { openCreate() }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(7.dp)); Text(if (serverFinanceMode) "Add manual ledger entry" else "Add ${title.removeSuffix("s").lowercase(Locale.getDefault())}") }
         }
