@@ -16,6 +16,13 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+class AccountCredential(Base):
+    """Password hashes are separated from profile records to ease future auth migration."""
+    __tablename__ = "account_credentials"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
 class Property(Base):
     __tablename__ = "properties"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
