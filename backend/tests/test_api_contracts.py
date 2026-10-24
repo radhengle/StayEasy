@@ -554,6 +554,16 @@ def test_owner_inventory_tree_derives_floor_room_bed_state_from_reservation_and_
     assert occupied_bed["occupant"]["display_name"] == "customer-1"
     assert occupied_tree["inventory"]["occupied"] == 1
 
+    completed = client.patch(f"/owner/stays/{stay.json()['id']}", json={
+        "status": "completed", "move_out_date": date.today().isoformat()
+    })
+    assert completed.status_code == 200, completed.text
+    released_tree = client.get(f"/owner/properties/{prop['id']}/inventory-tree").json()
+    assert released_tree["floors"][0]["rooms"][0]["beds"][0]["status"] == "available"
+    with SessionLocal() as db:
+        closed_reservation = db.get(m.Reservation, reservation.json()["id"])
+        assert closed_reservation.status == "completed"
+
 
 def test_owner_can_reassign_pending_reservation_and_old_bed_is_released():
     prop, first_unit = setup_property(owner_id="owner-1")
@@ -589,6 +599,7 @@ def test_owner_can_reassign_pending_reservation_and_old_bed_is_released():
     by_id = {row["id"]: row for row in units.json()}
     assert by_id[first_unit["id"]]["status"] == "available"
     assert by_id[second.json()["id"]]["status"] == "reserved"
+    set_actor("customer-1", "customer")
     notifications = client.get("/notifications")
     assert notifications.status_code == 200
     assert any(row["title"] == "Proposed bed changed" for row in notifications.json())
@@ -653,6 +664,8 @@ def test_reservations_block_duplicate_active_unit():
     second = client.post("/reservations", json=payload)
     assert second.status_code == 409, second.text
     set_actor("owner-1", "owner")
+    manual_release = client.patch(f"/owner/units/{unit['id']}/status", json={"status": "available"})
+    assert manual_release.status_code == 409, manual_release.text
     invalid_status_update = client.post(f"/owner/reservations/{first.json()['id']}/status", json={"status": "checked_in"})
     assert invalid_status_update.status_code == 409
     status_update = client.post(f"/owner/reservations/{first.json()['id']}/status", json={"status": "confirmed"})
