@@ -311,9 +311,21 @@ internal object StayApiClient {
     }
 
     /** Registers a customer-level account; Owner workspace requests remain pending server approval. */
-    fun registerAccount(baseUrl: String, email: String, displayName: String, password: String, workspace: String): JSONObject {
+    fun registerAccount(
+        baseUrl: String,
+        email: String,
+        displayName: String,
+        password: String,
+        workspace: String,
+        phone: String = "",
+        emergencyContactName: String = "",
+        emergencyContactPhone: String = ""
+    ): JSONObject {
         val body = JSONObject().put("email", email.trim()).put("display_name", displayName.trim())
             .put("password", password).put("requested_workspace", workspace)
+            .put("phone", phone.trim())
+            .put("emergency_contact_name", emergencyContactName.trim())
+            .put("emergency_contact_phone", emergencyContactPhone.trim())
         return JSONObject(request(baseUrl, "/auth/register", method = "POST", body = body))
     }
 
