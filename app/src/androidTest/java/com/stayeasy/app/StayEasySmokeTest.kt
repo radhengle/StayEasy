@@ -6,7 +6,6 @@ import android.os.Environment
 import android.provider.MediaStore
 import java.io.ByteArrayOutputStream
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -94,7 +93,7 @@ class StayEasySmokeTest {
     fun launchesLoginEntryWithActionsForBothRoles() {
         composeRule.onNodeWithText("Welcome home.").assertIsDisplayed()
         composeRule.onNodeWithText("Tenant / Customer").assertIsDisplayed()
-        composeRule.onNodeWithText("Property Owner").assertExists()
+        composeRule.onNodeWithText("Property Owner").assertIsDisplayed()
         composeRule.onAllNodesWithText("Login").assertCountEquals(2)
         composeRule.onAllNodesWithText("Register").assertCountEquals(2)
     }
