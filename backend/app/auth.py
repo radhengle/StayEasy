@@ -31,6 +31,9 @@ class AccountRegister(BaseModel):
     display_name: str = Field(min_length=2, max_length=180)
     password: str = Field(min_length=12, max_length=128)
     requested_workspace: str = Field(default="tenant", pattern="^(tenant|owner)$")
+    phone: str = Field(default="", max_length=40)
+    emergency_contact_name: str = Field(default="", max_length=180)
+    emergency_contact_phone: str = Field(default="", max_length=40)
 
 
 class EmailCodeRequest(BaseModel):
@@ -96,11 +99,15 @@ def send_security_code(recipient: str, subject: str, code: str, body_text: str) 
         raise HTTPException(status_code=503, detail="Email delivery is temporarily unavailable") from exc
 
 
-def _account_payload(user: m.User, credential: m.UserCredential) -> dict[str, Any]:
+def _account_payload(user: m.User, credential: m.UserCredential, profile: m.TenantProfile | None = None) -> dict[str, Any]:
     return {
         "id": user.id,
         "email": user.email,
         "display_name": user.display_name,
+        "phone": user.phone,
+        "emergency_contact_name": profile.emergency_contact_name if profile else "",
+        "emergency_contact_phone": profile.emergency_contact_phone if profile else "",
+        "accommodation_preferences": profile.accommodation_preferences if profile else {},
         "role": user.role,
         "requested_workspace": credential.requested_workspace,
         "email_verified": credential.email_verified_at is not None,
@@ -123,7 +130,7 @@ def register_account(body: AccountRegister, db: Session = Depends(get_db)):
         raise HTTPException(status_code=409, detail="An account with this email already exists")
     user_id = str(uuid4())
     code = f"{secrets.randbelow(1_000_000):06d}"
-    user = m.User(id=user_id, email=email, display_name=body.display_name.strip(), role="customer", is_active=True)
+    user = m.User(id=user_id, email=email, display_name=body.display_name.strip(), phone=body.phone.strip(), role="customer", is_active=True)
     credential = m.UserCredential(
         user_id=user_id,
         password_hash=hash_password(body.password),
@@ -135,6 +142,12 @@ def register_account(body: AccountRegister, db: Session = Depends(get_db)):
     )
     db.add(user)
     db.add(credential)
+    db.add(m.TenantProfile(
+        user_id=user_id,
+        emergency_contact_name=body.emergency_contact_name.strip(),
+        emergency_contact_phone=body.emergency_contact_phone.strip(),
+        accommodation_preferences={},
+    ))
     try:
         db.flush()
         send_security_code(email, "Verify your StayEasy account", code,
@@ -223,7 +236,7 @@ def login_account(body: AccountLogin, db: Session = Depends(get_db)):
     token = create_access_token(user.id, user.role, scopes=["account"], auth_version=credential.auth_version)
     return {"access_token": token, "token_type": "bearer",
             "expires_in_minutes": int(os.getenv("ACCESS_TOKEN_MINUTES", "120")),
-            "user": _account_payload(user, credential)}
+            "user": _account_payload(user, credential, db.get(m.TenantProfile, user.id))}
 
 
 @router.get("/me")
@@ -234,7 +247,7 @@ def current_account(actor: dict[str, Any] = Depends(get_actor), db: Session = De
     credential = db.get(m.UserCredential, actor["subject"])
     if user is None or credential is None:
         raise HTTPException(status_code=401, detail="Account session is no longer valid")
-    return _account_payload(user, credential)
+    return _account_payload(user, credential, db.get(m.TenantProfile, user.id))
 
 
 @router.post("/owner-access-request")
@@ -247,13 +260,13 @@ def request_owner_access(actor: dict[str, Any] = Depends(get_actor), db: Session
     if user is None or credential is None or not user.is_active:
         raise HTTPException(status_code=401, detail="Account session is no longer valid")
     if user.role == "owner":
-        return _account_payload(user, credential)
+        return _account_payload(user, credential, db.get(m.TenantProfile, user.id))
     if user.role != "customer":
         raise HTTPException(status_code=403, detail="Only customer accounts can request Owner access")
     if credential.email_verified_at is None:
         raise HTTPException(status_code=403, detail="Verify your email before requesting Owner access")
     if credential.owner_access_status == "pending_approval":
-        return _account_payload(user, credential)
+        return _account_payload(user, credential, db.get(m.TenantProfile, user.id))
 
     now = datetime.now(timezone.utc)
     credential.requested_workspace = "owner"
@@ -264,7 +277,7 @@ def request_owner_access(actor: dict[str, Any] = Depends(get_actor), db: Session
     db.commit()
     db.refresh(user)
     db.refresh(credential)
-    return _account_payload(user, credential)
+    return _account_payload(user, credential, db.get(m.TenantProfile, user.id))
 
 
 @router.post("/logout")
