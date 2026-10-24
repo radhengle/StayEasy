@@ -1,6 +1,7 @@
 package com.stayeasy.app
 
 import android.content.Context
+import android.net.Uri
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -207,7 +208,8 @@ internal object StayApiClient {
         residentId: String,
         joiningDate: String,
         agreedMonthlyRent: Int,
-        depositHeld: Int
+        depositHeld: Int,
+        reservationId: Long? = null
     ): JSONObject {
         require(propertyId > 0L) { "Select a valid server property." }
         require(unitId > 0L) { "Select an available room or bed." }
@@ -223,6 +225,7 @@ internal object StayApiClient {
             .put("joining_date", normalizedDate)
             .put("agreed_monthly_rent", agreedMonthlyRent)
             .put("deposit_held", depositHeld)
+        reservationId?.takeIf { it > 0L }?.let { body.put("reservation_id", it) }
         return JSONObject(request(baseUrl, "/owner/stays", token, "POST", body))
     }
 
@@ -309,9 +312,21 @@ internal object StayApiClient {
     }
 
     /** Registers a customer-level account; Owner workspace requests remain pending server approval. */
-    fun registerAccount(baseUrl: String, email: String, displayName: String, password: String, workspace: String): JSONObject {
+    fun registerAccount(
+        baseUrl: String,
+        email: String,
+        displayName: String,
+        password: String,
+        workspace: String,
+        phone: String = "",
+        emergencyContactName: String = "",
+        emergencyContactPhone: String = ""
+    ): JSONObject {
         val body = JSONObject().put("email", email.trim()).put("display_name", displayName.trim())
             .put("password", password).put("requested_workspace", workspace)
+            .put("phone", phone.trim())
+            .put("emergency_contact_name", emergencyContactName.trim())
+            .put("emergency_contact_phone", emergencyContactPhone.trim())
         return JSONObject(request(baseUrl, "/auth/register", method = "POST", body = body))
     }
 
@@ -463,12 +478,256 @@ internal object StayApiClient {
         return JSONObject(request(baseUrl, "/owner/reservations/$reservationId/status", token, "POST", JSONObject().put("status", normalized)))
     }
 
-    fun updateEnquiry(baseUrl: String, token: String, enquiryId: Long, status: String): JSONObject {
+    fun updateEnquiry(
+        baseUrl: String,
+        token: String,
+        enquiryId: Long,
+        status: String,
+        ownerResponse: String? = null
+    ): JSONObject {
+        require(enquiryId > 0L) { "Select a valid enquiry." }
         val normalized = when (status.lowercase(Locale.ROOT)) {
             "visit scheduled" -> "visit_scheduled"
             else -> status.lowercase(Locale.ROOT).replace(' ', '_')
         }
-        return JSONObject(request(baseUrl, "/owner/enquiries/$enquiryId/status", token, "POST", JSONObject().put("status", normalized)))
+        val body = JSONObject().put("status", normalized)
+        ownerResponse?.let { body.put("owner_response", it.trim().take(4000)) }
+        return JSONObject(request(baseUrl, "/owner/enquiries/$enquiryId/status", token, "POST", body))
+    }
+
+    fun createTenantInvitation(
+        baseUrl: String,
+        token: String,
+        propertyId: Long,
+        unitId: Long,
+        enquiryId: Long?,
+        recipientEmail: String,
+        recipientName: String,
+        recipientPhone: String,
+        moveInDate: String,
+        expiresInHours: Int = 168,
+        requiredDocumentCategories: List<String> = emptyList(),
+        documentRequestReason: String = ""
+    ): JSONObject {
+        require(propertyId > 0L && unitId > 0L) { "Select a property and available bed." }
+        require(recipientEmail.contains("@")) { "An invitation email is required." }
+        require(recipientName.trim().length >= 2) { "Enter the tenant's name." }
+        val normalizedDate = normalizeDate(moveInDate)
+            ?: throw IllegalArgumentException("Enter the proposed move-in date as YYYY-MM-DD.")
+        val body = JSONObject()
+            .put("property_id", propertyId)
+            .put("unit_id", unitId)
+            .put("recipient_email", recipientEmail.trim())
+            .put("recipient_name", recipientName.trim())
+            .put("recipient_phone", recipientPhone.trim())
+            .put("move_in_date", normalizedDate)
+            .put("expires_in_hours", expiresInHours)
+            .put("required_document_categories", JSONArray().apply { requiredDocumentCategories.distinct().forEach { put(it) } })
+            .put("document_request_reason", documentRequestReason.trim())
+        enquiryId?.takeIf { it > 0L }?.let { body.put("enquiry_id", it) }
+        return JSONObject(request(baseUrl, "/owner/invitations", token, "POST", body))
+    }
+
+    fun ownerInvitations(baseUrl: String, token: String, propertyId: Long? = null): List<JSONObject> {
+        val path = propertyId?.let { "/owner/invitations?property_id=$it" } ?: "/owner/invitations"
+        val result = JSONArray(request(baseUrl, path, token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun reassignTenantInvitation(
+        baseUrl: String,
+        token: String,
+        invitationId: Long,
+        newUnitId: Long,
+        reason: String
+    ): JSONObject {
+        require(invitationId > 0L && newUnitId > 0L) { "Select an invitation and replacement bed." }
+        require(reason.trim().length >= 3) { "Explain why the proposed bed is changing." }
+        val body = JSONObject().put("new_unit_id", newUnitId).put("reason", reason.trim().take(1000))
+        return JSONObject(request(baseUrl, "/owner/invitations/$invitationId/reassign", token, "POST", body))
+    }
+
+        fun resolveTenantInvitation(baseUrl: String, invitationToken: String): JSONObject {
+        require(invitationToken.length in 20..200) { "Invitation link is invalid." }
+        val encoded = java.net.URLEncoder.encode(invitationToken, "UTF-8")
+        return JSONObject(request(baseUrl, "/invitations/resolve?token=$encoded"))
+    }
+
+    fun tenantInvitations(baseUrl: String, token: String): List<JSONObject> {
+        val result = JSONArray(request(baseUrl, "/tenant/invitations", token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun acceptTenantInvitation(
+        baseUrl: String,
+        token: String,
+        invitationToken: String?,
+        invitationId: Long?,
+        billableStartDate: String,
+        billableTermsAcknowledged: Boolean,
+        phone: String = "",
+        emergencyContactName: String = "",
+        emergencyContactPhone: String = "",
+        accommodationPreferences: JSONObject = JSONObject(),
+        profileCompletionAcknowledged: Boolean = false
+    ): JSONObject {
+        require((!invitationToken.isNullOrBlank()) xor (invitationId != null)) {
+            "Use either a share link or an invitation from your account."
+        }
+        val normalizedDate = normalizeDate(billableStartDate)
+            ?: throw IllegalArgumentException("Confirm the billable start date.")
+        val body = JSONObject()
+            .put("billable_start_date", normalizedDate)
+            .put("billable_terms_acknowledged", billableTermsAcknowledged)
+            .put("phone", phone.trim())
+            .put("emergency_contact_name", emergencyContactName.trim())
+            .put("emergency_contact_phone", emergencyContactPhone.trim())
+            .put("accommodation_preferences", accommodationPreferences)
+            .put("profile_completion_acknowledged", profileCompletionAcknowledged)
+        if (!invitationToken.isNullOrBlank()) body.put("token", invitationToken)
+        invitationId?.takeIf { it > 0L }?.let { body.put("invitation_id", it) }
+        return JSONObject(request(baseUrl, "/invitations/accept", token, "POST", body))
+    }
+
+    fun tenantInvitationDocuments(baseUrl: String, token: String, invitationId: Long): List<JSONObject> {
+        require(invitationId > 0L) { "Select a valid invitation." }
+        val result = JSONArray(request(baseUrl, "/tenant/invitations/$invitationId/documents", token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun ownerInvitationDocuments(baseUrl: String, token: String, invitationId: Long): List<JSONObject> {
+        require(invitationId > 0L) { "Select a valid invitation." }
+        val result = JSONArray(request(baseUrl, "/owner/invitations/$invitationId/documents", token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun reviewInvitationDocument(
+        baseUrl: String,
+        token: String,
+        invitationId: Long,
+        documentId: Long,
+        status: String,
+        reviewNote: String = ""
+    ): JSONObject {
+        require(invitationId > 0L && documentId > 0L) { "Select a valid document." }
+        require(status in setOf("approved", "rejected")) { "Choose approve or reject." }
+        if (status == "rejected") require(reviewNote.trim().length >= 5) { "Explain why the document was rejected." }
+        val body = JSONObject().put("status", status).put("review_note", reviewNote.trim())
+        return JSONObject(request(baseUrl, "/owner/invitations/$invitationId/documents/$documentId/review", token, "POST", body))
+    }
+
+    fun downloadInvitationDocument(
+        baseUrl: String,
+        token: String,
+        invitationId: Long,
+        documentId: Long
+    ): ByteArray {
+        require(invitationId > 0L && documentId > 0L) { "Select a valid document." }
+        val connection = URL(baseUrl.trimEnd('/') + "/invitations/$invitationId/documents/$documentId/content")
+            .openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 15000
+        connection.readTimeout = 25000
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.setRequestProperty("Cache-Control", "no-store")
+        try {
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val bytes = stream?.use { input ->
+                val out = java.io.ByteArrayOutputStream()
+                val buffer = ByteArray(8192)
+                var total = 0
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read < 0) break
+                    total += read
+                    require(total <= 6 * 1024 * 1024) { "The downloaded document exceeds the allowed size." }
+                    out.write(buffer, 0, read)
+                }
+                out.toByteArray()
+            } ?: ByteArray(0)
+            if (status !in 200..299) {
+                val detail = runCatching { JSONObject(bytes.toString(Charsets.UTF_8)).optString("detail") }.getOrNull()
+                throw IllegalStateException(detail?.takeIf { it.isNotBlank() } ?: "The document could not be downloaded.")
+            }
+            return bytes
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    fun uploadInvitationDocument(
+        context: Context,
+        baseUrl: String,
+        token: String,
+        invitationId: Long,
+        category: String,
+        purpose: String,
+        consentConfirmed: Boolean,
+        uri: Uri
+    ): JSONObject {
+        require(invitationId > 0L) { "Select a valid invitation." }
+        require(category.isNotBlank() && purpose.trim().length >= 10) { "Document category and disclosed purpose are required." }
+        require(consentConfirmed) { "Confirm consent before uploading the document." }
+        val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+            val out = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            var total = 0
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                total += read
+                require(total <= 5 * 1024 * 1024) { "Documents are limited to 5 MiB." }
+                out.write(buffer, 0, read)
+            }
+            out.toByteArray()
+        } ?: throw IllegalStateException("The selected document could not be opened.")
+        require(bytes.isNotEmpty()) { "The selected document is empty." }
+        val resolver = context.contentResolver
+        val mediaType = resolver.getType(uri) ?: "application/octet-stream"
+        val rawName = uri.lastPathSegment?.substringAfterLast('/')?.take(200).orEmpty().ifBlank { "document" }
+        val filename = rawName.replace(Regex("[^A-Za-z0-9._ -]"), "_")
+        val boundary = "StayEasyBoundary" + java.util.UUID.randomUUID().toString().replace("-", "")
+        val output = java.io.ByteArrayOutputStream()
+        fun write(text: String) { output.write(text.toByteArray(Charsets.UTF_8)) }
+        fun field(name: String, value: String) {
+            write("--$boundary\r\n")
+            write("Content-Disposition: form-data; name=\"$name\"\r\n\r\n")
+            write(value)
+            write("\r\n")
+        }
+        field("category", category)
+        field("purpose", purpose.trim())
+        field("consent_confirmed", consentConfirmed.toString())
+        write("--$boundary\r\n")
+        write("Content-Disposition: form-data; name=\"file\"; filename=\"$filename\"\r\n")
+        write("Content-Type: $mediaType\r\n\r\n")
+        output.write(bytes)
+        write("\r\n--$boundary--\r\n")
+        val connection = URL(baseUrl.trimEnd('/') + "/tenant/invitations/$invitationId/documents")
+            .openConnection() as HttpURLConnection
+        connection.requestMethod = "POST"
+        connection.doOutput = true
+        connection.connectTimeout = 15000
+        connection.readTimeout = 25000
+        connection.setRequestProperty("Authorization", "Bearer $token")
+        connection.setRequestProperty("Accept", "application/json")
+        connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+        val payload = output.toByteArray()
+        connection.setFixedLengthStreamingMode(payload.size)
+        try {
+            connection.outputStream.use { it.write(payload) }
+            val status = connection.responseCode
+            val stream = if (status in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            if (status !in 200..299) {
+                val detail = runCatching { JSONObject(text).optString("detail") }.getOrNull()
+                throw IllegalStateException(detail?.takeIf { it.isNotBlank() } ?: "The document upload failed.")
+            }
+            return JSONObject(text)
+        } finally {
+            connection.disconnect()
+        }
     }
 
     fun updateVisit(baseUrl: String, token: String, visitId: Long, status: String): JSONObject {
@@ -680,7 +939,9 @@ internal object StayApiClient {
         billingPeriod: String,
         dueDate: String,
         paymentReference: String,
-        description: String
+        description: String,
+        reservationId: Long? = null,
+        amountPaise: Long? = null
     ): JSONObject {
         require(propertyId > 0L) { "Enter a valid server property ID." }
         require(amount > 0) { "Enter an amount greater than zero." }
@@ -709,6 +970,11 @@ internal object StayApiClient {
             .put("provider_status", "manual_record")
             .put("description", description.trim())
             .put("status", safeStatus)
+        amountPaise?.let {
+            require(it > 0L) { "Enter an amount greater than zero." }
+            body.put("amount_paise", it)
+        }
+        reservationId?.takeIf { it > 0L }?.let { body.put("reservation_id", it) }
         if (residentStayId != null) {
             require(residentStayId > 0L) { "Enter a valid resident stay ID." }
             body.put("resident_stay_id", residentStayId)
