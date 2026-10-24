@@ -1167,7 +1167,20 @@ def update_visit_status_action(visit_id: int, body: VisitStatus, actor: dict = D
     db.refresh(item)
     return {"id": item.id, "status": item.status, "outcome": item.outcome, "preferred_at": item.preferred_at.isoformat()}
 
-def invitation_unit_state(db: Session, unit: m.PropertyUnit) -> str:
+def invitation_unit_state(
+    db: Session,
+    unit: m.PropertyUnit,
+    exclude_invitation_id: int | None = None,
+) -> str:
+    proposed_hold = db.scalar(
+        select(m.PropertyInvitation.id).where(
+            m.PropertyInvitation.proposed_unit_id == unit.id,
+            m.PropertyInvitation.status == "reassignment_pending",
+            m.PropertyInvitation.id != (exclude_invitation_id or -1),
+        ).limit(1)
+    )
+    if proposed_hold:
+        return "reserved"
     """Check reservation/stay records before trusting a stored unit availability label."""
     if unit.status in {"maintenance", "inactive"}:
         return unit.status
