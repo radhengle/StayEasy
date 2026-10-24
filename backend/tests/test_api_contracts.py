@@ -368,3 +368,100 @@ def test_maintenance_issues_are_scoped_to_staff_permissions():
 
     view_only_update = client.patch(f"/owner/issues/{issue_a['id']}", json={"status": "resolved"})
     assert view_only_update.status_code == 403
+
+
+def test_resident_ledger_is_scoped_to_the_authenticated_resident():
+    property_a, unit_a = setup_property(owner_id="owner-a")
+    property_b, unit_b = setup_property(owner_id="owner-b")
+
+    set_actor("owner-a", "owner")
+    stay_a = client.post("/owner/stays", json={
+        "property_id": property_a["id"], "unit_id": unit_a["id"], "resident_id": "resident-a",
+        "joining_date": "2026-10-01", "agreed_monthly_rent": 9000, "deposit_held": 18000,
+    })
+    assert stay_a.status_code == 201, stay_a.text
+
+    set_actor("owner-b", "owner")
+    stay_b = client.post("/owner/stays", json={
+        "property_id": property_b["id"], "unit_id": unit_b["id"], "resident_id": "resident-b",
+        "joining_date": "2026-10-01", "agreed_monthly_rent": 8500, "deposit_held": 15000,
+    })
+    assert stay_b.status_code == 201, stay_b.text
+
+    with SessionLocal() as db:
+        for prop, stay_id, amount, creator in [
+            (property_a, stay_a.json()["id"], 9000, "owner-a"),
+            (property_b, stay_b.json()["id"], 8500, "owner-b"),
+        ]:
+            db.add(m.LedgerEntry(
+                property_id=prop["id"], resident_stay_id=stay_id, category="rent_charge",
+                amount=amount, billing_period="2026-11", description="November rent",
+                status="open", provider_status="manual_record", created_by=creator,
+            ))
+        db.commit()
+
+    set_actor("resident-a", "customer")
+    resident_a_rows = client.get("/ledger/me")
+    assert resident_a_rows.status_code == 200, resident_a_rows.text
+    assert resident_a_rows.json()
+    assert {row["resident_stay_id"] for row in resident_a_rows.json()} == {stay_a.json()["id"]}
+    assert {row["property_id"] for row in resident_a_rows.json()} == {property_a["id"]}
+
+    set_actor("resident-b", "customer")
+    resident_b_rows = client.get("/ledger/me")
+    assert resident_b_rows.status_code == 200, resident_b_rows.text
+    assert {row["resident_stay_id"] for row in resident_b_rows.json()} == {stay_b.json()["id"]}
+
+
+def test_owner_ledger_is_scoped_and_manual_payment_cannot_claim_provider_verification():
+    property_a, _ = setup_property(owner_id="owner-a")
+    property_b, _ = setup_property(owner_id="owner-b")
+
+    set_actor("owner-a", "owner")
+    manually_recorded = client.post("/owner/ledger", json={
+        "property_id": property_a["id"], "category": "payment", "amount": 9000,
+        "provider_status": "manual_record", "status": "recorded",
+        "description": "Cash payment noted by owner",
+    })
+    assert manually_recorded.status_code == 201, manually_recorded.text
+
+    falsely_confirmed = client.post("/owner/ledger", json={
+        "property_id": property_a["id"], "category": "payment", "amount": 9000,
+        "provider_status": "provider_confirmed", "status": "paid",
+    })
+    assert falsely_confirmed.status_code == 422, falsely_confirmed.text
+
+    with SessionLocal() as db:
+        db.add(m.LedgerEntry(
+            property_id=property_b["id"], category="rent_charge", amount=8500,
+            billing_period="2026-11", description="Other owner's rent",
+            status="open", provider_status="manual_record", created_by="owner-b",
+        ))
+        db.commit()
+
+    owner_rows = client.get("/owner/ledger")
+    assert owner_rows.status_code == 200, owner_rows.text
+    assert owner_rows.json()
+    assert {row["property_id"] for row in owner_rows.json()} == {property_a["id"]}
+    assert any(row["id"] == manually_recorded.json()["id"] for row in owner_rows.json())
+    scoped_rows = client.get("/owner/ledger", params={"property_id": property_b["id"]})
+    assert scoped_rows.status_code == 403, scoped_rows.text
+
+
+def test_move_in_deposit_is_added_to_the_resident_ledger_as_manual_record():
+    prop, unit = setup_property(owner_id="owner-1")
+    set_actor("owner-1", "owner")
+    stay = client.post("/owner/stays", json={
+        "property_id": prop["id"], "unit_id": unit["id"], "resident_id": "resident-deposit",
+        "joining_date": "2026-10-01", "agreed_monthly_rent": 9000, "deposit_held": 18000,
+    })
+    assert stay.status_code == 201, stay.text
+
+    set_actor("resident-deposit", "customer")
+    response = client.get("/ledger/me")
+    assert response.status_code == 200, response.text
+    deposits = [row for row in response.json() if row["category"] == "deposit"]
+    assert len(deposits) == 1
+    assert deposits[0]["amount"] == 18000
+    assert deposits[0]["provider_status"] == "manual_record"
+    assert deposits[0]["status"] == "held"
