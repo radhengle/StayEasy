@@ -26,7 +26,7 @@ os.environ.setdefault("DEV_TOKEN_PASSWORD", "local-only-postgres-test-password")
 
 from fastapi import Request
 from fastapi.testclient import TestClient
-from sqlalchemy import and_, or_, select
+from sqlalchemy import select
 
 from backend.app import main as api
 from backend.app import models as m
