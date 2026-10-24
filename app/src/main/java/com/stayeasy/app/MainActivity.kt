@@ -706,8 +706,22 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "add_resident" -> AddResidentScreen(residentPropertyName, residentBedOptions, { name, phone, rent, bed, joiningDate ->
                     StayRecordStore.add(context, StayRecord(category = "residents", title = name, person = phone, property = residentPropertyName, amount = rent, unit = bed, status = "Active", details = "Resident manually added in the local prototype. Joining date: $joiningDate. Monthly rent: ${money(rent)}."))
                     StayRecordStore.add(context, StayRecord(category = "stays", title = "Stay · $name", details = "Resident assigned to $bed at $residentPropertyName. Joining date: $joiningDate. Confirm agreement terms and first payment.", person = name, property = residentPropertyName, unit = bed, date = joiningDate, amount = rent, status = "Active"))
+                    val existingBed = StayRecordStore.load(context, "beds").firstOrNull { it.property == residentPropertyName && it.unit == bed }
+                    if (existingBed != null) {
+                        StayRecordStore.update(context, "beds", existingBed.copy(
+                            status = "Occupied",
+                            person = name,
+                            details = "Assigned to $name. Joining date: $joiningDate. Monthly rent: ${money(rent)}."
+                        ))
+                    } else {
+                        StayRecordStore.add(context, StayRecord(
+                            category = "beds", title = bed, property = residentPropertyName, unit = bed,
+                            person = name, status = "Occupied",
+                            details = "Assigned to $name. Joining date: $joiningDate. Monthly rent: ${money(rent)}."
+                        ))
+                    }
                     StayRecordStore.notify(context, "Resident added", "$name · $bed")
-                    notify("Resident and stay records saved on this device")
+                    notify("Resident and stay records saved; $bed marked occupied")
                     route = "records:residents"
                 }, { route = "records:residents" })
                 "owner_payments" -> FeatureRecordsScreen("payments", ownerMode = true) { route = "feature_hub" }
