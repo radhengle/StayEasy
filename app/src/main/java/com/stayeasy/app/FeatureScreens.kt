@@ -239,10 +239,14 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
     val sessionToken = StayApiClient.currentSessionToken(apiPreferences.apiBaseUrl)
     val remoteScope = rememberCoroutineScope()
     var remoteSyncMessage by remember(category) { mutableStateOf("") }
+    var remoteSyncing by remember(category) { mutableStateOf(false) }
+    var serverRefreshRequest by remember(category) { mutableIntStateOf(0) }
     val financeCategories = setOf("payments", "charges", "deposits", "expenses", "food")
     val isFinanceCategory = category in financeCategories
     val serverFinanceMode = ownerMode && isFinanceCategory && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()
     val readOnlyServerFinance = !ownerMode && isFinanceCategory && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()
+    val serverOwnerStayMode = ownerMode && category in setOf("residents", "stays") &&
+        apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()
     var showBillingDialog by remember(category) { mutableStateOf(false) }
     var billingPropertyIdText by remember(category) { mutableStateOf("") }
     var billingPeriodText by remember(category) { mutableStateOf(java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM"))) }
@@ -304,8 +308,9 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             source = "Server"
         )
     }
-    LaunchedEffect(category, apiPreferences.apiBaseUrl, sessionToken, ownerMode) {
-        if ((category in setOf("enquiries", "reservations", "visits", "issues") || isFinanceCategory) && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()) {
+    LaunchedEffect(category, apiPreferences.apiBaseUrl, sessionToken, ownerMode, serverRefreshRequest) {
+        if ((category in setOf("enquiries", "reservations", "visits", "issues") || isFinanceCategory || serverOwnerStayMode) && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()) {
+            remoteSyncing = true
             try {
                 val pulled = withContext(Dispatchers.IO) {
                     when (category) {
@@ -350,6 +355,58 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                                 source = "Server"
                             )
                         }
+                        "residents", "stays" -> StayApiClient.ownerStays(apiPreferences.apiBaseUrl, sessionToken).mapNotNull { row ->
+                            val stayId = row.optLong("id")
+                            if (stayId <= 0L) return@mapNotNull null
+                            val residentName = row.optString("resident_name").ifBlank { "Resident ${row.optString("resident_id").take(8)}" }
+                            val residentEmail = row.optString("resident_email")
+                            val propertyName = row.optString("property_name", "Property #${row.optLong("property_id")}")
+                            val roomCode = row.optString("room_code")
+                            val unitCode = row.optString("unit_code")
+                            val unitLabel = listOf(roomCode, unitCode).filter { it.isNotBlank() }.joinToString(" · ")
+                            val rawStatus = row.optString("status", "active").lowercase(Locale.ROOT).replace('_', ' ')
+                            val displayStatus = if (category == "residents") {
+                                when (rawStatus) {
+                                    "active" -> "Active"
+                                    "notice given" -> "Notice given"
+                                    "completed", "cancelled" -> "Former"
+                                    else -> "Upcoming"
+                                }
+                            } else {
+                                when (rawStatus) {
+                                    "active" -> "Active"
+                                    "notice given" -> "Notice given"
+                                    "completed" -> "Completed"
+                                    "cancelled" -> "Cancelled"
+                                    else -> rawStatus.replaceFirstChar { it.uppercase(Locale.ROOT) }
+                                }
+                            }
+                            val details = buildString {
+                                append("Server-confirmed stay #").append(stayId)
+                                if (residentEmail.isNotBlank()) append("\nCustomer email: ").append(residentEmail)
+                                if (row.optInt("deposit_held") > 0) append("\nSecurity deposit recorded: ").append(moneyText(row.optInt("deposit_held")))
+                                val agreement = row.optString("agreement_reference")
+                                if (agreement.isNotBlank()) append("\nAgreement reference: ").append(agreement)
+                            }
+                            val timestamp = runCatching {
+                                java.time.Instant.parse(row.optString("created_at")).toEpochMilli()
+                            }.getOrDefault(System.currentTimeMillis())
+                            StayRecord(
+                                id = if (category == "residents") "server-resident-stay-$stayId" else "server-stay-$stayId",
+                                category = category,
+                                title = if (category == "residents") residentName else "Stay · $residentName",
+                                details = details,
+                                status = displayStatus,
+                                amount = row.optInt("agreed_monthly_rent"),
+                                person = residentEmail,
+                                property = propertyName,
+                                unit = unitLabel,
+                                date = row.optString("joining_date"),
+                                createdAt = timestamp,
+                                updatedAt = timestamp,
+                                source = "Server"
+                            )
+                        }
                         "payments", "charges", "deposits", "expenses", "food" -> {
                             val ledgerRows = if (ownerMode) StayApiClient.ownerLedger(apiPreferences.apiBaseUrl, sessionToken)
                                 else StayApiClient.myLedger(apiPreferences.apiBaseUrl, sessionToken)
@@ -373,7 +430,11 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                 remoteSyncMessage = "Synced ${pulled.size} server record(s)"
             } catch (e: Exception) {
                 remoteSyncMessage = "Server sync unavailable: ${e.message ?: "check the current API session"}"
+            } finally {
+                remoteSyncing = false
             }
+        } else {
+            remoteSyncing = false
         }
     }
     var showEditor by remember(category) { mutableStateOf(false) }
