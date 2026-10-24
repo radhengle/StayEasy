@@ -676,7 +676,11 @@ def update_reservation(reservation_id: int, body: ReservationStatus, actor: dict
     }
     if body.status != item.status and body.status not in allowed_transitions.get(item.status, set()):
         raise HTTPException(409, f"Cannot move reservation from {item.status} to {body.status}")
-    old = {"status": item.status}; item.status = body.status; item.expires_at = body.expires_at or item.expires_at; item.cancellation_reason = body.cancellation_reason
+    old = {"status": item.status, "expires_at": item.expires_at.isoformat() if item.expires_at else None}
+    item.status = body.status
+    # A confirmed or closed request is no longer a 24-hour pending hold.
+    item.expires_at = body.expires_at
+    item.cancellation_reason = body.cancellation_reason
     if item.unit_id:
         unit = db.get(m.PropertyUnit, item.unit_id)
         if unit:
