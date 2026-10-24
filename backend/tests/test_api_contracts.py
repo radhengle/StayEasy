@@ -99,9 +99,13 @@ def test_enquiry_and_visit_creation_emit_owner_notifications():
     assert visit_rows.status_code == 200, visit_rows.text
     assert visit_rows.json()[0]["property_name"] == "Test House"
     set_actor("owner-1", "owner")
+    invalid_enquiry_transition = client.post(f"/owner/enquiries/{enquiry.json()['id']}/status", json={"status": "converted"})
+    assert invalid_enquiry_transition.status_code == 409
     enquiry_status = client.post(f"/owner/enquiries/{enquiry.json()['id']}/status", json={"status": "contacted", "owner_response": "We can arrange a visit."})
     assert enquiry_status.status_code == 200, enquiry_status.text
     assert enquiry_status.json()["status"] == "contacted"
+    invalid_visit_transition = client.post(f"/owner/visits/{visit.json()['id']}/status", json={"status": "completed"})
+    assert invalid_visit_transition.status_code == 409
     visit_status = client.post(f"/owner/visits/{visit.json()['id']}/status", json={"status": "confirmed", "outcome": "Confirmed for the requested time."})
     assert visit_status.status_code == 200, visit_status.text
     assert visit_status.json()["status"] == "confirmed"
@@ -124,6 +128,8 @@ def test_reservations_block_duplicate_active_unit():
     second = client.post("/reservations", json=payload)
     assert second.status_code == 409, second.text
     set_actor("owner-1", "owner")
+    invalid_status_update = client.post(f"/owner/reservations/{first.json()['id']}/status", json={"status": "checked_in"})
+    assert invalid_status_update.status_code == 409
     status_update = client.post(f"/owner/reservations/{first.json()['id']}/status", json={"status": "confirmed"})
     assert status_update.status_code == 200, status_update.text
     assert status_update.json()["status"] == "confirmed"
