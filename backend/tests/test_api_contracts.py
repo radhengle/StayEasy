@@ -652,6 +652,222 @@ def test_enquiry_and_visit_creation_emit_owner_notifications():
     assert len(messages.json()) >= 2
 
 
+def _create_verified_customer(user_id: str, email: str, name: str = "Invited Tenant"):
+    with SessionLocal() as db:
+        if db.get(m.User, user_id) is None:
+            db.add(m.User(
+                id=user_id, email=email, display_name=name, phone="5550101",
+                role="customer", is_active=True,
+            ))
+            db.add(m.UserCredential(
+                user_id=user_id,
+                password_hash="test-only-hash",
+                email_verified_at=datetime.now(timezone.utc),
+            ))
+            db.commit()
+
+
+def test_owner_invites_specific_tenant_and_acceptance_reserves_only_once_with_acknowledged_proration():
+    prop, unit = setup_property(owner_id="owner-1")
+    _create_verified_customer("invite-tenant-1", "invite-tenant-1@example.test", "Taylor Tenant")
+    _create_verified_customer("invite-tenant-2", "invite-tenant-2@example.test", "Jordan Tenant")
+
+    set_actor("owner-1", "owner")
+    first = client.post("/owner/invitations", json={
+        "property_id": prop["id"], "unit_id": unit["id"],
+        "recipient_email": "invite-tenant-1@example.test", "recipient_name": "Taylor Tenant",
+        "recipient_phone": "5550101", "move_in_date": (date.today() + timedelta(days=10)).isoformat(),
+    })
+    assert first.status_code == 201, first.text
+    first_body = first.json()
+    assert first_body["status"] == "pending"
+    assert first_body["unit_id"] == unit["id"]
+    assert first_body["invitation_url"].startswith("stayeasy://invitation/")
+    token = first_body["invitation_url"].split("/")[-1]
+    assert first_body["token_returned_once"] is True
+
+    # A second tenant may be invited, but the bed is not held until a tenant submits registration.
+    second = client.post("/owner/invitations", json={
+        "property_id": prop["id"], "unit_id": unit["id"],
+        "recipient_email": "invite-tenant-2@example.test", "recipient_name": "Jordan Tenant",
+        "move_in_date": (date.today() + timedelta(days=12)).isoformat(),
+    })
+    assert second.status_code == 201, second.text
+
+    with SessionLocal() as db:
+        stored = db.get(m.PropertyInvitation, first_body["id"])
+        assert stored.token_hash != token
+        assert len(stored.token_hash) == 64
+        assert token not in stored.token_hash
+
+    set_actor("invite-tenant-1", "customer")
+    invitation_list = client.get("/tenant/invitations")
+    assert invitation_list.status_code == 200, invitation_list.text
+    assert any(item["id"] == first_body["id"] for item in invitation_list.json())
+    assert all("invitation_url" not in item for item in invitation_list.json())
+
+    resolved = client.get("/invitations/resolve", params={"token": token})
+    assert resolved.status_code == 200, resolved.text
+    resolved_body = resolved.json()
+    assert resolved_body["property_name"] == prop["name"]
+    assert resolved_body["unit_code"] == unit["unit_code"]
+    assert resolved_body["recipient_email"] == "invite-tenant-1@example.test"
+    quote = resolved_body["billable_quote"]
+    assert quote["billable_start_date"] == date.today().isoformat()
+    assert quote["days_in_billing_month"] in {28, 29, 30, 31}
+    assert quote["billable_days"] == quote["days_in_billing_month"] - date.today().day + 1
+    assert quote["first_period_rent_paise"] >= 0
+
+    missing_ack = client.post("/invitations/accept", json={
+        "token": token, "billable_start_date": date.today().isoformat(),
+        "billable_terms_acknowledged": False,
+    })
+    assert missing_ack.status_code == 422, missing_ack.text
+
+    accepted = client.post("/invitations/accept", json={
+        "token": token, "billable_start_date": date.today().isoformat(),
+        "billable_terms_acknowledged": True,
+    })
+    assert accepted.status_code == 201, accepted.text
+    accepted_body = accepted.json()
+    assert accepted_body["status"] == "pending"
+    assert accepted_body["billing_status"] == "rent_due_recorded_registration_completed"
+    assert accepted_body["charge_created"] is True
+    assert accepted_body["charge_amount_paise"] == quote["first_period_rent_paise"]
+    assert accepted_body["billable_quote"]["first_period_rent_paise"] == quote["first_period_rent_paise"]
+
+    set_actor("owner-1", "owner")
+    ledger = client.get("/owner/ledger", params={"property_id": prop["id"]})
+    assert ledger.status_code == 200, ledger.text
+    rent_charge = next(row for row in ledger.json() if row["reservation_id"] == accepted_body["reservation_id"] and row["category"] == "rent_charge")
+    assert rent_charge["amount_paise"] == quote["first_period_rent_paise"]
+    assert rent_charge["amount_precise"] == quote["first_period_rent"]
+    assert rent_charge["status"] == "open"
+    assert rent_charge["due_date"] == quote["billable_start_date"]
+    assert "No money has been collected" in rent_charge["description"]
+
+    unit_rows = client.get("/owner/units", params={"property_id": prop["id"]})
+    assert unit_rows.status_code == 200, unit_rows.text
+    assert next(row for row in unit_rows.json() if row["id"] == unit["id"])["status"] == "reserved"
+
+    set_actor("invite-tenant-2", "customer")
+    competing_acceptance = client.post("/invitations/accept", json={
+        "token": second.json()["invitation_url"].split("/")[-1],
+        "billable_start_date": date.today().isoformat(),
+        "billable_terms_acknowledged": True,
+    })
+    assert competing_acceptance.status_code == 409, competing_acceptance.text
+
+    set_actor("owner-1", "owner")
+    notifications = client.get("/notifications")
+    assert notifications.status_code == 200, notifications.text
+    assert any("Tenant registration submitted" in row["title"] for row in notifications.json())
+
+
+def test_cancelling_unpaid_invitation_reservation_voids_rent_charge():
+    prop, unit = setup_property(owner_id="owner-1")
+    _create_verified_customer("cancel-tenant-1", "cancel-tenant-1@example.test", "Cancel Tenant")
+    set_actor("owner-1", "owner")
+    invitation = client.post("/owner/invitations", json={
+        "property_id": prop["id"], "unit_id": unit["id"],
+        "recipient_email": "cancel-tenant-1@example.test", "recipient_name": "Cancel Tenant",
+        "move_in_date": (date.today() + timedelta(days=4)).isoformat(),
+    })
+    assert invitation.status_code == 201, invitation.text
+    token = invitation.json()["invitation_url"].split("/")[-1]
+
+    set_actor("cancel-tenant-1", "customer")
+    accepted = client.post("/invitations/accept", json={
+        "token": token, "billable_start_date": date.today().isoformat(),
+        "billable_terms_acknowledged": True,
+    })
+    assert accepted.status_code == 201, accepted.text
+    reservation_id = accepted.json()["reservation_id"]
+
+    set_actor("owner-1", "owner")
+    cancelled = client.post(f"/owner/reservations/{reservation_id}/status", json={"status": "cancelled"})
+    assert cancelled.status_code == 200, cancelled.text
+    ledger = client.get("/owner/ledger", params={"property_id": prop["id"]})
+    assert ledger.status_code == 200, ledger.text
+    invoice = next(row for row in ledger.json() if row["reservation_id"] == reservation_id and row["category"] == "rent_charge")
+    assert invoice["status"] == "cancelled"
+    assert cancelled.json()["cancelled_rent_charge_ids"] == [invoice["id"]]
+    units = client.get("/owner/units", params={"property_id": prop["id"]})
+    assert next(row for row in units.json() if row["id"] == unit["id"])["status"] == "available"
+
+
+def test_registration_charge_cannot_be_voided_after_a_payment_was_recorded():
+    prop, unit = setup_property(owner_id="owner-1")
+    _create_verified_customer("paid-tenant-1", "paid-tenant-1@example.test", "Paid Tenant")
+    set_actor("owner-1", "owner")
+    invitation = client.post("/owner/invitations", json={
+        "property_id": prop["id"], "unit_id": unit["id"],
+        "recipient_email": "paid-tenant-1@example.test", "recipient_name": "Paid Tenant",
+        "move_in_date": (date.today() + timedelta(days=4)).isoformat(),
+    })
+    assert invitation.status_code == 201, invitation.text
+    token = invitation.json()["invitation_url"].split("/")[-1]
+    set_actor("paid-tenant-1", "customer")
+    accepted = client.post("/invitations/accept", json={
+        "token": token, "billable_start_date": date.today().isoformat(),
+        "billable_terms_acknowledged": True,
+    })
+    assert accepted.status_code == 201, accepted.text
+    reservation_id = accepted.json()["reservation_id"]
+
+    set_actor("owner-1", "owner")
+    payment = client.post("/owner/ledger", json={
+        "property_id": prop["id"], "reservation_id": reservation_id,
+        "category": "payment", "amount": 250, "billing_period": date.today().strftime("%Y-%m"),
+        "payment_method": "manual", "payment_reference": "test receipt",
+        "description": "Test payment entry; provider settlement is not implied.",
+    })
+    assert payment.status_code == 201, payment.text
+    cancelled = client.post(f"/owner/reservations/{reservation_id}/status", json={"status": "cancelled"})
+    assert cancelled.status_code == 409, cancelled.text
+    with SessionLocal() as db:
+        reservation = db.get(m.Reservation, reservation_id)
+        charge = db.scalar(select(m.LedgerEntry).where(
+            m.LedgerEntry.reservation_id == reservation_id,
+            m.LedgerEntry.category == "rent_charge",
+        ))
+        assert reservation.status == "pending"
+        assert charge.status == "open"
+
+
+def test_owner_can_reassign_pending_invitation_and_tenant_sees_updated_bed_terms():
+    prop, original_unit = setup_property(owner_id="owner-1")
+    set_actor("owner-1", "owner")
+    replacement = client.post(f"/owner/properties/{prop['id']}/units", json={
+        "floor_label": "Second", "room_code": "202", "unit_code": "202-B",
+        "rentable_type": "bed", "sharing_capacity": 3, "monthly_rent": 10500, "deposit": 21000,
+    })
+    assert replacement.status_code == 201, replacement.text
+    created = client.post("/owner/invitations", json={
+        "property_id": prop["id"], "unit_id": original_unit["id"],
+        "recipient_email": "not-yet-registered@example.test", "recipient_name": "New Tenant",
+        "move_in_date": (date.today() + timedelta(days=14)).isoformat(),
+    })
+    assert created.status_code == 201, created.text
+    token = created.json()["invitation_url"].split("/")[-1]
+
+    reassigned = client.post(f"/owner/invitations/{created.json()['id']}/reassign", json={
+        "new_unit_id": replacement.json()["id"],
+        "reason": "The original bed is being repaired; this replacement is available.",
+    })
+    assert reassigned.status_code == 200, reassigned.text
+    assert reassigned.json()["unit_id"] == replacement.json()["id"]
+    assert reassigned.json()["monthly_rent"] == 10500
+    assert reassigned.json()["reassignment_reason"].startswith("The original bed")
+
+    public = client.get("/invitations/resolve", params={"token": token})
+    assert public.status_code == 200, public.text
+    assert public.json()["unit_code"] == "202-B"
+    assert public.json()["monthly_rent"] == 10500
+    assert public.json()["reassignment_reason"].startswith("The original bed")
+
+
+
 def test_reservations_block_duplicate_active_unit():
     prop, unit = setup_property()
     set_actor("customer-1", "customer")
