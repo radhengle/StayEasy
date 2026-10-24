@@ -285,7 +285,7 @@ def can_manage_property(db: Session, actor: dict[str, Any], prop: m.Property, pe
     permissions = set(assignment.permissions or []) if assignment else set()
     accepted = {permission, "*"}
     if permission == "maintenance.manage": accepted.add("issues.manage")
-    if permission == "maintenance.view": accepted.update({"issues.view", "issues.manage", "maintenance.manage"})
+    if permission == "maintenance.view": accepted.add("issues.view")
     return bool(permissions.intersection(accepted))
 
 def require_property_manager(db: Session, actor: dict[str, Any], property_id: int, permission: str = "property.manage") -> m.Property:

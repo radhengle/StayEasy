@@ -352,3 +352,19 @@ def test_maintenance_issues_are_scoped_to_staff_permissions():
 
     denied = client.patch(f"/owner/issues/{issue_b['id']}", json={"status": "resolved"})
     assert denied.status_code == 403
+
+    with SessionLocal() as db:
+        db.add(m.StaffAssignment(
+            owner_id="owner-a", staff_user_id="maintenance-viewer", property_id=property_a["id"],
+            role="maintenance", permissions=["maintenance.view"], status="active"
+        ))
+        db.commit()
+
+    set_actor("maintenance-viewer", "staff")
+    view_only = client.get("/issues")
+    assert view_only.status_code == 200, view_only.text
+    assert len(view_only.json()) == 1
+    assert view_only.json()[0]["property_id"] == property_a["id"]
+
+    view_only_update = client.patch(f"/owner/issues/{issue_a['id']}", json={"status": "resolved"})
+    assert view_only_update.status_code == 403
