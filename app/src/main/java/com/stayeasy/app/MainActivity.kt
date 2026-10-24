@@ -66,6 +66,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -191,6 +192,13 @@ internal data class RemoteUnit(
     val monthlyRent: Int,
     val deposit: Int,
     val status: String
+)
+
+internal data class RemoteResidentCandidate(
+    val id: String,
+    val displayName: String,
+    val email: String,
+    val emailVerified: Boolean
 )
 
 internal data class PgListing(
@@ -407,6 +415,11 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     var selectedId by remember { mutableLongStateOf(101L) }
     var residentPropertyName by remember { mutableStateOf("CityNest Living") }
     var residentBedOptions by remember { mutableStateOf(listOf("Room 101 · Bed A", "Room 101 · Bed B")) }
+    var residentListing by remember { mutableStateOf<PgListing?>(null) }
+    var residentCandidates by remember { mutableStateOf<List<RemoteResidentCandidate>>(emptyList()) }
+    var residentCandidatesLoading by remember { mutableStateOf(false) }
+    var residentCandidatesError by remember { mutableStateOf("") }
+    var residentStaySubmitting by remember { mutableStateOf(false) }
     var comparisonIds by remember { mutableStateOf<List<Long>>(emptyList()) }
     var location by remember { mutableStateOf("Pune, Maharashtra") }
     var searchQuery by remember { mutableStateOf("") }
@@ -421,6 +434,38 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val notify: (String) -> Unit = { message -> scope.launch { snackbar.showSnackbar(message) } }
+    val loadResidentCandidates: (Long) -> Unit = { propertyId ->
+        residentCandidates = emptyList()
+        residentCandidatesError = ""
+        val baseUrl = preferences.apiBaseUrl.trim()
+        val token = if (baseUrl.isNotBlank()) StayApiClient.currentSessionToken(baseUrl) else null
+        if (propertyId <= 0L) {
+            residentCandidatesLoading = false
+            residentCandidatesError = "This property is not connected to the StayEasy server."
+        } else if (token == null) {
+            residentCandidatesLoading = false
+            residentCandidatesError = "Sign in with an owner-authorized account to load verified residents."
+        } else {
+            residentCandidatesLoading = true
+            scope.launch {
+                try {
+                    val rows = withContext(Dispatchers.IO) {
+                        StayApiClient.ownerResidentCandidates(baseUrl, token, propertyId)
+                    }
+                    if (residentListing?.serverPropertyId == propertyId) {
+                        residentCandidates = rows
+                        residentCandidatesError = ""
+                    }
+                } catch (e: Exception) {
+                    if (residentListing?.serverPropertyId == propertyId) {
+                        residentCandidatesError = e.message ?: "Could not load verified residents. Check owner access and retry."
+                    }
+                } finally {
+                    if (residentListing?.serverPropertyId == propertyId) residentCandidatesLoading = false
+                }
+            }
+        }
+    }
     LaunchedEffect(preferences.apiBaseUrl, ownerMode) {
         val baseUrl = preferences.apiBaseUrl.trim()
         val token = if (baseUrl.isNotBlank()) StayApiClient.currentSessionToken(baseUrl) else null
@@ -758,10 +803,16 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     notify("${listing.name} updated in local demo search")
                     route = "owner_properties"
                 }, onCancel = { route = "owner_properties" }, initial = selectedListing)
-                "owner_beds" -> OwnerBedsScreen(ownerListings, selectedId, { propertyName, bedOptions ->
-                    residentPropertyName = propertyName
+                "owner_beds" -> OwnerBedsScreen(ownerListings, selectedId, { listing, bedOptions ->
+                    residentPropertyName = listing.name
                     residentBedOptions = bedOptions
+                    residentListing = listing
+                    residentCandidates = emptyList()
+                    residentCandidatesError = ""
+                    residentCandidatesLoading = false
+                    residentStaySubmitting = false
                     route = "add_resident"
+                    listing.serverPropertyId?.let { loadResidentCandidates(it) }
                 }, { listing, unit, status ->
                     val baseUrl = preferences.apiBaseUrl.trim()
                     val token = if (baseUrl.isNotBlank()) StayApiClient.currentSessionToken(baseUrl) else null
@@ -797,27 +848,130 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 }, { notify(it) }, { route = "owner_properties" })
                 "owner_enquiries" -> FeatureRecordsScreen("enquiries", ownerMode = true) { route = "feature_hub" }
                 "owner_residents" -> FeatureRecordsScreen("residents", ownerMode = true) { route = "feature_hub" }
-                "add_resident" -> AddResidentScreen(residentPropertyName, residentBedOptions, { name, phone, rent, bed, joiningDate ->
-                    StayRecordStore.add(context, StayRecord(category = "residents", title = name, person = phone, property = residentPropertyName, amount = rent, unit = bed, status = "Active", details = "Resident manually added in the local prototype. Joining date: $joiningDate. Monthly rent: ${money(rent)}."))
-                    StayRecordStore.add(context, StayRecord(category = "stays", title = "Stay · $name", details = "Resident assigned to $bed at $residentPropertyName. Joining date: $joiningDate. Confirm agreement terms and first payment.", person = name, property = residentPropertyName, unit = bed, date = joiningDate, amount = rent, status = "Active"))
-                    val existingBed = StayRecordStore.load(context, "beds").firstOrNull { it.property == residentPropertyName && it.unit == bed }
-                    if (existingBed != null) {
-                        StayRecordStore.update(context, "beds", existingBed.copy(
-                            status = "Occupied",
-                            person = name,
-                            details = "Assigned to $name. Joining date: $joiningDate. Monthly rent: ${money(rent)}."
-                        ))
+                "add_resident" -> {
+                    val activeListing = residentListing
+                    if (activeListing?.serverPropertyId != null) {
+                        AddServerResidentScreen(
+                            listing = activeListing,
+                            candidates = residentCandidates,
+                            candidatesLoading = residentCandidatesLoading,
+                            candidatesError = residentCandidatesError,
+                            isSubmitting = residentStaySubmitting,
+                            onRetryCandidates = { activeListing.serverPropertyId?.let { loadResidentCandidates(it) } },
+                            onCancel = { route = "owner_beds" },
+                            onCreateStay = { candidate, unit, rent, deposit, joiningDate ->
+                                val serverPropertyId = activeListing.serverPropertyId
+                                val baseUrl = preferences.apiBaseUrl.trim()
+                                val token = if (baseUrl.isNotBlank()) StayApiClient.currentSessionToken(baseUrl) else null
+                                if (serverPropertyId == null) {
+                                    residentCandidatesError = "This property is not connected to the StayEasy server."
+                                } else if (token == null) {
+                                    residentCandidatesError = "Sign in with an owner-authorized account before assigning a resident."
+                                } else if (!residentStaySubmitting) {
+                                    residentStaySubmitting = true
+                                    residentCandidatesError = ""
+                                    scope.launch {
+                                        try {
+                                            val created = withContext(Dispatchers.IO) {
+                                                StayApiClient.createOwnerStay(
+                                                    baseUrl = baseUrl,
+                                                    token = token,
+                                                    propertyId = serverPropertyId,
+                                                    unitId = unit.id,
+                                                    residentId = candidate.id,
+                                                    joiningDate = joiningDate,
+                                                    agreedMonthlyRent = rent,
+                                                    depositHeld = deposit
+                                                )
+                                            }
+                                            val refreshedRows = runCatching {
+                                                withContext(Dispatchers.IO) {
+                                                    StayApiClient.ownerProperties(baseUrl, token)
+                                                }
+                                            }.getOrNull()
+                                            if (refreshedRows != null) {
+                                                remoteOwnerListings.clear()
+                                                remoteOwnerListings.addAll(refreshedRows)
+                                                val refreshedListing = refreshedRows.firstOrNull { it.serverPropertyId == serverPropertyId }
+                                                if (refreshedListing != null) {
+                                                    val localIndex = customListings.indexOfFirst { it.serverPropertyId == serverPropertyId }
+                                                    if (localIndex >= 0) customListings[localIndex] = refreshedListing
+                                                    ListingStore.save(context, customListings.toList())
+                                                }
+                                            }
+                                            val roomNumber = unit.roomCode.removePrefix("ROOM-").removePrefix("R")
+                                            val bedLabel = if (unit.rentableType.equals("room", true)) {
+                                                "Private room"
+                                            } else {
+                                                "Bed ${unit.unitCode.substringAfterLast("-", unit.unitCode).removePrefix("B")}"
+                                            }
+                                            val unitLabel = "Room $roomNumber · $bedLabel"
+                                            val stayId = created.optLong("id")
+                                            StayRecordStore.add(context, StayRecord(
+                                                id = "server-resident-${candidate.id}",
+                                                category = "residents",
+                                                title = candidate.displayName,
+                                                person = candidate.email,
+                                                property = activeListing.name,
+                                                unit = unitLabel,
+                                                date = joiningDate,
+                                                amount = rent,
+                                                status = "Active",
+                                                details = "Verified StayEasy customer account · ${candidate.email}. Resident details are linked to the server account.",
+                                                source = "Server"
+                                            ))
+                                            StayRecordStore.add(context, StayRecord(
+                                                id = "server-stay-$stayId",
+                                                category = "stays",
+                                                title = "Stay · ${candidate.displayName}",
+                                                details = "Server-confirmed resident stay. Deposit recorded: ${money(deposit)}.",
+                                                person = candidate.displayName,
+                                                property = activeListing.name,
+                                                unit = unitLabel,
+                                                date = created.optString("joining_date", joiningDate),
+                                                amount = rent,
+                                                status = created.optString("status", "active").replaceFirstChar { it.uppercase(Locale.ROOT) },
+                                                source = "Server"
+                                            ))
+                                            StayRecordStore.notify(context, "Resident stay created", "${candidate.displayName} · $unitLabel")
+                                            notify(
+                                                if (refreshedRows != null) "Stay created on the server. Room/bed inventory has been refreshed."
+                                                else "Stay created on the server, but inventory could not refresh. Reopen Rooms & beds to sync it."
+                                            )
+                                            route = "records:residents"
+                                        } catch (e: Exception) {
+                                            residentCandidatesError = "The server did not confirm this stay. No local assignment was made. ${e.message ?: "Check the connection and retry."}"
+                                        } finally {
+                                            residentStaySubmitting = false
+                                        }
+                                    }
+                                }
+                            }
+                        )
                     } else {
-                        StayRecordStore.add(context, StayRecord(
-                            category = "beds", title = bed, property = residentPropertyName, unit = bed,
-                            person = name, status = "Occupied",
-                            details = "Assigned to $name. Joining date: $joiningDate. Monthly rent: ${money(rent)}."
-                        ))
+                        AddResidentScreen(residentPropertyName, residentBedOptions, { name, phone, rent, bed, joiningDate ->
+                            StayRecordStore.add(context, StayRecord(category = "residents", title = name, person = phone, property = residentPropertyName, amount = rent, unit = bed, status = "Active", details = "Resident manually added in the local prototype. Joining date: $joiningDate. Monthly rent: ${money(rent)}."))
+                            StayRecordStore.add(context, StayRecord(category = "stays", title = "Stay · $name", details = "Resident assigned to $bed at $residentPropertyName. Joining date: $joiningDate. Confirm agreement terms and first payment.", person = name, property = residentPropertyName, unit = bed, date = joiningDate, amount = rent, status = "Active"))
+                            val existingBed = StayRecordStore.load(context, "beds").firstOrNull { it.property == residentPropertyName && it.unit == bed }
+                            if (existingBed != null) {
+                                StayRecordStore.update(context, "beds", existingBed.copy(
+                                    status = "Occupied",
+                                    person = name,
+                                    details = "Assigned to $name. Joining date: $joiningDate. Monthly rent: ${money(rent)}."
+                                ))
+                            } else {
+                                StayRecordStore.add(context, StayRecord(
+                                    category = "beds", title = bed, property = residentPropertyName, unit = bed,
+                                    person = name, status = "Occupied",
+                                    details = "Assigned to $name. Joining date: $joiningDate. Monthly rent: ${money(rent)}."
+                                ))
+                            }
+                            StayRecordStore.notify(context, "Resident added", "$name · $bed")
+                            notify("Resident and stay records saved; $bed marked occupied")
+                            route = "records:residents"
+                        }, { route = "owner_beds" })
                     }
-                    StayRecordStore.notify(context, "Resident added", "$name · $bed")
-                    notify("Resident and stay records saved; $bed marked occupied")
-                    route = "records:residents"
-                }, { route = "owner_beds" })
+                }
                 "owner_payments" -> FeatureRecordsScreen("payments", ownerMode = true) { route = "feature_hub" }
                 "owner_issues" -> FeatureRecordsScreen("issues", ownerMode = true) { route = "feature_hub" }
                 "owner_analytics" -> FeatureRecordsScreen("reports", ownerMode = true) { route = "feature_hub" }
@@ -2119,7 +2273,7 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
 private fun OwnerBedsScreen(
     listings: List<PgListing>,
     initialPropertyId: Long,
-    onAddResident: (String, List<String>) -> Unit,
+    onAddResident: (PgListing, List<String>) -> Unit,
     onServerUnitStatusChange: (PgListing, RemoteUnit, String) -> Unit,
     notify: (String) -> Unit,
     onProperties: () -> Unit
@@ -2272,7 +2426,7 @@ private fun OwnerBedsScreen(
         Spacer(Modifier.height(7.dp))
         Text(
             if (isServerListing && serverUnits.isNotEmpty())
-                "Inventory is loaded from the StayEasy server. Status changes appear only after server confirmation. Resident assignment requires a verified resident account and is not connected yet."
+                "Inventory is loaded from the StayEasy server. Status changes and resident assignments are confirmed by the server."
             else if (isServerListing)
                 "This property exists on the server but has no room/bed units returned. Add inventory before attempting resident assignment."
             else
@@ -2313,7 +2467,7 @@ private fun OwnerBedsScreen(
         }
         PrimaryButton("Assign a resident", Icons.Filled.PersonAdd) {
             if (listing.serverPropertyId != null) {
-                notify("Shared assignment is not enabled yet. Link a verified resident account before assigning server-backed inventory.")
+                onAddResident(listing, emptyList())
             } else {
                 val declaredOptions = roomLabels.flatMapIndexed { index, room ->
                     val roomBeds = (declaredBedCount / roomCount + if (index < declaredBedCount % roomCount) 1 else 0).coerceIn(0, 6)
@@ -2325,7 +2479,7 @@ private fun OwnerBedsScreen(
                 val availableOptions = declaredOptions.filter { unit ->
                     existingStatus[unit] == null || existingStatus[unit].equals("Available", ignoreCase = true)
                 }
-                onAddResident(listing.name, availableOptions)
+                onAddResident(listing, availableOptions)
             }
         }
         Spacer(Modifier.height(8.dp))
@@ -2421,6 +2575,220 @@ private fun ResidentsScreen(onAdd: () -> Unit, notify: (String) -> Unit) {
 }
 private data class ResidentData(val name: String, val bed: String, val rent: String, val status: String)
 
+
+@Composable
+private fun AddServerResidentScreen(
+    listing: PgListing,
+    candidates: List<RemoteResidentCandidate>,
+    candidatesLoading: Boolean,
+    candidatesError: String,
+    isSubmitting: Boolean,
+    onRetryCandidates: () -> Unit,
+    onCreateStay: (RemoteResidentCandidate, RemoteUnit, Int, Int, String) -> Unit,
+    onCancel: () -> Unit
+) {
+    val availableUnits = remember(listing.serverUnits) {
+        listing.serverUnits.filter { it.status.equals("available", ignoreCase = true) }
+    }
+    var selectedResidentId by remember(listing.serverPropertyId) {
+        mutableStateOf(candidates.firstOrNull()?.id)
+    }
+    var selectedUnitId by remember(listing.serverPropertyId) {
+        mutableStateOf(availableUnits.firstOrNull()?.id)
+    }
+    var rent by remember(listing.serverPropertyId) {
+        mutableStateOf((availableUnits.firstOrNull()?.monthlyRent ?: listing.monthlyRent).toString())
+    }
+    var deposit by remember(listing.serverPropertyId) {
+        mutableStateOf((availableUnits.firstOrNull()?.deposit ?: listing.deposit).toString())
+    }
+    var joiningDate by remember(listing.serverPropertyId) {
+        mutableStateOf(java.time.LocalDate.now().toString())
+    }
+    var validationMessage by remember { mutableStateOf("") }
+    val selectedResident = candidates.firstOrNull { it.id == selectedResidentId }
+    val selectedUnit = availableUnits.firstOrNull { it.id == selectedUnitId }
+
+    LaunchedEffect(candidates, listing.serverPropertyId) {
+        if (candidates.none { it.id == selectedResidentId }) {
+            selectedResidentId = candidates.firstOrNull()?.id
+        }
+    }
+    LaunchedEffect(availableUnits, listing.serverPropertyId) {
+        if (availableUnits.none { it.id == selectedUnitId }) {
+            selectedUnitId = availableUnits.firstOrNull()?.id
+            val first = availableUnits.firstOrNull()
+            if (first != null) {
+                rent = first.monthlyRent.toString()
+                deposit = first.deposit.toString()
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
+        ScreenHeader("Assign a resident", "Create a server-backed stay at ${listing.name}", onBack = onCancel)
+        Spacer(Modifier.height(12.dp))
+        Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) {
+            Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.size(42.dp).clip(RoundedCornerShape(13.dp)).background(SE.Surface), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Filled.VerifiedUser, null, tint = SE.Blue, modifier = Modifier.size(23.dp))
+                }
+                Spacer(Modifier.width(11.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(listing.name, color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text(listing.area, color = SE.Muted, fontSize = 11.sp)
+                    Text("Connected to StayEasy server", color = SE.Blue, fontWeight = FontWeight.SemiBold, fontSize = 10.sp)
+                }
+            }
+        }
+
+        Spacer(Modifier.height(14.dp))
+        Text("1. Verified resident account", color = SE.Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text("Select the customer's existing StayEasy account. Contact details are not recreated locally.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
+        Spacer(Modifier.height(8.dp))
+        if (candidatesLoading) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp, color = SE.Blue)
+                Spacer(Modifier.width(10.dp))
+                Text("Loading eligible accounts…", color = SE.Muted, fontSize = 12.sp)
+            }
+        } else if (candidates.isEmpty()) {
+            Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+                Column(Modifier.fillMaxWidth().padding(13.dp)) {
+                    Text("No eligible residents yet", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("Only active customer accounts with verified email and an enquiry or reservation linked to this property can be assigned.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
+                    Spacer(Modifier.height(9.dp))
+                    OutlinedButton(onClick = onRetryCandidates, enabled = !isSubmitting, shape = RoundedCornerShape(11.dp)) {
+                        Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text("Refresh accounts")
+                    }
+                }
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                candidates.forEach { resident ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            selectedResidentId = resident.id
+                            validationMessage = ""
+                        },
+                        shape = RoundedCornerShape(14.dp),
+                        colors = CardDefaults.cardColors(containerColor = if (selectedResidentId == resident.id) SE.BlueSoft else SE.Surface)
+                    ) {
+                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Box(Modifier.size(40.dp).clip(CircleShape).background(if (selectedResidentId == resident.id) SE.Surface else SE.Lavender), contentAlignment = Alignment.Center) {
+                                Text(resident.displayName.split(" ").mapNotNull { it.firstOrNull() }.take(2).joinToString("").uppercase(Locale.ROOT), color = SE.Blue, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                            }
+                            Spacer(Modifier.width(10.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text(resident.displayName, color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                Text(resident.email, color = SE.Muted, fontSize = 10.sp)
+                                Text(if (resident.emailVerified) "Email verified" else "Verification required", color = if (resident.emailVerified) SE.Blue else SE.Orange, fontWeight = FontWeight.SemiBold, fontSize = 10.sp)
+                            }
+                            if (selectedResidentId == resident.id) Icon(Icons.Filled.CheckCircle, null, tint = SE.Blue, modifier = Modifier.size(21.dp))
+                        }
+                    }
+                }
+            }
+        }
+        if (candidatesError.isNotBlank()) {
+            Spacer(Modifier.height(7.dp))
+            Text(candidatesError, color = SE.Red, fontSize = 11.sp, lineHeight = 15.sp)
+        }
+
+        Spacer(Modifier.height(16.dp))
+        Text("2. Available room or bed", color = SE.Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text("Only units currently marked available on the server can be selected.", color = SE.Muted, fontSize = 11.sp)
+        Spacer(Modifier.height(8.dp))
+        if (availableUnits.isEmpty()) {
+            Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+                Text("No server units are available. Return to Rooms & beds and refresh or update the inventory before assigning a resident.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(13.dp))
+            }
+        } else {
+            availableUnits.chunked(2).forEach { row ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    row.forEach { unit ->
+                        val roomNumber = unit.roomCode.removePrefix("ROOM-").removePrefix("R")
+                        val label = if (unit.rentableType.equals("room", true)) {
+                            "Room $roomNumber · Private"
+                        } else {
+                            "Room $roomNumber · Bed ${unit.unitCode.substringAfterLast("-", unit.unitCode).removePrefix("B")}"
+                        }
+                        FilterChip(
+                            selected = selectedUnitId == unit.id,
+                            onClick = {
+                                selectedUnitId = unit.id
+                                rent = unit.monthlyRent.toString()
+                                deposit = unit.deposit.toString()
+                                validationMessage = ""
+                            },
+                            label = { Text(label, fontSize = 10.sp) }
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(15.dp))
+        Text("3. Agreed terms", color = SE.Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        Text("Amounts are saved to the server with this stay. Deposit entries are manual records, not payment-provider verification.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.weight(1f)) {
+                FormLabel("MONTHLY RENT (₹)")
+                OutlinedTextField(rent, { rent = it.filter(Char::isDigit).take(7); validationMessage = "" }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Text("₹") }, shape = RoundedCornerShape(12.dp), colors = fieldColors())
+            }
+            Column(Modifier.weight(1f)) {
+                FormLabel("DEPOSIT HELD (₹)")
+                OutlinedTextField(deposit, { deposit = it.filter(Char::isDigit).take(8); validationMessage = "" }, modifier = Modifier.fillMaxWidth(), singleLine = true, leadingIcon = { Text("₹") }, shape = RoundedCornerShape(12.dp), colors = fieldColors())
+            }
+        }
+        Spacer(Modifier.height(9.dp))
+        FormLabel("JOINING DATE · YYYY-MM-DD")
+        OutlinedTextField(joiningDate, { joiningDate = it.trim().take(10); validationMessage = "" }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("2026-11-01") }, shape = RoundedCornerShape(12.dp), colors = fieldColors())
+
+        if (validationMessage.isNotBlank()) {
+            Spacer(Modifier.height(7.dp))
+            Text(validationMessage, color = SE.Red, fontSize = 11.sp, lineHeight = 15.sp)
+        }
+        Spacer(Modifier.height(14.dp))
+        Button(
+            onClick = {
+                val rentValue = rent.toIntOrNull()
+                val depositValue = deposit.toIntOrNull()
+                val dateValid = runCatching { java.time.LocalDate.parse(joiningDate.trim()) }.isSuccess
+                validationMessage = when {
+                    selectedResident == null -> "Select a verified resident account."
+                    selectedUnit == null -> "Select an available room or bed."
+                    rentValue == null || rentValue !in 100..100000 -> "Enter monthly rent between ₹100 and ₹1,00,000."
+                    depositValue == null || depositValue < 0 -> "Enter a valid deposit amount."
+                    !dateValid -> "Enter the joining date as YYYY-MM-DD."
+                    else -> ""
+                }
+                if (validationMessage.isBlank() && selectedResident != null && selectedUnit != null && rentValue != null && depositValue != null) {
+                    onCreateStay(selectedResident, selectedUnit, rentValue, depositValue, joiningDate.trim())
+                }
+            },
+            enabled = !isSubmitting && !candidatesLoading && candidates.isNotEmpty() && availableUnits.isNotEmpty(),
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(13.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)
+        ) {
+            if (isSubmitting) {
+                CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Color.White)
+                Spacer(Modifier.width(8.dp))
+                Text("Creating stay…")
+            } else {
+                Icon(Icons.Filled.CheckCircle, null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(7.dp))
+                Text("Confirm resident assignment", fontWeight = FontWeight.Bold)
+            }
+        }
+        Text("Inventory changes only after the server confirms the stay.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 8.dp))
+        Spacer(Modifier.height(18.dp))
+    }
+}
 
 @Composable
 private fun AddResidentScreen(propertyName: String, bedOptions: List<String>, onSave: (String, String, Int, String, String) -> Unit, onCancel: () -> Unit) {
