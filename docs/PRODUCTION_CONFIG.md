@@ -5,7 +5,7 @@ The API permits SQLite and missing SMTP only in `development` and `test`. Set `A
 | Variable | Requirement |
 |---|---|
 | `APP_ENV` | `development`, `test`, `staging`, or `production`; set explicitly in deployment |
-| `DATABASE_URL` | Explicit PostgreSQL SQLAlchemy URL for staging/production; SQLite is rejected |
+| `DATABASE_URL` | Explicit `postgresql+psycopg://...` URL for staging/production; uses the installed psycopg 3 driver and rejects SQLite or driver-implicit URLs |
 | `JWT_SECRET` | Unique secret of at least 32 characters; unsafe placeholders are rejected |
 | `SMTP_HOST` | Configured SMTP relay for verification and recovery |
 | `SMTP_FROM_EMAIL` | Verified sender address |
