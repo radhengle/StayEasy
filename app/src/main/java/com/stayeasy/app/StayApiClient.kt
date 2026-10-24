@@ -233,11 +233,17 @@ internal object StayApiClient {
             val units = p.optJSONArray("units") ?: JSONArray()
             val parsedUnits = (0 until units.length()).mapNotNull { i ->
                 val u = units.optJSONObject(i) ?: return@mapNotNull null
+                val occupant = u.optJSONObject("occupant")
+                val reservedFor = u.optJSONObject("reserved_for")
                 RemoteUnit(
                     id = u.optLong("id"), roomCode = u.optString("room_code"), unitCode = u.optString("unit_code"),
                     rentableType = u.optString("rentable_type", "bed"), sharingCapacity = u.optInt("sharing_capacity", 1).coerceAtLeast(1),
                     monthlyRent = u.optInt("monthly_rent", p.optInt("rent_from", 0)).coerceAtLeast(0),
-                    deposit = u.optInt("deposit", p.optInt("deposit_from", 0)).coerceAtLeast(0), status = u.optString("status", "available")
+                    deposit = u.optInt("deposit", p.optInt("deposit_from", 0)).coerceAtLeast(0),
+                    status = u.optString("status", "available"),
+                    floorLabel = u.optString("floor_label", "Ground").ifBlank { "Ground" },
+                    occupantName = occupant?.optString("display_name").orEmpty().takeUnless { it == "null" }.orEmpty(),
+                    reservedForName = reservedFor?.optString("display_name").orEmpty().takeUnless { it == "null" }.orEmpty()
                 )
             }
             val availableUnit = parsedUnits.firstOrNull { it.status == "available" }
