@@ -273,6 +273,185 @@ def test_customer_stay_history_has_property_labels_and_is_scoped_to_customer():
     assert forbidden.status_code == 403
 
 
+def _set_account_actor(subject: str, role: str = "customer"):
+    api.app.dependency_overrides[get_actor] = lambda: {
+        "subject": subject,
+        "role": role,
+        "scopes": ["account"],
+        "account_session": True,
+    }
+
+
+def test_tenant_moveout_request_is_property_scoped_and_owner_approval_does_not_release_unit():
+    prop, unit = setup_property(owner_id="owner-1")
+    joining_date = date.today() - timedelta(days=60)
+    set_actor("owner-1", "owner")
+    stay = create_test_stay({
+        "property_id": prop["id"],
+        "unit_id": unit["id"],
+        "resident_id": "moveout-resident",
+        "joining_date": joining_date.isoformat(),
+        "agreed_monthly_rent": 9200,
+        "deposit_held": 16000,
+    })
+    assert stay.status_code == 201, stay.text
+    stay_id = stay.json()["id"]
+    earliest_date = date.today() + timedelta(days=30)
+    requested_date = earliest_date + timedelta(days=15)
+    payload = {
+        "requested_move_out_date": requested_date.isoformat(),
+        "reason": "Moving to a new city for work.",
+    }
+
+    # A development/role token is not enough to submit a tenant request.
+    set_actor("moveout-resident", "customer")
+    assert client.post(f"/stays/me/{stay_id}/move-out-requests", json=payload).status_code == 403
+
+    _set_account_actor("moveout-resident")
+    too_early = client.post(f"/stays/me/{stay_id}/move-out-requests", json={
+        **payload, "requested_move_out_date": (date.today() + timedelta(days=5)).isoformat(),
+    })
+    assert too_early.status_code == 422, too_early.text
+
+    created = client.post(f"/stays/me/{stay_id}/move-out-requests", json=payload)
+    assert created.status_code == 201, created.text
+    request_id = created.json()["id"]
+    assert created.json()["status"] == "pending"
+    assert created.json()["property_name"] == "Test House"
+    assert created.json()["room_code"] == "101"
+    assert created.json()["unit_code"] == "101-A"
+    assert created.json()["requested_move_out_date"] == requested_date.isoformat()
+
+    duplicate = client.post(f"/stays/me/{stay_id}/move-out-requests", json=payload)
+    assert duplicate.status_code == 409, duplicate.text
+    listed = client.get("/stays/me/move-out-requests")
+    assert listed.status_code == 200, listed.text
+    assert len(listed.json()) == 1
+    assert listed.json()[0]["id"] == request_id
+
+    # Another resident cannot submit against or read this stay's move-out request.
+    _set_account_actor("another-resident")
+    forbidden = client.post(f"/stays/me/{stay_id}/move-out-requests", json=payload)
+    assert forbidden.status_code == 404, forbidden.text
+    assert client.get("/stays/me/move-out-requests").json() == []
+
+    # Other property owners cannot list or decide this request.
+    other_prop, _ = setup_property(owner_id="owner-2")
+    set_actor("owner-2", "owner")
+    foreign_review = client.patch(f"/owner/move-out-requests/{request_id}", json={
+        "decision": "approve", "owner_note": "Unauthorized",
+    })
+    assert foreign_review.status_code == 403, foreign_review.text
+    foreign_list = client.get("/owner/move-out-requests")
+    assert foreign_list.status_code == 200, foreign_list.text
+    assert all(row["property_id"] == other_prop["id"] for row in foreign_list.json())
+
+    set_actor("owner-1", "owner")
+    owner_list = client.get("/owner/move-out-requests")
+    assert owner_list.status_code == 200, owner_list.text
+    assert [row["id"] for row in owner_list.json()] == [request_id]
+    assert owner_list.json()[0]["resident_email"] == "moveout-resident@example.test"
+
+    approved = client.patch(f"/owner/move-out-requests/{request_id}", json={
+        "decision": "approve", "owner_note": "Approved. Please return the keys on the agreed date.",
+    })
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["status"] == "approved"
+    assert approved.json()["owner_note"].startswith("Approved.")
+    assert approved.json()["reviewed_at"] is not None
+
+    # Approval records notice and target move-out date, but the bed remains occupied
+    # until the owner confirms the actual move-out by completing the stay.
+    _set_account_actor("moveout-resident")
+    customer_requests = client.get("/stays/me/move-out-requests")
+    assert customer_requests.status_code == 200, customer_requests.text
+    assert customer_requests.json()[0]["status"] == "approved"
+    assert customer_requests.json()[0]["owner_note"].startswith("Approved.")
+
+    stays = client.get("/owner/stays", params={"property_id": prop["id"]})
+    assert stays.status_code == 200, stays.text
+    assert stays.json()[0]["status"] == "notice_given"
+    assert stays.json()[0]["notice_date"] == date.today().isoformat()
+    assert stays.json()[0]["move_out_date"] == requested_date.isoformat()
+    units = client.get("/owner/units", params={"property_id": prop["id"]})
+    assert units.status_code == 200, units.text
+    assert units.json()[0]["status"] == "occupied"
+
+    set_actor("owner-1", "owner")
+    completed = client.patch(f"/owner/stays/{stay_id}", json={
+        "status": "completed", "move_out_date": requested_date.isoformat(),
+    })
+    assert completed.status_code == 200, completed.text
+    units_after_moveout = client.get("/owner/units", params={"property_id": prop["id"]})
+    assert units_after_moveout.status_code == 200, units_after_moveout.text
+    assert units_after_moveout.json()[0]["status"] == "available"
+
+    with SessionLocal() as db:
+        saved = db.get(m.ResidentMoveOutRequest, request_id)
+        assert saved is not None
+        assert saved.status == "approved"
+        assert saved.reviewed_by == "owner-1"
+        assert db.scalar(select(m.AuditLog.id).where(
+            m.AuditLog.entity_type == "resident_move_out_request",
+            m.AuditLog.entity_id == str(request_id),
+            m.AuditLog.action == "reviewed",
+        )) is not None
+
+
+def test_owner_can_reject_moveout_request_and_resident_can_submit_again():
+    prop, unit = setup_property(owner_id="owner-1")
+    set_actor("owner-1", "owner")
+    stay = create_test_stay({
+        "property_id": prop["id"],
+        "unit_id": unit["id"],
+        "resident_id": "moveout-reject-resident",
+        "joining_date": (date.today() - timedelta(days=45)).isoformat(),
+        "agreed_monthly_rent": 9000,
+        "deposit_held": 0,
+    })
+    assert stay.status_code == 201, stay.text
+    stay_id = stay.json()["id"]
+    first_date = date.today() + timedelta(days=45)
+    _set_account_actor("moveout-reject-resident")
+    payload = {"requested_move_out_date": first_date.isoformat(), "reason": "Need to relocate."}
+    first = client.post(f"/stays/me/{stay_id}/move-out-requests", json=payload)
+    assert first.status_code == 201, first.text
+
+    set_actor("owner-1", "owner")
+    rejected = client.patch(f"/owner/move-out-requests/{first.json()['id']}", json={
+        "decision": "reject", "owner_note": "Please discuss the contractual notice date with the manager.",
+    })
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["status"] == "rejected"
+
+    duplicate_decision = client.patch(f"/owner/move-out-requests/{first.json()['id']}", json={
+        "decision": "approve", "owner_note": "This second decision must fail.",
+    })
+    assert duplicate_decision.status_code == 409, duplicate_decision.text
+
+    stays = client.get("/owner/stays", params={"property_id": prop["id"]})
+    assert stays.status_code == 200, stays.text
+    assert stays.json()[0]["status"] == "active"
+    units = client.get("/owner/units", params={"property_id": prop["id"]})
+    assert units.status_code == 200, units.text
+    assert units.json()[0]["status"] == "occupied"
+
+    _set_account_actor("moveout-reject-resident")
+    customer_requests = client.get("/stays/me/move-out-requests")
+    assert customer_requests.status_code == 200, customer_requests.text
+    assert customer_requests.json()[0]["status"] == "rejected"
+    assert customer_requests.json()[0]["owner_note"].startswith("Please discuss")
+
+    second_date = date.today() + timedelta(days=50)
+    second = client.post(f"/stays/me/{stay_id}/move-out-requests", json={
+        "requested_move_out_date": second_date.isoformat(),
+        "reason": "Updated date after speaking with manager.",
+    })
+    assert second.status_code == 201, second.text
+    assert second.json()["status"] == "pending"
+    assert second.json()["id"] != first.json()["id"]
+
+
 def test_owner_property_inventory_is_scoped_and_contains_server_units():
     first_property, first_unit = setup_property(owner_id="owner-1")
     second_property, _ = setup_property(owner_id="owner-2")
