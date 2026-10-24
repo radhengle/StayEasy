@@ -174,6 +174,61 @@ internal fun FeatureHubScreen(
     }
 }
 
+private fun candidateRecordForLedger(
+    id: String,
+    category: String,
+    entryType: String,
+    title: String,
+    description: String,
+    amount: Int,
+    propertyId: Long,
+    residentStayId: Long?,
+    billingPeriod: String,
+    dueDate: String,
+    reference: String,
+    status: String,
+    updatedAt: Long
+): StayRecord {
+    val typeLabel = when (entryType) {
+        "payment" -> "Payment record"
+        "rent_charge" -> "Rent charge"
+        "deposit" -> "Security deposit"
+        "refund" -> "Deposit refund"
+        "deduction" -> "Deposit deduction"
+        "expense" -> "Operating expense"
+        "food" -> "Food charge"
+        "utility" -> "Utility charge"
+        "late_fee" -> "Late fee"
+        else -> entryType.replace('_', ' ').replaceFirstChar { it.uppercase() }
+    }
+    val parts = mutableListOf<String>()
+    if (billingPeriod.isNotBlank()) parts += "Billing period: $billingPeriod"
+    if (dueDate.isNotBlank()) parts += "Due date: $dueDate"
+    if (residentStayId != null) parts += "Resident stay ID: $residentStayId"
+    if (reference.isNotBlank()) parts += "Reference: $reference"
+    if (description.isNotBlank()) parts += description
+    parts += "Manually recorded · not verified by a payment provider"
+    val displayStatus = when (entryType) {
+        "payment" -> "Recorded manually"
+        "deposit" -> "Held"
+        "rent_charge", "food", "utility", "late_fee", "expense" -> "Open"
+        else -> status.replace('_', ' ').replaceFirstChar { it.uppercase() }
+    }
+    return StayRecord(
+        id = id,
+        category = category,
+        title = "$typeLabel · ${title.ifBlank { "Property #$propertyId" }}",
+        details = parts.joinToString("\n"),
+        status = displayStatus,
+        amount = amount,
+        property = "Property #$propertyId",
+        date = dueDate.ifBlank { billingPeriod },
+        updatedAt = updatedAt,
+        createdAt = updatedAt,
+        source = "Server"
+    )
+}
+
 @Composable
 internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: () -> Unit) {
     val context = LocalContext.current
