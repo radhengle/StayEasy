@@ -1,14 +1,14 @@
 # StayEasy feature checklist — implementation and acceptance matrix
 
-This matrix maps the full requested checklist to the current deliverable. “Local UI” means it is interactive and saved on the same Android device using SharedPreferences; it is not shared with other accounts/devices. “API foundation” means an endpoint/model exists in FastAPI, but the Android client may not yet use it. The financial-records milestone now includes owner-ledger and resident-ledger API calls plus Android sync and manual-entry flows when a valid development session is configured. Production identity, deployment and external integrations remain separate release gates.
+This matrix distinguishes locally persisted prototype flows, Android/API workflows that sync when an appropriately authorized API session is configured, and production integrations that still require deployment or provider setup. Email/password registration, email verification, sign-in, password reset and logout are wired to the backend; account tokens are encrypted with Android Keystore. Finance now supports server ledger reads/manual entries and idempotent rent-charge generation. A working UI or passing CI build does not imply that external services or production operations are configured.
 
 ## Current status summary
 
 - **Android:** native Kotlin/Jetpack Compose screens, local sample discovery, filters, favourites, details, owner listing wizard, local draft record, theme settings, persisted generic operational records, bed state board, customer booking request flow, and comparison up to three properties.
 - **Backend:** FastAPI/SQLAlchemy/PostgreSQL service foundation, role/permission checks, property review queue, inventory, enquiry/visit/reservation/stay lifecycle, ledger, maintenance, notices, saved searches, staff, meal plans, housekeeping, visitor log, reviews, notifications and audit/report endpoints.
 - **Admin:** browser-based listing review console for admins with decision actions, platform counts and audit log.
-- **Partly integrated:** Android ↔ API workflows for published listings, enquiries/visits/reservations/issues and finance depend on a configured API URL plus a valid development token; registration, login and persistent production sessions are not implemented.
-- **Not yet integrated:** actual Google Maps SDK/Places API, media object storage, push provider, payment gateway/webhook reconciliation, database migrations, full web owner portal, iOS and production account deletion. These need credentials, provider decisions and security/legal review.
+- **Partly integrated:** Android/API calls cover published listings, enquiries/visits/reservations/issues and finance when the API URL and an appropriately scoped session are configured. Registration, email verification, sign-in, password recovery and logout are implemented; production SMTP setup, refresh-token rotation, approved owner promotion and broader end-to-end data synchronization remain open.
+- **Production integrations/releases still open:** Google Maps/Places and geospatial distance, media object storage, push delivery, payment gateway/webhook reconciliation, production deployment, a full owner web portal, iOS, account deletion and final database migration review. An Alembic bootstrap and clean-database migration check exist, but production schema review/backups/restore drills are still required.
 
 ## 1. Customer app — finding a PG
 
@@ -38,8 +38,8 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 | 2.1 Rules/location/trust | Gender and couple policy, curfew/visitors/cooking/stay/notice fields and location disclaimers | Local UI; actual routing and real verified-stay reviews are not active |
 | 2.2 Amenities catalogue | Structured categories for room, food/kitchen, utilities, cleaning/convenience and safety/building; applies at property, room, or unit scope; included/extra/unavailable statuses in API model | Local owner amenity selectors; API catalogue and scoped assignments are present; photo evidence/verification is not automated |
 | 2.3 Enquiries/visits | Enquiry, messaging notes and visit requests are distinct persisted local records; visit reminders/history can be recorded | Local UI; API has create/list/status routes, in-app notice queue only, no push delivery |
-| 2.4 Reservations | Reservation request UI, local terms/status, local active-unit collision guard and expiry fields; no false “confirmed” claim | Local demo; API adds expiry, snapshot and DB-level collision protection. Android/API sync is not connected |
-| 2.5 Account/personalisation | Local favorites, search recents, theme/mode/language/large-text/notification preferences | Local persistence; phone OTP, identity, consent and account deletion are not implemented end to end |
+| 2.4 Reservations | Reservation requests preserve terms/status and do not claim provider-confirmed booking | Android can create/update API reservations with a configured authorized session; backend enforces reservation lifecycle/expiry and database-level unit collision protections. Payment and actual availability-provider integrations are separate |
+| 2.5 Account/personalisation | Local favorites, search recents, theme/mode/language/large-text/notification preferences; email/password account screens | Registration, email verification, sign-in, password recovery, account status and logout use the API. Phone OTP, consent/deletion workflow, production SMTP configuration and full privacy lifecycle remain open |
 
 ## 3. Customer app — after moving into a PG
 
@@ -54,7 +54,7 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 
 | Checklist item | Delivered behaviour / location | Status / acceptance condition |
 |---|---|---|
-| 4.1 Owner onboarding | Owner/manager mode, property creation wizard, saved draft record and preview/publish-to-local-catalogue flow | Local UI only; backend property review route exists but Android publishing does not submit to API |
+| 4.1 Owner onboarding | Tenant/Owner workspace selector, owner/manager workspace, property wizard, draft and preview flows | Workspace choice is preview navigation, not authorization. Listing creation can use the API when a properly authorized owner session is configured; owner promotion/approval and end-to-end inventory/resident synchronization remain release gates |
 | 4.2 Add/edit property | Name, locality/address text, PIN, owner-entered nearby places, photos, policy, room/sharing, prices, furnishing, bathroom, food, cooking, curfew, visitors, minimum stay and notice period | Local UI; map pin/lat-lon and real owner verification not connected |
 | 4.2 Listing generation/quality | Description can be generated from entered facts; quality/draft record; missing details can be added in the wizard | Local UI; does not claim unentered benefits/distances |
 | 4.3 Rooms/beds | Local room/bed board with available/reserved/occupied/maintenance state and allowed state actions; owner inventory routes in API | Local UI + API foundation; local conflict checks are not a substitute for DB transactions across devices |
@@ -90,12 +90,12 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 | Checklist item | Delivered behaviour / location | Status / acceptance condition |
 |---|---|---|
 | Authentication/roles | Email/password account API; interactive Android registration, email verification, sign-in, password reset, account status and sign-out; access token encrypted with Android Keystore and API-origin-bound | SMTP credentials, refresh-token rotation, approved Owner promotion, MFA, external rate limiting, account deletion and security review remain release gates |
-| Shared property database | PostgreSQL backend schema and endpoints with property/inventory/record models | Foundation implemented; Android app not connected yet; no multi-device sync claim |
+| Shared property database | PostgreSQL backend schema/endpoints with Android client integration for selected listing, enquiry, visit, reservation, issue and finance workflows | Partial API synchronization when a configured, appropriately scoped session is available; local demo records in other workflows are not automatically shared or reconciled across devices |
 | Search | API filters for city, locality, text/PIN, rent, eligibility, couples, verified and availability | Basic API search; advanced geospatial search and full amenities joins require expansion |
 | Media storage | Android image picker remembers selected content URI locally; database supports listing photo metadata | No production object storage, upload/access-control/compression pipeline yet |
 | Notifications | API `Notification` records with read status; request events add owner notifications | Queue only; background delivery/retry is not deployed |
 | Admin console | `admin/index.html` can connect, list review queue, approve/request changes/reject/pause, show reports and audit log | Working browser UI when served with CORS and admin token; complete investigations/complaint workflow remains |
-| Security/privacy | server-side authorization, scoped staff permissions, audit trail, account fields and data structures | Production privacy request workflow, retention jobs, encryption/storage policies, independent penetration testing and legal review remain |
+| Security/privacy | Server-side authorization, scoped staff permissions, audit trail, email/password account flows, short-lived account tokens and encrypted Android token storage | Configure production email delivery; finish approved Owner promotion, refresh/session management, MFA for operators, external rate limiting, account deletion/retention jobs, storage policies, independent penetration testing and legal review |
 | Quality/monitoring | backend `/health`, test scaffold, migration/ops docs and Compose health check | Crash-reporting/APM, alerting, backup/restore drills and release gates still required |
 
 ## 8. Design, themes and usability
@@ -104,7 +104,7 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 |---|---|---|
 | Appearance | System/Light/Dark and Midnight Cobalt, Ocean, Violet, Graphite, Porcelain, Copper themes persist | Local UI; no green primary theme |
 | Visual consistency | Shared colour tokens, cards, fields, chips, buttons and layouts in Compose | Broadly themed; continue replacing any hard-coded colors in any remaining view |
-| Interaction | Material Compose controls, confirmation dialogs, empty states, saved records and status transitions | Local UI; loading/error states for real network sync depend on API client integration |
+| Interaction | Material Compose controls, confirmation dialogs, empty states, saved records, API-backed loading/error/status feedback in integrated workflows | Extend consistent server-confirmed outcomes, offline/retry behavior and reconciliation to every remaining local-only workflow; never treat local demo success as a server-confirmed write |
 | Accessibility | Semantics on core controls, large-text preference stored, contrast-oriented palettes | Screen-reader and dynamic large-text audit needs actual device accessibility pass |
 | Localization | English UI and language preference stored | Hindi/Marathi translations are not present yet |
 | Performance/reliability | local state persistence, URI permission retention, record timestamps and empty state fallback | offline queue/retry and server reconciliation not yet implemented |
@@ -124,9 +124,9 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 
 ## Release acceptance gates
 
-1. Connect Android login and API client; all create/update actions must wait for API confirmation before showing server-confirmed success.
+1. Extend server integration beyond the current connected workflows; every server-backed create/update must wait for API confirmation before showing server-confirmed success. Exercise account registration/login/recovery against a deployed API with production email delivery.
 2. Configure Google Maps/Places only with appropriately restricted credentials, billing/quota alerts, attribution and optional-location permission rationale.
-3. Add migrations, identity provider, object storage, push delivery and payment-provider webhooks before real customer data or money is used.
+3. Review and rehearse Alembic migrations against the target database; configure production hosting/secrets, object storage, push delivery and verified payment-provider webhooks before real customer data or money is used.
 4. Test reservation races under PostgreSQL using parallel requests; test permissions with customer/owner/manager/staff/admin roles.
 5. Complete privacy/deletion/retention and review/moderation flows; security/legal review is required for Maharashtra rental procedures and India data-protection obligations.
-6. Perform Gradle build, emulator/device QA, accessibility check, Android release-signing and API deployment verification. This packaging environment could not run Android Gradle build because it lacked a working Gradle distribution/Android SDK and network access.
+6. Keep Gradle build and emulator smoke tests green in CI; before release, add physical-device/low-connectivity/accessibility testing, verify release signing, API deployment, monitoring, backups and restore procedures.
