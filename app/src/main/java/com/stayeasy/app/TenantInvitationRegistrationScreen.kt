@@ -94,6 +94,7 @@ internal fun TenantInvitationRegistrationScreen(
     baseUrl: String,
     sessionToken: String?,
     initialLink: String = "",
+    onSignIn: () -> Unit,
     onBack: () -> Unit,
     notify: (String) -> Unit
 ) {
@@ -244,8 +245,11 @@ internal fun TenantInvitationRegistrationScreen(
         ) {
             if (sessionToken.isNullOrBlank()) {
                 Card(shape = SE.cardShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft)) {
-                    Text("Sign in with the email address the property owner invited before submitting registration. You can review a pasted link, but only the invited account can accept it.",
-                        Modifier.padding(13.dp), color = SE.Ink, fontSize = 12.sp, lineHeight = 17.sp)
+                    Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Sign in with the email address the property owner invited before submitting registration. You can review a pasted link, but only the invited account can accept it.",
+                            color = SE.Ink, fontSize = 12.sp, lineHeight = 17.sp)
+                        Button(onClick = onSignIn, modifier = Modifier.fillMaxWidth()) { Text("Sign in to continue") }
+                    }
                 }
             }
             Card(shape = SE.cardShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
