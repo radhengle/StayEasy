@@ -287,7 +287,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             id = "server-ledger-${row.optLong("id")}",
             category = category,
             title = "$typeLabel · $propertyName",
-            details = detailParts.joinToString("\\n"),
+            details = detailParts.joinToString("\n"),
             status = displayStatus,
             amount = row.optInt("amount"),
             person = if (ownerMode && residentId.isNotBlank()) "Resident account · ${residentId.take(8)}" else "",
@@ -344,10 +344,8 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                             )
                         }
                         "payments", "charges", "deposits", "expenses", "food" -> {
-                            val ledgerRows = withContext(Dispatchers.IO) {
-                                if (ownerMode) StayApiClient.ownerLedger(apiPreferences.apiBaseUrl, sessionToken)
+                            val ledgerRows = if (ownerMode) StayApiClient.ownerLedger(apiPreferences.apiBaseUrl, sessionToken)
                                 else StayApiClient.myLedger(apiPreferences.apiBaseUrl, sessionToken)
-                            }
                             mapLedgerRows(ledgerRows)
                         }
                         else -> StayApiClient.visits(apiPreferences.apiBaseUrl, sessionToken).map { row ->
@@ -660,9 +658,11 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                                 dueDate = dateText.trim(), reference = paymentReferenceText.trim(),
                                 status = created.optString("status", "recorded"), updatedAt = System.currentTimeMillis()
                             )
-                            val latestRows = runCatching {
+                            val latestRows = try {
                                 withContext(Dispatchers.IO) { StayApiClient.ownerLedger(apiPreferences.apiBaseUrl, sessionToken) }
-                            }.getOrNull()
+                            } catch (_: Exception) {
+                                null
+                            }
                             if (latestRows != null) {
                                 StayRecordStore.replaceServerRecords(context, category, mapLedgerRows(latestRows), preserveLocal = false)
                             } else {
