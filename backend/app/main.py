@@ -304,6 +304,23 @@ def visible_property_ids(db: Session, actor: dict[str, Any], resource: str) -> l
     ))
     return sorted({assignment.property_id for assignment in assignments if allowed.intersection(assignment.permissions or [])})
 
+def expire_pending_reservations_for_unit(db: Session, unit_id: int, actor: dict[str, Any]) -> int:
+    """Expire timed-out pending holds before checking the active-reservation unique index."""
+    now = datetime.now(timezone.utc)
+    expired = list(db.scalars(select(m.Reservation).where(
+        m.Reservation.unit_id == unit_id,
+        m.Reservation.status == "pending",
+        m.Reservation.expires_at.is_not(None),
+        m.Reservation.expires_at <= now
+    ).with_for_update()))
+    for reservation in expired:
+        old = {"status": reservation.status}
+        reservation.status = "expired"
+        audit(db, actor, "reservation", reservation.id, "expired_due_to_timeout", old=old, new={"status": "expired"})
+    if expired:
+        db.commit()
+    return len(expired)
+
 def property_dict(p: m.Property, db: Session | None = None) -> dict:
     out = {"id": p.id, "owner_id": p.owner_id, "name": p.name, "description": p.description, "address": p.address,
            "locality": p.locality, "city": p.city, "pin_code": p.pin_code, "latitude": p.latitude, "longitude": p.longitude,
@@ -598,7 +615,14 @@ def create_reservation(body: ReservationCreate, actor: dict = Depends(require_ro
         unit = db.scalar(select(m.PropertyUnit).where(m.PropertyUnit.id == body.unit_id).with_for_update())
         if not unit or unit.property_id != prop.id: raise HTTPException(404, "Unit not found for this property")
         if unit.status != "available": raise HTTPException(409, f"Unit is currently {unit.status}")
-        conflict = db.scalar(select(m.Reservation.id).where(m.Reservation.unit_id == unit.id, m.Reservation.status.in_(["pending", "confirmed", "checked_in"])))
+        expire_pending_reservations_for_unit(db, unit.id, actor)
+        now = datetime.now(timezone.utc)
+        active_pending = and_(m.Reservation.status == "pending", m.Reservation.expires_at > now)
+        active_status = m.Reservation.status.in_(["confirmed", "checked_in"])
+        conflict = db.scalar(select(m.Reservation.id).where(
+            m.Reservation.unit_id == unit.id,
+            or_(active_status, active_pending)
+        ))
         if conflict: raise HTTPException(409, "Unit already has an active reservation")
     rent = unit.monthly_rent if unit and unit.monthly_rent else prop.rent_from
     deposit = unit.deposit if unit and unit.deposit else prop.deposit_from
@@ -635,6 +659,14 @@ def update_reservation(reservation_id: int, body: ReservationStatus, actor: dict
     item = db.get(m.Reservation, reservation_id)
     if not item: raise HTTPException(404, "Reservation not found")
     require_property_manager(db, actor, item.property_id, "reservations.manage")
+    if item.status == "pending" and item.expires_at is not None:
+        expiry = item.expires_at if item.expires_at.tzinfo is not None else item.expires_at.replace(tzinfo=timezone.utc)
+        if expiry <= datetime.now(timezone.utc):
+            old = {"status": item.status}
+            item.status = "expired"
+            audit(db, actor, "reservation", item.id, "expired_due_to_timeout", old=old, new={"status": "expired"})
+            db.commit()
+            raise HTTPException(409, "Reservation request has expired; refresh availability before confirming.")
     allowed_transitions = {
         "pending": {"confirmed", "cancelled", "expired"},
         "confirmed": {"checked_in", "cancelled", "expired"},
