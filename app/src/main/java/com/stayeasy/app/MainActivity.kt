@@ -387,28 +387,38 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     val remoteOwnerListings = remember { mutableStateListOf<PgListing>() }
     var ownerInventoryLoaded by remember { mutableStateOf(false) }
     val favorites = remember { mutableStateListOf<Long>().apply { addAll(StayUserDataStore.loadFavorites(context)) } }
-    var route by remember { mutableStateOf("home") }
+    var route by remember { mutableStateOf("auth_entry") }
     var workspaceReturnRoute by remember { mutableStateOf("home") }
     var detailsReturnRoute by remember { mutableStateOf("search") }
     var filtersReturnRoute by remember { mutableStateOf("search") }
     var signedInAccount by remember { mutableStateOf<JSONObject?>(null) }
+    var ownerMode by remember { mutableStateOf(false) }
+    var authStartMode by remember { mutableStateOf("signin") }
+    var authWorkspace by remember { mutableStateOf("tenant") }
+    var authReturnRoute by remember { mutableStateOf("auth_entry") }
+    var apiConnectionReturnRoute by remember { mutableStateOf("feature_hub") }
     LaunchedEffect(preferences.apiBaseUrl) {
         val baseUrl = preferences.apiBaseUrl.trim()
         if (baseUrl.isNotBlank()) {
             val restored = withContext(Dispatchers.IO) { StayApiClient.restoreAccountSession(context, baseUrl) }
-            signedInAccount = if (restored) runCatching {
+            val restoredAccount = if (restored) runCatching {
                 withContext(Dispatchers.IO) { StayApiClient.currentAccount(baseUrl) }
             }.getOrNull() else null
-            if (restored && signedInAccount == null) {
+            signedInAccount = restoredAccount
+            if (restored && restoredAccount == null) {
                 StayApiClient.clearSessionToken()
                 StayApiClient.clearPersistedAccountSession(context)
+                ownerMode = false
+                if (route == "home" || route == "owner_dashboard") route = "auth_entry"
+            } else if (restoredAccount != null && route == "auth_entry") {
+                ownerMode = restoredAccount.optString("role") in setOf("owner", "admin")
+                route = if (ownerMode) "owner_dashboard" else "home"
             }
         } else {
             signedInAccount = null
             StayApiClient.clearSessionToken()
         }
     }
-    var ownerMode by remember { mutableStateOf(false) }
     var ownerReturnRoute by remember { mutableStateOf("home") }
     var chatReturnRoute by remember { mutableStateOf("details") }
     var notificationsReturnRoute by remember { mutableStateOf("home") }
@@ -518,11 +528,11 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     }.let { rows -> when (advancedFilters.sortBy) {
         "Price: low to high" -> rows.sortedBy { it.monthlyRent }; "Distance" -> rows.filter { it.distanceIsVerified }.sortedBy { it.distanceKm } + rows.filterNot { it.distanceIsVerified }; "Availability" -> rows.sortedByDescending { it.availableBeds }; "Rating" -> rows.sortedByDescending { it.rating }; else -> rows.sortedWith(compareByDescending<PgListing> { it.featuredListing }.thenByDescending { it.availableBeds })
     } }
-    val hideNav = route in setOf("add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account_auth", "account_type", "admin_owner_requests") || route.startsWith("records:")
+    val hideNav = route in setOf("auth_entry", "add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account_auth", "account_type", "admin_owner_requests") || route.startsWith("records:")
 
     // Nested routes return to their parent instead of finishing the Activity.
     // The property wizard registers a more specific handler for its own steps.
-    BackHandler(enabled = route != "home") {
+    BackHandler(enabled = route != "home" && route != "auth_entry") {
         route = if (route.startsWith("records:")) when (route.substringAfter("records:")) {
             "saved_searches" -> "search"
             "residents" -> if (ownerMode) "owner_beds" else "profile"
@@ -547,10 +557,11 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "notifications" -> notificationsReturnRoute
             "profile" -> "home"
             "account_type" -> workspaceReturnRoute
-            "account_auth" -> "profile"
+            "account_auth" -> authReturnRoute
             "admin_owner_requests" -> "account_auth"
             "feature_hub" -> if (ownerMode) "owner_more" else "profile"
-            "api_connection", "theme_settings", "compare" -> "feature_hub"
+            "api_connection" -> apiConnectionReturnRoute
+            "theme_settings", "compare" -> "feature_hub"
             "owner_dashboard" -> { ownerMode = false; ownerReturnRoute }
             "owner_properties", "owner_beds", "owner_enquiries", "owner_residents", "owner_payments", "owner_issues", "owner_analytics", "owner_more", "owner_settings" -> "owner_dashboard"
             "add_pg", "edit_pg" -> "owner_properties"
@@ -594,6 +605,13 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (route) {
+                "auth_entry" -> AuthEntryScreen(
+                    onTenantLogin = { authStartMode = "signin"; authWorkspace = "tenant"; authReturnRoute = "auth_entry"; route = "account_auth" },
+                    onTenantRegister = { authStartMode = "signup"; authWorkspace = "tenant"; authReturnRoute = "auth_entry"; route = "account_auth" },
+                    onOwnerLogin = { authStartMode = "signin"; authWorkspace = "owner"; authReturnRoute = "auth_entry"; route = "account_auth" },
+                    onOwnerRegister = { authStartMode = "signup"; authWorkspace = "owner"; authReturnRoute = "auth_entry"; route = "account_auth" },
+                    onBrowsePreview = { ownerMode = false; route = "home" }
+                )
                 "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { detailsReturnRoute = "home"; selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { filtersReturnRoute = "home"; route = "filters" }, { workspaceReturnRoute = "home"; route = "account_type" }, { notificationsReturnRoute = "home"; route = "notifications" }, { route = "profile" })
                 "search" -> SearchResultsScreen(location, { location = it; route = "search_location" }, searchQuery, { searchQuery = it }, guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, filteredListings, favorites, { detailsReturnRoute = "search"; selectedId = it; route = "details" }, { route = "map" }, { filtersReturnRoute = "search"; route = "filters" }, toggleFavorite, {
                     val criteria = "Location: $location; query: ${searchQuery.ifBlank { "any PG" }}; eligibility: $guestChoice; max rent: ${money(maxBudget.toInt())}; room types: ${advancedFilters.roomTypes.joinToString().ifBlank { "any" }}; amenities: ${chosenAmenities.joinToString().ifBlank { "any" }}; availability: ${if (advancedFilters.availableOnly) "available now" else advancedFilters.moveInDate.ifBlank { "any" }}; sort: ${advancedFilters.sortBy}"
@@ -728,7 +746,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }
                     }
                 })
-                "profile" -> ProfileScreen(signedInAccount, { workspaceReturnRoute = "profile"; route = "account_type" }, { notificationsReturnRoute = "profile"; route = "notifications" }, { route = "feature_hub" }, { route = "account_auth" })
+                "profile" -> ProfileScreen(signedInAccount, { workspaceReturnRoute = "profile"; route = "account_type" }, { notificationsReturnRoute = "profile"; route = "notifications" }, { route = "feature_hub" }, { authStartMode = "signin"; authWorkspace = "tenant"; authReturnRoute = "profile"; route = "account_auth" })
                 "account_type" -> AccountTypeScreen(
                     onTenant = { ownerMode = false; route = "home" },
                     onOwner = {
@@ -759,15 +777,42 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "account_auth" -> AccountAuthScreen(
                     baseUrl = preferences.apiBaseUrl,
                     account = signedInAccount,
-                    onBack = { route = "profile" },
-                    onOpenConnection = { route = "api_connection" },
+                    startMode = authStartMode,
+                    initialWorkspace = authWorkspace,
+                    onBack = { route = authReturnRoute },
+                    onOpenConnection = { apiConnectionReturnRoute = authReturnRoute; route = "api_connection" },
                     onOpenAdminOwnerRequests = { route = "admin_owner_requests" },
                     onSignedIn = { user ->
                         signedInAccount = user
                         notify("You're signed in to StayEasy.")
                     },
+                    onLoginSucceeded = { user ->
+                        signedInAccount = user
+                        val role = user.optString("role", "customer")
+                        if (role in setOf("owner", "admin")) {
+                            ownerMode = true
+                            ownerReturnRoute = "home"
+                            route = "owner_dashboard"
+                        } else {
+                            ownerMode = false
+                            if (authWorkspace == "owner") {
+                                route = "account_auth"
+                                notify(
+                                    when (user.optString("owner_access_status", "not_requested")) {
+                                        "pending_approval" -> "Owner access is pending approval. This account remains in Tenant mode until approved."
+                                        "rejected" -> "This account does not currently have Owner access. You can request review again."
+                                        else -> "You're signed in, but Owner access must be requested and approved before owner tools are unlocked."
+                                    }
+                                )
+                            } else {
+                                route = "home"
+                            }
+                        }
+                    },
                     onSignedOut = {
                         signedInAccount = null
+                        ownerMode = false
+                        route = "auth_entry"
                         notify("You've signed out.")
                     }
                 )
@@ -781,7 +826,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "api_connection" -> ApiConnectionScreen(preferences.apiBaseUrl,
                     { onPreferencesChanged(preferences.copy(apiBaseUrl = it.trimEnd('/'))) },
                     { fetched -> remoteListings.clear(); remoteListings.addAll(fetched); notify("Loaded ${fetched.size} published server listing(s); distance is still unverified") },
-                    { route = "feature_hub" })
+                    { route = apiConnectionReturnRoute })
                 "compare" -> ComparePropertiesScreen(allListings, comparisonIds, { route = "feature_hub" })
                 "theme_settings" -> ThemeSettingsScreen(preferences, { updated -> onPreferencesChanged(updated); notify("Appearance preferences saved") }, { route = "feature_hub" })
                 "owner_dashboard" -> OwnerDashboardScreen(ownerListings, { route = "owner_properties" }, { route = "owner_beds" }, { route = "owner_enquiries" }, { route = "owner_payments" }, { route = "owner_issues" }, { ownerMode = false; route = "home" }, { route = "owner_analytics" }, { route = "owner_residents" })
@@ -2196,21 +2241,24 @@ private fun ProfileScreen(
 private fun AccountAuthScreen(
     baseUrl: String,
     account: JSONObject?,
+    startMode: String,
+    initialWorkspace: String,
     onBack: () -> Unit,
     onOpenConnection: () -> Unit,
     onOpenAdminOwnerRequests: () -> Unit,
     onSignedIn: (JSONObject) -> Unit,
+    onLoginSucceeded: (JSONObject) -> Unit,
     onSignedOut: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
-    var mode by remember { mutableStateOf("signin") }
+    var mode by remember(startMode) { mutableStateOf(startMode) }
     var email by remember { mutableStateOf("") }
     var displayName by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var verificationCode by remember { mutableStateOf("") }
     var newPassword by remember { mutableStateOf("") }
-    var workspace by remember { mutableStateOf("tenant") }
+    var workspace by remember(initialWorkspace) { mutableStateOf(initialWorkspace) }
     var busy by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     var isError by remember { mutableStateOf(false) }
@@ -2447,7 +2495,9 @@ private fun AccountAuthScreen(
                     if (!email.contains("@") || password.isBlank()) showMessage("Enter your email and password.", true)
                     else runRequest {
                         val response = withContext(Dispatchers.IO) { StayApiClient.loginAccount(context, baseUrl, email, password) }
-                        onSignedIn(response.getJSONObject("user"))
+                        val user = response.getJSONObject("user")
+                        onSignedIn(user)
+                        onLoginSucceeded(user)
                     }
                 }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Signing in…" else "Sign in") }
             }
