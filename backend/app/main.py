@@ -97,6 +97,10 @@ class VisitCreate(BaseModel):
     enquiry_id: int | None = None
     preferred_at: datetime
 
+class VisitStatus(BaseModel):
+    status: str = Field(pattern="^(confirmed|completed|cancelled|no_show)$")
+    outcome: str = Field(default="", max_length=4000)
+
 class ReservationCreate(BaseModel):
     property_id: int
     unit_id: int | None = None
@@ -530,7 +534,24 @@ def list_visits(actor: dict = Depends(get_actor), db: Session = Depends(get_db))
     stmt = select(m.Visit)
     if actor["role"] == "customer": stmt = stmt.where(m.Visit.customer_id == actor_user_id(actor))
     elif actor["role"] != "admin": stmt = stmt.where(m.Visit.property_id.in_(select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))))
-    return [{"id": v.id, "property_id": v.property_id, "customer_id": v.customer_id, "preferred_at": v.preferred_at.isoformat(), "status": v.status, "outcome": v.outcome} for v in db.scalars(stmt.order_by(m.Visit.preferred_at).limit(300))]
+    rows = list(db.scalars(stmt.order_by(m.Visit.preferred_at).limit(300)))
+    property_ids = {v.property_id for v in rows}
+    property_names = {p.id: p.name for p in db.scalars(select(m.Property).where(m.Property.id.in_(property_ids)))} if property_ids else {}
+    return [{"id": v.id, "property_id": v.property_id, "property_name": property_names.get(v.property_id, f"Property #{v.property_id}"),
+             "customer_id": v.customer_id, "preferred_at": v.preferred_at.isoformat(), "status": v.status, "outcome": v.outcome} for v in rows]
+
+@app.post("/owner/visits/{visit_id}/status")
+def update_visit_status_action(visit_id: int, body: VisitStatus, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
+    item = db.get(m.Visit, visit_id)
+    if not item: raise HTTPException(404, "Visit not found")
+    require_property_manager(db, actor, item.property_id, "visits.manage")
+    old = {"status": item.status, "outcome": item.outcome}
+    item.status = body.status
+    item.outcome = body.outcome
+    audit(db, actor, "visit", item.id, "status_changed", old=old, new={"status": item.status, "outcome": item.outcome})
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "status": item.status, "outcome": item.outcome, "preferred_at": item.preferred_at.isoformat()}
 
 @app.post("/reservations", status_code=201)
 def create_reservation(body: ReservationCreate, actor: dict = Depends(require_roles("customer")), db: Session = Depends(get_db)):
