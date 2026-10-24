@@ -398,6 +398,8 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     }
     var ownerMode by remember { mutableStateOf(false) }
     var ownerReturnRoute by remember { mutableStateOf("home") }
+    var chatReturnRoute by remember { mutableStateOf("details") }
+    var notificationsReturnRoute by remember { mutableStateOf("home") }
     var selectedId by remember { mutableLongStateOf(101L) }
     var residentPropertyName by remember { mutableStateOf("CityNest Living") }
     var residentBedOptions by remember { mutableStateOf(listOf("Room 101 · Bed A", "Room 101 · Bed B")) }
@@ -463,8 +465,12 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "filters", "map", "search_location" -> "search"
             "details" -> detailsReturnRoute
             "request_visit", "request_booking" -> "details"
-            "chat" -> "details"
-            "saved", "stay", "payments", "issue", "enquiries", "notifications" -> if (ownerMode) "owner_dashboard" else "home"
+            "chat" -> chatReturnRoute
+            "saved", "stay" -> if (ownerMode) "owner_dashboard" else "home"
+            "payments" -> if (ownerMode) "owner_dashboard" else "stay"
+            "issue" -> if (ownerMode) "owner_dashboard" else "stay"
+            "enquiries" -> if (ownerMode) "owner_dashboard" else "search"
+            "notifications" -> notificationsReturnRoute
             "profile" -> "home"
             "account_auth" -> "profile"
             "feature_hub" -> if (ownerMode) "owner_more" else "profile"
@@ -512,7 +518,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (route) {
-                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { detailsReturnRoute = "home"; selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { route = "filters" }, { ownerReturnRoute = "home"; ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "profile" })
+                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { detailsReturnRoute = "home"; selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { route = "filters" }, { ownerReturnRoute = "home"; ownerMode = true; route = "owner_dashboard" }, { notificationsReturnRoute = "home"; route = "notifications" }, { route = "profile" })
                 "search" -> SearchResultsScreen(location, { location = it; route = "search_location" }, searchQuery, { searchQuery = it }, guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, filteredListings, favorites, { detailsReturnRoute = "search"; selectedId = it; route = "details" }, { route = "map" }, { route = "filters" }, toggleFavorite, {
                     val criteria = "Location: $location; query: ${searchQuery.ifBlank { "any PG" }}; eligibility: $guestChoice; max rent: ${money(maxBudget.toInt())}; room types: ${advancedFilters.roomTypes.joinToString().ifBlank { "any" }}; amenities: ${chosenAmenities.joinToString().ifBlank { "any" }}; availability: ${if (advancedFilters.availableOnly) "available now" else advancedFilters.moveInDate.ifBlank { "any" }}; sort: ${advancedFilters.sortBy}"
                     StayRecordStore.add(context, StayRecord(category = "saved_searches", title = "${location.substringBefore(",")}: ${guestChoice} stays", details = criteria, property = location, amount = maxBudget.toInt(), status = "Active"))
@@ -522,7 +528,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "search_location" -> LocationSearchScreen(location, { location = it; StayUserDataStore.addRecentLocation(context, it); route = "search" }, { route = "search" })
                 "map" -> MapSearchScreen(location, { location = it }, filteredListings, { detailsReturnRoute = "map"; selectedId = it; route = "details" }, { route = "search" }, { route = "filters" })
                 "filters" -> FilterScreen(guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, chosenAmenities, advancedFilters, { advancedFilters = it }, { route = "search" }, { guestChoice = "Any"; maxBudget = 30000f; chosenAmenities.clear(); advancedFilters = DiscoveryFilters() })
-                "details" -> ListingDetailsScreen(selectedListing, favorites.contains(selectedListing.id), { toggleFavorite(selectedListing.id) }, { route = "chat" }, { route = "request_visit" }, { route = detailsReturnRoute }, { route = "request_booking" })
+                "details" -> ListingDetailsScreen(selectedListing, favorites.contains(selectedListing.id), { toggleFavorite(selectedListing.id) }, { chatReturnRoute = "details"; route = "chat" }, { route = "request_visit" }, { route = detailsReturnRoute }, { route = "request_booking" })
                 "request_visit" -> VisitRequestScreen(selectedListing, { route = "details" }) { moveIn, roomType, visitSlot, note ->
                     val serverId = selectedListing.serverPropertyId
                     val token = StayApiClient.currentSessionToken(preferences.apiBaseUrl)
@@ -590,7 +596,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     StayRecordStore.notify(context, "Message saved", "Conversation note for ${selectedListing.name}", selectedListing.name)
                     notify("Message note saved on this device")
                 })
-                "stay" -> MyStayScreen({ route = "records:payments" }, { route = "issue" }, { route = "chat" }, {
+                "stay" -> MyStayScreen({ route = "records:payments" }, { route = "issue" }, { chatReturnRoute = "stay"; route = "chat" }, {
                     StayRecordStore.add(context, StayRecord(category = "stays", title = "Move-out notice", details = "Move-out request submitted from My Stay. Owner must confirm the applicable notice period and final settlement.", status = "Notice given"))
                     StayRecordStore.notify(context, "Move-out request saved", "Confirm notice period and deposit settlement with the owner")
                     notify("Move-out request saved on this device")
@@ -644,7 +650,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }
                     }
                 })
-                "profile" -> ProfileScreen(signedInAccount, { ownerReturnRoute = "profile"; ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "feature_hub" }, { route = "account_auth" })
+                "profile" -> ProfileScreen(signedInAccount, { ownerReturnRoute = "profile"; ownerMode = true; route = "owner_dashboard" }, { notificationsReturnRoute = "profile"; route = "notifications" }, { route = "feature_hub" }, { route = "account_auth" })
                 "account_auth" -> AccountAuthScreen(
                     baseUrl = preferences.apiBaseUrl,
                     account = signedInAccount,
