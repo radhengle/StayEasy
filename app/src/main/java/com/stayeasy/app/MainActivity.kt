@@ -1406,10 +1406,8 @@ private fun AccountAuthScreen(
             if (mode != "verify" && mode != "reset") {
                 OutlinedTextField(email, { email = it }, label = { Text("Email address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
             }
-            if (mode == "signin" || mode == "signup" || mode == "verify") {
-                if (mode != "verify" || password.isNotBlank()) {
-                    OutlinedTextField(password, { password = it }, label = { Text("Password") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
-                }
+            if (mode == "signin" || mode == "signup") {
+                OutlinedTextField(password, { password = it }, label = { Text("Password") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
             }
             if (mode == "signup") {
                 Spacer(Modifier.height(8.dp))
