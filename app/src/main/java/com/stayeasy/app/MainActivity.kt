@@ -2315,7 +2315,7 @@ private fun ProfileScreen(
         Spacer(Modifier.height(16.dp))
         MenuRow(if (account == null) "Sign in / Create account" else "Account & security", if (account == null) "Verify your email and sync your account" else "View account, refresh session or sign out", Icons.Filled.Lock, onAccount)
         MenuRow("Notifications", "Manage alerts and updates", Icons.Filled.Notifications, onNotifications)
-        MenuRow("Registration invitations", "Review a proposed bed, upload only requested documents and confirm first rent", Icons.Filled.MailOutline, onInvitations)
+        MenuRow("Registration invitations", "Review a proposed bed, upload only requested documents and confirm first rent", Icons.Filled.Lock, onInvitations)
         MenuRow("All tools & preferences", "Saved searches, compare, bookings, themes and privacy", Icons.Filled.Tune, onSettings)
         MenuRow("Privacy & security", "Controls and account data", Icons.Filled.Lock, onSettings)
         MenuRow("Help & support", "Get help with a stay", Icons.Filled.ReportProblem, onSettings)
