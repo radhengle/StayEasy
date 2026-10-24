@@ -60,7 +60,7 @@ class StayEasySmokeTest {
         composeRule.onNodeWithText("Your profile").assertIsDisplayed()
         clickControlContaining("Choose your workspace")
         composeRule.onNodeWithText("Choose your workspace").assertIsDisplayed()
-        composeRule.onNodeWithText("Preview mode:").assertDoesNotExist()
+        composeRule.onNodeWithText("Preview mode:", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Continue as Owner").performClick()
         composeRule.onNodeWithText("Your business, at a glance").assertIsDisplayed()
         composeRule.onNodeWithText("Your properties", useUnmergedTree = true).assertIsDisplayed()
