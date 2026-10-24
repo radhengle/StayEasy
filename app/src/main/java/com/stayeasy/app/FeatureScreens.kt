@@ -141,7 +141,7 @@ internal fun FeatureHubScreen(
             }
         }
         Spacer(Modifier.height(12.dp))
-        Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth()) {
+        Card(shape = SE.cardShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth()) {
             Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(if (ownerMode) Icons.Filled.HomeWork else Icons.Filled.Search, null, tint = Color.White, modifier = Modifier.size(27.dp))
                 Spacer(Modifier.width(11.dp)); Column(Modifier.weight(1f)) {
@@ -155,7 +155,7 @@ internal fun FeatureHubScreen(
             Spacer(Modifier.height(8.dp))
             entries.forEach { (title, subtitle, category) ->
                 val click = when (category) { "__compare" -> onCompare; "__themes" -> onThemes; "__api" -> onApi; else -> { { onOpenRecord(category) } } }
-                Card(shape = RoundedCornerShape(15.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { click() }) {
+                Card(shape = SE.cardShape(15.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).clickable { click() }) {
                     Row(Modifier.padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(41.dp).clip(RoundedCornerShape(13.dp)).background(SE.BlueSoft), contentAlignment = Alignment.Center) {
                             Icon(when (category) { "beds" -> Icons.Filled.Bed; "notifications" -> Icons.Filled.Notifications; "privacy", "admin" -> Icons.Filled.Security; "__themes" -> Icons.Filled.Palette; "__compare" -> Icons.Filled.CompareArrows; else -> Icons.Filled.Settings }, null, tint = SE.Blue)
@@ -678,7 +678,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
         }
         Spacer(Modifier.height(8.dp))
         if (visible.isEmpty()) {
-            Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+            Card(shape = SE.cardShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Filled.FilterAlt, null, tint = SE.Blue, modifier = Modifier.size(30.dp)); Spacer(Modifier.height(7.dp))
                     Text(
@@ -719,7 +719,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
         } else {
             LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp), contentPadding = PaddingValues(bottom = 12.dp)) {
                 items(visible, key = { it.id }) { r ->
-                    Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+                    Card(shape = SE.cardShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(12.dp)) {
                             Row(verticalAlignment = Alignment.Top) {
                                 Column(Modifier.weight(1f)) {
@@ -1109,7 +1109,7 @@ internal fun ComparePropertiesScreen(listings: List<PgListing>, initialIds: List
         Spacer(Modifier.height(12.dp)); Text("SIDE-BY-SIDE COMPARISON (${candidates.size}/3)", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
         LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 10.dp)) {
             items(candidates, key = { it.id }) { p ->
-                Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+                Card(shape = SE.cardShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
                     Column(Modifier.padding(13.dp)) {
                         Text(p.name, color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp); Text(p.area, color = SE.Muted, fontSize = 11.sp)
                         Divider(Modifier.padding(vertical = 7.dp), color = SE.Border)
@@ -1154,12 +1154,27 @@ internal fun ThemeSettingsScreen(
         Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Appearance & settings", color = SE.Ink, fontSize = 23.sp, fontWeight = FontWeight.Bold); Text("Theme changes apply across the app", color = SE.Muted, fontSize = 11.sp) }; OutlinedButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null); Text("Back") } }
         Spacer(Modifier.height(18.dp)); Text("APPEARANCE MODE", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
         Row(Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) { listOf("System", "Light", "Dark").forEach { option -> FilterChip(selected = mode == option, onClick = { mode = option; update() }, label = { Text(option) }) } }
-        Spacer(Modifier.height(17.dp)); Text("COLOUR PALETTE", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+        Spacer(Modifier.height(17.dp)); Text("DESIGN SYSTEMS", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+        Text("Each theme changes the visual language: card geometry, typography, graphic motifs and surface treatment—not just the accent colour.", color = SE.Muted, fontSize = 12.sp, lineHeight = 18.sp)
         themes.forEach { value ->
             val pair = themeSwatches(value)
-            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp).clip(RoundedCornerShape(14.dp)).background(SE.Surface).border(1.dp, if (theme == value) SE.Blue else SE.Border, RoundedCornerShape(14.dp)).clickable { theme = value; update() }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) { pair.forEach { color -> Box(Modifier.size(23.dp).clip(CircleShape).background(color)) } }
-                Spacer(Modifier.width(11.dp)); Column(Modifier.weight(1f)) { Text(value, color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp); Text(themeDescription(value), color = SE.Muted, fontSize = 10.sp) }
+            Row(
+                Modifier.fillMaxWidth()
+                    .padding(vertical = 5.dp)
+                    .clip(SE.cardShape(16.dp))
+                    .background(SE.Surface)
+                    .border(1.dp, if (theme == value) SE.Blue else SE.Border, SE.cardShape(16.dp))
+                    .clickable { theme = value; update() }
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ThemeStylePreview(value, pair)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    Text(themeStyleName(value), color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text(value, color = SE.Blue, fontWeight = FontWeight.SemiBold, fontSize = 10.sp)
+                    Text(themeDescription(value), color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
+                }
                 RadioButton(selected = theme == value, onClick = { theme = value; update() })
             }
         }
@@ -1171,7 +1186,7 @@ internal fun ThemeSettingsScreen(
         SettingSwitch("Rent reminders", "Upcoming charges and payment status", rentAlerts) { rentAlerts = it; update() }
         SettingSwitch("Maintenance updates", "Ticket status and resident notices", maintenanceAlerts) { maintenanceAlerts = it; update() }
         SettingSwitch("Availability alerts", "Matching properties and saved-search updates", availabilityAlerts) { availabilityAlerts = it; update() }
-        Spacer(Modifier.height(12.dp)); Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) { Text("Your preferences are saved locally on this device. Production notification preferences must sync to your account and be respected by the push service.", color = SE.Text, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(13.dp)) }
+        Spacer(Modifier.height(12.dp)); Card(shape = SE.cardShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) { Text("Your preferences are saved locally on this device. Production notification preferences must sync to your account and be respected by the push service.", color = SE.Text, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(13.dp)) }
         Spacer(Modifier.height(20.dp))
     }
 }
@@ -1245,10 +1260,103 @@ private fun statusFg(status: String) = when (status.lowercase(Locale.ROOT)) {
     else -> SE.Blue
 }
 private fun moneyText(amount: Int): String = "₹" + String.format(Locale.getDefault(), "%,d", amount)
-private fun themeDescription(theme: String) = when (theme) {
-    "Midnight Cobalt" -> "Cool blue accents · deep midnight base"; "Ocean" -> "Blue-teal accents · clear cool surfaces"; "Violet" -> "Violet accents · soft neutral surfaces"
-    "Graphite" -> "Slate accents · restrained contrast"; "Porcelain" -> "Cobalt accents · bright clean surfaces"; else -> "Copper accents · warm, muted neutral surfaces"
+private fun themeStyleName(theme: String) = when (theme) {
+    "Midnight Cobalt" -> "Bento Night"
+    "Ocean" -> "Coastal Drift"
+    "Violet" -> "Studio Editorial"
+    "Graphite" -> "Industrial Grid"
+    "Porcelain" -> "Gallery Minimal"
+    else -> "Courtyard Heritage"
 }
+
+private fun themeDescription(theme: String) = when (theme) {
+    "Midnight Cobalt" -> "Layered dashboard tiles, luminous accents and high-contrast hierarchy."
+    "Ocean" -> "Airy spacing, flowing circular motifs and softer oversized surfaces."
+    "Violet" -> "Editorial headline scale, asymmetric cards and strong section dividers."
+    "Graphite" -> "Compact data-dense layouts, square geometry and a technical grid."
+    "Porcelain" -> "Quiet typography, thin outlines, generous whitespace and gallery-like panels."
+    else -> "Warm architectural lines, framed sections and rounded courtyard-inspired details."
+}
+@Composable
+private fun ThemeStylePreview(theme: String, swatches: List<Color>) {
+    val base = swatches[0]
+    val pale = swatches[2]
+    Box(
+        Modifier.size(width = 66.dp, height = 58.dp)
+            .clip(
+                when (theme) {
+                    "Graphite" -> RoundedCornerShape(4.dp)
+                    "Porcelain" -> RoundedCornerShape(2.dp)
+                    "Violet" -> RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp, bottomEnd = 4.dp, bottomStart = 4.dp)
+                    "Copper" -> RoundedCornerShape(topStart = 17.dp, topEnd = 4.dp, bottomEnd = 17.dp, bottomStart = 4.dp)
+                    "Ocean" -> RoundedCornerShape(21.dp)
+                    else -> RoundedCornerShape(12.dp)
+                }
+            )
+            .background(pale)
+            .padding(6.dp)
+    ) {
+        when (theme) {
+            "Ocean" -> {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(Modifier.fillMaxWidth(.62f).height(4.dp).clip(CircleShape).background(base))
+                    Box(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(12.dp)).background(base.copy(alpha = .15f)))
+                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        repeat(3) { Box(Modifier.weight(1f).height(5.dp).clip(CircleShape).background(base.copy(alpha = .55f))) }
+                    }
+                }
+            }
+            "Violet" -> {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(Modifier.fillMaxWidth(.9f).height(5.dp).background(base))
+                    Box(Modifier.fillMaxWidth(.56f).height(3.dp).background(swatches[1]))
+                    Spacer(Modifier.height(2.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Box(Modifier.weight(1f).fillMaxHeight().background(base.copy(alpha = .15f)))
+                        Box(Modifier.weight(1f).fillMaxHeight().background(swatches[1].copy(alpha = .35f)))
+                    }
+                }
+            }
+            "Graphite" -> {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    repeat(4) { i ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Box(Modifier.weight(1f).height(6.dp).background(if (i == 0) base else base.copy(alpha = .18f)))
+                            Box(Modifier.weight(1.5f).height(6.dp).background(base.copy(alpha = .10f)))
+                            Box(Modifier.weight(.6f).height(6.dp).background(swatches[1].copy(alpha = .5f)))
+                        }
+                    }
+                }
+            }
+            "Porcelain" -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(38.dp).border(1.dp, base.copy(alpha = .65f), CircleShape), contentAlignment = Alignment.Center) {
+                        Box(Modifier.size(22.dp).border(1.dp, swatches[1], CircleShape))
+                    }
+                }
+            }
+            "Copper" -> {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Box(Modifier.fillMaxWidth().height(9.dp).clip(RoundedCornerShape(topStart = 8.dp, topEnd = 2.dp)).background(base))
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Box(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(topStart = 7.dp, bottomEnd = 7.dp)).background(base.copy(alpha = .18f)))
+                        Box(Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(topEnd = 7.dp, bottomStart = 7.dp)).background(swatches[1].copy(alpha = .5f)))
+                    }
+                }
+            }
+            else -> {
+                Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Box(Modifier.weight(1f).height(17.dp).clip(RoundedCornerShape(4.dp)).background(base))
+                        Box(Modifier.weight(1f).height(17.dp).clip(RoundedCornerShape(4.dp)).background(swatches[1]))
+                    }
+                    Box(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(4.dp)).background(base.copy(alpha = .12f)))
+                }
+            }
+        }
+    }
+}
+
 private fun themeSwatches(theme: String) = when (theme) {
     "Ocean" -> listOf(Color(0xFF087F9E), Color(0xFF64B6C8), Color(0xFFEAF5F8))
     "Violet" -> listOf(Color(0xFF7556D9), Color(0xFFB09BEF), Color(0xFFF2EEFC))
@@ -1406,7 +1514,7 @@ internal fun RequestBookingScreen(
     Column(Modifier.fillMaxSize().background(SE.Background).verticalScroll(rememberScrollState()).padding(17.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Request a reservation", color = SE.Ink, fontSize = 23.sp, fontWeight = FontWeight.Bold); Text("The owner must confirm the exact unit and terms", color = SE.Muted, fontSize = 11.sp) }; OutlinedButton(onClick = onBack) { Icon(Icons.Filled.ArrowBack, null); Text("Back") } }
         Spacer(Modifier.height(14.dp))
-        Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+        Card(shape = SE.cardShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
             Column(Modifier.padding(14.dp)) {
                 Text(listing.name, color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                 Text(listing.area, color = SE.Muted, fontSize = 11.sp)
