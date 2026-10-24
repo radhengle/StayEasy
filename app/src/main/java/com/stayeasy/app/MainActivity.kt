@@ -191,7 +191,10 @@ internal data class RemoteUnit(
     val sharingCapacity: Int,
     val monthlyRent: Int,
     val deposit: Int,
-    val status: String
+    val status: String,
+    val floorLabel: String = "Ground",
+    val occupantName: String = "",
+    val reservedForName: String = ""
 )
 
 internal data class RemoteResidentCandidate(
@@ -2483,20 +2486,28 @@ private fun OwnerDashboardScreen(
     listings: List<PgListing>, onProperties: () -> Unit, onBeds: () -> Unit, onEnquiries: () -> Unit,
     onPayments: () -> Unit, onIssues: () -> Unit, onTenantView: () -> Unit, onAnalytics: () -> Unit, onResidents: () -> Unit
 ) {
-    val totalBeds = listings.sumOf { it.totalBeds }
-    val available = listings.sumOf { it.availableBeds }
-    val occupied = max(0, totalBeds - available - 3)
+    val serverListings = listings.filter { it.serverPropertyId != null }
+    val liveServerUnits = serverListings.flatMap { it.serverUnits }
+    val hasServerInventory = serverListings.isNotEmpty()
+    val totalBeds = liveServerUnits.size
+    val available = liveServerUnits.count { it.status.equals("available", true) }
+    val occupied = liveServerUnits.count { it.status.equals("occupied", true) }
+    val reserved = liveServerUnits.count { it.status.equals("reserved", true) }
+    val totalLabel = if (hasServerInventory) totalBeds.toString() else "—"
+    val availableLabel = if (hasServerInventory) available.toString() else "—"
+    val occupiedLabel = if (hasServerInventory) occupied.toString() else "—"
+    val reservedLabel = if (hasServerInventory) reserved.toString() else "—"
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 17.dp)) {
         Spacer(Modifier.height(14.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Good morning 👋", color = SE.Muted, fontSize = 12.sp); Text("Your business, at a glance", color = SE.Ink, fontSize = 22.sp, fontWeight = FontWeight.Bold) }; RoundIconButton(Icons.Filled.Notifications, {}, tint = SE.Blue); Spacer(Modifier.width(8.dp)); RoundIconButton(Icons.Filled.Person, onTenantView, tint = SE.Ink) }
         Spacer(Modifier.height(14.dp)); Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(15.dp)).background(SE.Surface).clickable(onClick = onProperties).padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.Apartment, null, tint = SE.Blue); Spacer(Modifier.width(9.dp)); Column(Modifier.weight(1f)) { Text("Your properties", color = SE.Muted, fontSize = 10.sp); Text("${listings.size} properties · Pune", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 13.sp) }; Icon(Icons.Filled.ChevronRight, null, tint = SE.Muted) }
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            MetricCard("Total beds", "$totalBeds", "Across properties", SE.BlueSoft, SE.Blue, Modifier.weight(1f))
-            MetricCard("Occupied", "$occupied", "Active stays", SE.Mint, SE.MintText, Modifier.weight(1f))
+            MetricCard("Total beds", totalLabel, if (hasServerInventory) "Across properties · tap to inspect" else "Connect live inventory", SE.BlueSoft, SE.Blue, Modifier.weight(1f).clickable(onClick = onBeds))
+            MetricCard("Occupied", occupiedLabel, if (hasServerInventory) "From active stays" else "Live status unavailable", SE.Mint, SE.MintText, Modifier.weight(1f).clickable(onClick = onBeds))
         }
         Spacer(Modifier.height(9.dp)); Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            MetricCard("Available", "$available", "Ready to assign", SE.OrangeSoft, SE.Orange, Modifier.weight(1f))
-            MetricCard("Reserved", "3", "Expected arrivals", SE.Lavender, SE.Ink, Modifier.weight(1f))
+            MetricCard("Available", availableLabel, if (hasServerInventory) "Ready to assign" else "Live status unavailable", SE.OrangeSoft, SE.Orange, Modifier.weight(1f).clickable(onClick = onBeds))
+            MetricCard("Reserved", reservedLabel, if (hasServerInventory) "Active reservation holds" else "Live status unavailable", SE.Lavender, SE.Ink, Modifier.weight(1f).clickable(onClick = onBeds))
         }
         Spacer(Modifier.height(19.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text("Today's priorities", color = SE.Ink, fontSize = 17.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.weight(1f)); Text("Live queue demo", color = SE.Muted, fontSize = 10.sp) }
         Spacer(Modifier.height(9.dp))
@@ -2721,7 +2732,8 @@ private fun OwnerBedsScreen(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var propertyIndex by remember(initialPropertyId) { mutableIntStateOf(listings.indexOfFirst { it.id == initialPropertyId }.coerceAtLeast(0)) }
-    var roomIndex by remember { mutableIntStateOf(0) }
+    var floorIndex by remember(initialPropertyId) { mutableIntStateOf(0) }
+    var roomIndex by remember(initialPropertyId) { mutableIntStateOf(0) }
     val listing = listings.getOrNull(propertyIndex) ?: demoListings.first()
     val serverUnits = listing.serverUnits
     val isServerListing = listing.serverPropertyId != null
@@ -2737,31 +2749,39 @@ private fun OwnerBedsScreen(
         return "Bed ${suffix.ifBlank { (index + 1).toString() }}"
     }
 
+    val floorLabels = if (isServerListing) {
+        serverUnits.map { it.floorLabel.ifBlank { "Ground" } }.distinct()
+    } else {
+        listOf("Sample inventory")
+    }
+    val currentFloorIndex = floorIndex.coerceIn(0, floorLabels.lastIndex.coerceAtLeast(0))
+    val floorLabel = floorLabels.getOrElse(currentFloorIndex) { "Ground" }
+    val floorUnits = serverUnits.filter { it.floorLabel.ifBlank { "Ground" } == floorLabel }
     val roomLabels = if (isServerListing) {
-        serverUnits.map { displayRoom(it.roomCode) }.distinct()
+        floorUnits.map { displayRoom(it.roomCode) }.distinct()
     } else {
         (1..listing.totalRooms.coerceIn(1, 30)).map { "Room " + (100 + it) }
     }
     val roomCount = roomLabels.size.coerceAtLeast(1)
-    val declaredBedCount = if (isServerListing) serverUnits.size else listing.totalBeds.coerceAtLeast(0)
+    val declaredBedCount = if (isServerListing) floorUnits.size else listing.totalBeds.coerceAtLeast(0)
     val currentRoomIndex = roomIndex.coerceIn(0, roomLabels.lastIndex.coerceAtLeast(0))
     val roomLabel = roomLabels.getOrElse(currentRoomIndex) { "Room 101" }
-    val currentServerRoomCode = serverUnits.firstOrNull { displayRoom(it.roomCode) == roomLabel }?.roomCode
+    val currentServerRoomCode = floorUnits.firstOrNull { displayRoom(it.roomCode) == roomLabel }?.roomCode
     val bedsPerRoom = if (isServerListing) {
-        serverUnits.count { it.roomCode == currentServerRoomCode }
+        floorUnits.count { it.roomCode == currentServerRoomCode }
     } else {
         (declaredBedCount / roomCount + if (currentRoomIndex < declaredBedCount % roomCount) 1 else 0).coerceIn(0, 6)
     }
     val bedLetters = listOf("A", "B", "C", "D", "E", "F")
-    val bedRecords = remember(listing.id, roomLabel, listing.serverUnits) {
+    val bedRecords = remember(listing.id, floorLabel, roomLabel, listing.serverUnits) {
         mutableStateListOf<StayRecord>().apply {
             if (isServerListing) {
-                serverUnits.filter { displayRoom(it.roomCode) == roomLabel }.forEachIndexed { index, unit ->
+                floorUnits.filter { displayRoom(it.roomCode) == roomLabel }.forEachIndexed { index, unit ->
                     val status = unit.status.lowercase(Locale.ROOT).replaceFirstChar {
                         if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString()
                     }
                     val bed = displayBed(unit, index)
-                    val detail = when (unit.status.lowercase(Locale.ROOT)) {
+                    val statusDetail = when (unit.status.lowercase(Locale.ROOT)) {
                         "available" -> "Available on the StayEasy server; link a resident account before assignment."
                         "reserved" -> "Reserved in shared inventory."
                         "occupied" -> "Occupied in shared inventory; complete stay actions before releasing it."
@@ -2769,6 +2789,12 @@ private fun OwnerBedsScreen(
                         "inactive" -> "Inactive on the StayEasy server."
                         else -> "Inventory status returned by the server."
                     }
+                    val personDetail = when {
+                        unit.occupantName.isNotBlank() -> " · Occupant: ${unit.occupantName}"
+                        unit.reservedForName.isNotBlank() -> " · Reserved for: ${unit.reservedForName}"
+                        else -> ""
+                    }
+                    val detail = statusDetail + personDetail
                     add(StayRecord(
                         id = "server-unit-${unit.id}", category = "beds", title = bed, details = detail,
                         property = listing.name, unit = "$roomLabel · $bed", amount = unit.monthlyRent,
@@ -2831,7 +2857,7 @@ private fun OwnerBedsScreen(
         Spacer(Modifier.height(12.dp))
         Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             listings.forEachIndexed { index, p ->
-                FilterChip(selected = propertyIndex == index, onClick = { propertyIndex = index; roomIndex = 0 }, label = { Text(p.name, maxLines = 1) })
+                FilterChip(selected = propertyIndex == index, onClick = { propertyIndex = index; floorIndex = 0; roomIndex = 0 }, label = { Text(p.name, maxLines = 1) })
             }
         }
         Spacer(Modifier.height(13.dp))
@@ -2854,10 +2880,18 @@ private fun OwnerBedsScreen(
             }
         }
         Spacer(Modifier.height(13.dp))
+        Text(if (isServerListing) "Floor" else "Sample floor", color = SE.Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
+            floorLabels.forEachIndexed { i, floor ->
+                val count = serverUnits.count { it.floorLabel.ifBlank { "Ground" } == floor }
+                FilterChip(selected = currentFloorIndex == i, onClick = { floorIndex = i; roomIndex = 0 }, label = { Text("$floor · $count units") })
+            }
+        }
+        Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
             roomLabels.forEachIndexed { i, room ->
                 val count = if (isServerListing) {
-                    serverUnits.count { displayRoom(it.roomCode) == room }
+                    floorUnits.count { displayRoom(it.roomCode) == room }
                 } else {
                     (declaredBedCount / roomCount + if (i < declaredBedCount % roomCount) 1 else 0).coerceIn(0, 6)
                 }
@@ -2933,12 +2967,22 @@ private fun OwnerBedsScreen(
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                     Text("Current status: ${current.status}", color = SE.Muted, fontSize = 12.sp)
-                    val actions = when (current.status) {
+                    val actions = if (current.source == "Server") {
+                        when (current.status) {
+                            "Available" -> listOf("Maintenance", "Inactive")
+                            "Maintenance" -> listOf("Available", "Inactive")
+                            "Inactive" -> listOf("Available", "Maintenance")
+                            else -> emptyList()
+                        }
+                    } else when (current.status) {
                         "Available" -> listOf("Reserved", "Occupied", "Maintenance", "Inactive")
                         "Reserved" -> listOf("Occupied", "Available", "Maintenance")
                         "Occupied" -> listOf("Available", "Maintenance")
                         "Maintenance" -> listOf("Available", "Inactive")
                         else -> listOf("Available", "Maintenance")
+                    }
+                    if (current.source == "Server" && actions.isEmpty()) {
+                        Text("This state is controlled by the live reservation or active stay record. Complete that workflow to release or reassign this bed.", color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp)
                     }
                     actions.forEach { status ->
                         OutlinedButton(onClick = {
