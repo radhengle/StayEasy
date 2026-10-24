@@ -21,6 +21,7 @@ from backend.app import main as api
 from backend.app.database import Base, engine, SessionLocal
 from backend.app.security import get_actor
 from backend.app import models as m
+from backend.app import auth as auth_routes
 
 client = TestClient(api.app)
 
@@ -368,3 +369,75 @@ def test_maintenance_issues_are_scoped_to_staff_permissions():
 
     view_only_update = client.patch(f"/owner/issues/{issue_a['id']}", json={"status": "resolved"})
     assert view_only_update.status_code == 403
+
+
+def test_email_account_registration_login_role_boundary_logout_and_password_reset(monkeypatch):
+    delivered = {}
+
+    monkeypatch.setattr(auth_routes, "_mail_ready", lambda: True)
+    def fake_send(recipient, subject, code, body_text):
+        delivered[subject] = {"recipient": recipient, "code": code, "body": body_text}
+    monkeypatch.setattr(auth_routes, "send_security_code", fake_send)
+
+    payload = {
+        "email": "New.Owner@Example.com", "display_name": "New Owner",
+        "password": "Correct-Horse-Battery-9", "requested_workspace": "owner",
+    }
+    registered = client.post("/auth/register", json=payload)
+    assert registered.status_code == 202, registered.text
+    assert registered.json()["email"] == "new.owner@example.com"
+    with SessionLocal() as db:
+        account = db.scalar(select(m.User).where(m.User.email == "new.owner@example.com"))
+        credential = db.get(m.UserCredential, account.id)
+        assert account.role == "customer"
+        assert credential.requested_workspace == "owner"
+        assert credential.email_verified_at is None
+    assert client.post("/auth/login", json={"email": payload["email"], "password": payload["password"]}).status_code == 403
+
+    bad_code = client.post("/auth/verify-email", json={"email": payload["email"], "code": "000000"})
+    if delivered["Verify your StayEasy account"]["code"] != "000000":
+        assert bad_code.status_code == 400
+    code = delivered["Verify your StayEasy account"]["code"]
+    verified = client.post("/auth/verify-email", json={"email": payload["email"], "code": code})
+    assert verified.status_code == 200, verified.text
+    logged_in = client.post("/auth/login", json={"email": payload["email"], "password": payload["password"]})
+    assert logged_in.status_code == 200, logged_in.text
+    token = logged_in.json()["access_token"]
+    assert logged_in.json()["user"]["role"] == "customer"
+    assert logged_in.json()["user"]["owner_access_status"] == "pending_approval"
+    auth_header = {"Authorization": f"Bearer {token}"}
+    assert client.get("/auth/me", headers=auth_header).json()["requested_workspace"] == "owner"
+    # Asking for an Owner workspace must never self-assign owner privileges.
+    denied = client.post("/owner/properties", headers=auth_header, json={
+        "name": "Not Yet An Owner", "locality": "Wakad", "city": "Pune"
+    })
+    assert denied.status_code == 403, denied.text
+
+    requested = client.post("/auth/forgot-password", json={"email": payload["email"]})
+    assert requested.status_code == 202, requested.text
+    reset_code = delivered["Reset your StayEasy password"]["code"]
+    reset = client.post("/auth/reset-password", json={
+        "email": payload["email"], "code": reset_code, "new_password": "New-Secure-Password-2026"
+    })
+    assert reset.status_code == 200, reset.text
+    assert client.get("/auth/me", headers=auth_header).status_code == 401
+    assert client.post("/auth/login", json={"email": payload["email"], "password": payload["password"]}).status_code == 401
+
+    new_login = client.post("/auth/login", json={
+        "email": payload["email"], "password": "New-Secure-Password-2026"
+    })
+    assert new_login.status_code == 200, new_login.text
+    new_header = {"Authorization": f"Bearer {new_login.json()['access_token']}"}
+    assert client.post("/auth/logout", headers=new_header).status_code == 200
+    assert client.get("/auth/me", headers=new_header).status_code == 401
+
+
+def test_registration_requires_configured_email_delivery(monkeypatch):
+    monkeypatch.setattr(auth_routes, "_mail_ready", lambda: False)
+    response = client.post("/auth/register", json={
+        "email": "missing.smtp@example.com", "display_name": "SMTP Missing",
+        "password": "Correct-Horse-Battery-9", "requested_workspace": "tenant",
+    })
+    assert response.status_code == 503
+    with SessionLocal() as db:
+        assert db.scalar(select(m.User).where(m.User.email == "missing.smtp@example.com")) is None
