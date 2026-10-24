@@ -1,8 +1,8 @@
 package com.stayeasy.app
 
 import android.graphics.Bitmap
-import java.io.File
-import java.io.FileOutputStream
+import android.os.ParcelFileDescriptor
+import java.io.ByteArrayOutputStream
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -32,28 +32,39 @@ class StayEasySmokeTest {
         composeRule.onNode(hasText(label, substring = true) and hasClickAction()).performScrollTo().performClick()
     }
 
-    /** Saves a genuine emulator-display PNG under app-specific external storage for host-side export. */
+    /** Streams a genuine emulator-display PNG to persistent shared storage before test cleanup. */
     private fun captureScreenshot(name: String) {
         composeRule.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val bitmap = instrumentation.uiAutomation.takeScreenshot()
         try {
-            val directory = File(
-                instrumentation.targetContext.getExternalFilesDir(null),
-                "stayeasy-screenshots"
-            )
-            assertTrue("Unable to create screenshot directory", directory.mkdirs() || directory.isDirectory)
-            val destination = File(directory, "$name.png")
-            FileOutputStream(destination).use { output ->
+            val image = ByteArrayOutputStream().use { bytes ->
                 assertTrue(
                     "Unable to encode emulator screenshot $name",
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, bytes)
                 )
+                bytes.toByteArray()
             }
-            assertTrue(
-                "Screenshot was not written: $destination",
-                destination.exists() && destination.length() > 1024
+            assertTrue("Emulator screenshot $name is unexpectedly small", image.size > 1024)
+
+            val destination = "/sdcard/Download/stayeasy-screenshots/$name.png"
+            val pipes = instrumentation.uiAutomation.executeShellCommandRwe(
+                "mkdir -p /sdcard/Download/stayeasy-screenshots && cat > '$destination' && test -s '$destination' && echo SCREENSHOT_OK"
             )
+            assertTrue("Shell did not provide screenshot I/O pipes", pipes.size >= 3)
+            try {
+                ParcelFileDescriptor.AutoCloseOutputStream(pipes[0]).use { it.write(image) }
+                val output = ParcelFileDescriptor.AutoCloseInputStream(pipes[1])
+                    .bufferedReader().use { it.readText() }
+                val error = ParcelFileDescriptor.AutoCloseInputStream(pipes[2])
+                    .bufferedReader().use { it.readText() }
+                assertTrue(
+                    "Unable to export emulator screenshot $name. stdout=$output stderr=$error",
+                    output.contains("SCREENSHOT_OK")
+                )
+            } finally {
+                pipes.forEach { descriptor -> runCatching { descriptor.close() } }
+            }
         } finally {
             bitmap.recycle()
         }
