@@ -266,8 +266,10 @@ internal fun OwnerEnquiriesInboxScreen(baseUrl: String, token: String?, onBack: 
     }
 }
 
+private data class RentDueKey(val propertyId: Long, val stayId: Long, val reservationId: Long, val period: String)
+
 private data class RentDueLine(
-    val key: String, val propertyId: Long, val propertyName: String, val stayId: Long,
+    val key: String, val propertyId: Long, val propertyName: String, val stayId: Long, val reservationId: Long?,
     val tenantName: String, val roomCode: String, val unitCode: String, val period: String,
     val dueDate: String, val billedPaise: Long, val paidPaise: Long, val status: String, val description: String
 ) {
@@ -301,20 +303,28 @@ internal fun OwnerRentDueScreen(baseUrl: String, token: String?, onBack: () -> U
     }
     val lines = remember(ledger, stays) {
         val charges = ledger.filter { it.pText("category").lowercase(Locale.ROOT) == "rent_charge" && it.pText("status").lowercase(Locale.ROOT) !in setOf("cancelled", "void", "written_off") }
-        charges.groupBy { Triple(it.optLong("property_id"), it.optLong("resident_stay_id"), it.pText("billing_period")) }
-            .mapNotNull { (key, items) ->
-                val (propertyId, stayId, period) = key
-                if (stayId <= 0L) return@mapNotNull null
-                val payments = ledger.filter { it.pText("category").lowercase(Locale.ROOT) == "payment" &&
-                    it.optLong("property_id") == propertyId && it.optLong("resident_stay_id") == stayId &&
-                    it.pText("billing_period") == period && it.pText("status").lowercase(Locale.ROOT) !in setOf("cancelled", "void", "rejected") }
+        charges.groupBy {
+            RentDueKey(it.optLong("property_id"), it.optLong("resident_stay_id"), it.optLong("reservation_id"), it.pText("billing_period"))
+        }.mapNotNull { (key, items) ->
+                val propertyId = key.propertyId
+                val stayId = key.stayId
+                val reservationId = key.reservationId
+                val period = key.period
+                if (stayId <= 0L && reservationId <= 0L) return@mapNotNull null
+                val payments = ledger.filter { payment ->
+                    payment.pText("category").lowercase(Locale.ROOT) == "payment" &&
+                    payment.optLong("property_id") == propertyId &&
+                    (if (reservationId > 0L) payment.optLong("reservation_id") == reservationId else payment.optLong("resident_stay_id") == stayId) &&
+                    payment.pText("billing_period") == period && payment.pText("status").lowercase(Locale.ROOT) !in setOf("cancelled", "void", "rejected")
+                }
                 val billed = items.sumOf { if (it.has("amount_paise") && !it.isNull("amount_paise")) it.optLong("amount_paise") else it.optLong("amount") * 100L }
                 val paid = payments.sumOf { if (it.has("amount_paise") && !it.isNull("amount_paise")) it.optLong("amount_paise") else it.optLong("amount") * 100L }
                 if (billed <= paid) return@mapNotNull null
                 val first = items.minByOrNull { it.pText("due_date", "9999-12-31") } ?: items.first()
                 val stay = stays.firstOrNull { it.optLong("id") == stayId }
-                RentDueLine("${propertyId}:${stayId}:$period", propertyId, first.pText("property_name", stay?.pText("property_name", "Property") ?: "Property"),
-                    stayId, stay?.pText("resident_name", "Tenant") ?: "Tenant",
+                RentDueLine("${propertyId}:${stayId}:${reservationId}:$period", propertyId, first.pText("property_name", stay?.pText("property_name", "Property") ?: "Property"),
+                    stayId, reservationId.takeIf { it > 0L },
+                    stay?.pText("resident_name", first.pText("resident_name", "Tenant")) ?: first.pText("resident_name", "Tenant"),
                     stay?.pText("room_code") ?: "", stay?.pText("unit_code", first.pText("unit_code")) ?: "",
                     period, first.pText("due_date", "Not set"), billed, paid, first.pText("status", "open"),
                     items.map { it.pText("description") }.filter { it.isNotBlank() }.distinct().joinToString(" · "))
@@ -383,17 +393,20 @@ internal fun OwnerRentDueScreen(baseUrl: String, token: String?, onBack: () -> U
         confirmButton = {
             Button(enabled = !busy && (amountText.toBigDecimalOrNull()?.toDouble() ?: 0.0) > 0.0, onClick = {
                 val paise = runCatching { (amountText.toBigDecimal() * java.math.BigDecimal(100)).longValueExact() }.getOrNull()
-                if (paise == null || paise % 100L != 0L) {
-                    notify("The current manual-payment API accepts whole rupees only. Exact paise billing is stored separately where supported.")
+                if (paise == null || paise <= 0L || paise > line.balancePaise) {
+                    notify("Enter a valid payment amount no greater than the outstanding balance.")
                     return@Button
                 }
                 busy = true
                 scope.launch {
                     try {
                         withContext(Dispatchers.IO) {
-                            StayApiClient.createManualLedgerEntry(baseUrl, token!!, line.propertyId, line.stayId, "payment",
-                                (paise / 100L).toInt(), line.period, "", paymentReference,
-                                "Manual rent payment for ${line.period}; no bank settlement verification.")
+                            StayApiClient.createManualLedgerEntry(
+                                baseUrl, token!!, line.propertyId, line.stayId.takeIf { it > 0L }, "payment",
+                                ((paise + 50L) / 100L).toInt(), line.period, "", paymentReference,
+                                "Manual rent payment for ${line.period}; bank settlement not verified.",
+                                reservationId = line.reservationId, amountPaise = paise
+                            )
                         }
                         notify("Manual payment entry saved. Verify settlement separately.")
                         selected = null; refresh++
