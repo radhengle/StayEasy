@@ -1355,7 +1355,13 @@ def list_tenant_invitations(actor: dict = Depends(require_roles("customer")), db
         ),
         m.PropertyInvitation.status == "pending",
     ).order_by(m.PropertyInvitation.created_at.desc()).limit(100)))
-    return [invitation_payload(db, row, include_private=False) for row in rows]
+    return [{
+        **invitation_payload(db, row, include_private=False),
+        "billable_quote": make_proration_quote(row.rent_snapshot, date.today()),
+        "requires_explicit_billable_terms_acknowledgement": True,
+        "required_document_categories": [],
+        "document_request_reason": "",
+    } for row in rows]
 
 
 @app.get("/invitations/resolve")
