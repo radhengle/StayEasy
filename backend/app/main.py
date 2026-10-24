@@ -471,6 +471,35 @@ def list_units(property_id: int, actor: dict = Depends(require_roles("owner", "m
              "monthly_rent": u.monthly_rent, "deposit": u.deposit, "status": u.status,
              "expected_vacancy": u.expected_vacancy.isoformat() if u.expected_vacancy else None} for u in units]
 
+@app.get("/owner/resident-candidates")
+def list_owner_resident_candidates(property_id: int, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
+    """Return verified customer accounts already connected to this property's enquiries/reservations."""
+    require_property_manager(db, actor, property_id, "residents.view")
+    related_customer_ids = select(m.Reservation.customer_id).where(
+        m.Reservation.property_id == property_id,
+        m.Reservation.status.in_(["pending", "confirmed"])
+    ).union(
+        select(m.Enquiry.customer_id).where(m.Enquiry.property_id == property_id)
+    )
+    rows = db.execute(
+        select(m.User, m.UserCredential)
+        .join(m.UserCredential, m.UserCredential.user_id == m.User.id)
+        .where(
+            m.User.id.in_(related_customer_ids),
+            m.User.role == "customer",
+            m.User.is_active.is_(True),
+            m.UserCredential.email_verified_at.is_not(None)
+        )
+        .order_by(m.User.display_name, m.User.email)
+    ).all()
+    return [{
+        "id": user.id,
+        "display_name": user.display_name,
+        "email": user.email,
+        "email_verified": True
+    } for user, _credential in rows]
+
+
 @app.get("/owner/stays")
 def list_owner_stays(property_id: int | None = None, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
     stmt = select(m.ResidentStay)
@@ -719,12 +748,16 @@ def update_reservation_status_action(reservation_id: int, body: ReservationStatu
 @app.post("/owner/stays", status_code=201)
 def create_stay(body: StayCreate, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
     require_property_manager(db, actor, body.property_id, "residents.manage")
+    resident = db.get(m.User, body.resident_id)
+    credential = db.get(m.UserCredential, body.resident_id)
+    if not resident or resident.role != "customer" or not resident.is_active or not credential or credential.email_verified_at is None:
+        raise HTTPException(422, "Choose an active customer account with a verified email before assigning a resident stay")
     unit = db.scalar(select(m.PropertyUnit).where(m.PropertyUnit.id == body.unit_id).with_for_update())
     if not unit or unit.property_id != body.property_id: raise HTTPException(404, "Unit not found")
     if unit.status not in {"available", "reserved"}: raise HTTPException(409, f"Unit cannot be assigned while {unit.status}")
     reservation = db.get(m.Reservation, body.reservation_id) if body.reservation_id else None
-    if reservation and (reservation.property_id != body.property_id or reservation.unit_id not in {None, body.unit_id} or reservation.status not in {"confirmed", "pending"}):
-        raise HTTPException(409, "Reservation is not eligible for this assignment")
+    if reservation and (reservation.property_id != body.property_id or reservation.unit_id not in {None, body.unit_id} or reservation.customer_id != body.resident_id or reservation.status not in {"confirmed", "pending"}):
+        raise HTTPException(409, "Reservation is not eligible for this resident and unit assignment")
     active = db.scalar(select(m.ResidentStay.id).where(m.ResidentStay.unit_id == body.unit_id, m.ResidentStay.status.in_(["active", "notice_given"])))
     if active: raise HTTPException(409, "Unit already has an active resident stay")
     stay = m.ResidentStay(**body.model_dump(), status="active")
