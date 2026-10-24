@@ -50,13 +50,13 @@ for marker in [
 for marker in [
     'FeatureRecordsScreen', 'ComparePropertiesScreen', 'ThemeSettingsScreen',
     'RequestBookingScreen', 'ApiConnectionScreen',
-    'maintenance', 'deposit', 'visit', 'reservation'
+    'maintenance', 'deposit', 'visit', 'reservation', 'mapLedgerRows', 'generate monthly rent charges', 'createManualLedgerEntry'
 ]:
     assert marker.lower() in feature_text.lower(), f"Missing feature screen marker: {marker}"
 for marker in ['SharedPreferences', 'StayRecord', 'apiBaseUrl', 'favorites', 'recentLocations']:
     assert marker.lower() in store_text.lower(), f"Missing local store marker: {marker}"
 assert 'putString("apiBaseUrl", value.apiBaseUrl)' in store_text, "API base URL preference is not persisted"
-for marker in ['/health', '/properties?city=$encodedCity', 'distanceIsVerified = false', 'https', '/auth/register', '/auth/verify-email', '/auth/login', '/auth/forgot-password', '/auth/logout', 'AndroidKeyStore', 'restoreAccountSession']:
+for marker in ['/health', '/properties?city=$encodedCity', 'distanceIsVerified = false', 'https', '/auth/register', '/auth/verify-email', '/auth/login', '/auth/forgot-password', '/auth/logout', 'AndroidKeyStore', 'restoreAccountSession', 'ownerLedger', 'myLedger', 'createManualLedgerEntry', 'generateRentCharges']:
     assert marker.lower() in client_text.lower(), f"Missing API client marker: {marker}"
 for route in [
     '"/register"', '"/verify-email"', '"/resend-verification"', '"/login"',
@@ -68,11 +68,12 @@ for marker in ["hash_password", "verify_password", "hash_one_time_code", "auth_v
 for route in [
     '"/health"', '"/properties"', '"/owner/properties"', '"/owner/units"',
     '"/enquiries"', '"/visits"', '"/reservations"', '"/owner/stays"',
-    '"/owner/ledger"', '"/owner/billing/generate"', '"/issues"',
+    '"/owner/ledger"', '"/ledger/me"', '"/owner/billing/generate"', '"/issues"',
     '"/owner/notices"', '"/owner/staff"', '"/admin/listing-review"',
     '"/admin/reports"', '"/privacy/requests"', '"/amenities/catalog"'
 ]:
     assert route in api_text, f"Missing backend endpoint marker: {route}"
+assert 'body.provider_status != "manual_record"' in api_text, "Manual-only ledger guard is missing"
 for model in [
     'class Property', 'class PropertyUnit', 'class Reservation', 'class ResidentStay',
     'class LedgerEntry', 'class MaintenanceIssue', 'class AuditLog', 'class PrivacyRequest',

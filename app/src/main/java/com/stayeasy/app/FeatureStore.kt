@@ -74,9 +74,17 @@ object StayRecordStore {
         save(context, category, records)
     }
 
-    /** Replace rows sourced from the server while preserving records created only on this device. */
-    fun replaceServerRecords(context: Context, category: String, serverRecords: List<StayRecord>) {
-        val localRecords = load(context, category).filter { it.source != "Server" }
+    /**
+     * Replace server-backed rows. Finance categories can set preserveLocal=false so stale demo
+     * amounts never appear alongside the authoritative server ledger after sync is configured.
+     */
+    fun replaceServerRecords(
+        context: Context,
+        category: String,
+        serverRecords: List<StayRecord>,
+        preserveLocal: Boolean = true
+    ) {
+        val localRecords = if (preserveLocal) load(context, category).filter { it.source != "Server" } else emptyList()
         val merged = (serverRecords + localRecords).distinctBy { it.id }
             .sortedByDescending { it.updatedAt }
         save(context, category, merged)

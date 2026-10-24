@@ -139,6 +139,7 @@ class LedgerCreate(BaseModel):
     amount: int = Field(ge=0)
     billing_period: str = ""
     due_date: date | None = None
+    paid_at: datetime | None = None
     payment_method: str = "manual"
     payment_reference: str = ""
     provider_status: str = Field(default="manual_record", pattern="^(manual_record|provider_pending|provider_confirmed|reconciled|failed|refunded)$")
@@ -719,7 +720,20 @@ def create_stay(body: StayCreate, actor: dict = Depends(require_roles("owner", "
     stay = m.ResidentStay(**body.model_dump(), status="active")
     db.add(stay); unit.status = "occupied"
     if reservation: reservation.status = "checked_in"; reservation.unit_id = unit.id
-    db.flush(); audit(db, actor, "resident_stay", stay.id, "created", new={"unit_id": unit.id, "resident_id": stay.resident_id}); db.commit(); db.refresh(stay)
+    db.flush()
+    if body.deposit_held > 0:
+        deposit_entry = m.LedgerEntry(
+            property_id=stay.property_id, resident_stay_id=stay.id, category="deposit",
+            amount=body.deposit_held, payment_method="manual", payment_reference="",
+            provider_status="manual_record",
+            description="Security deposit recorded at move-in; manually recorded, not provider verified.",
+            status="held", created_by=actor_user_id(actor)
+        )
+        db.add(deposit_entry); db.flush()
+        audit(db, actor, "ledger_entry", deposit_entry.id, "initial_deposit_recorded",
+              new={"resident_stay_id": stay.id, "amount": body.deposit_held, "provider_status": "manual_record"})
+    audit(db, actor, "resident_stay", stay.id, "created", new={"unit_id": unit.id, "resident_id": stay.resident_id})
+    db.commit(); db.refresh(stay)
     return {"id": stay.id, "status": stay.status, "unit_id": stay.unit_id, "joining_date": stay.joining_date.isoformat()}
 
 @app.patch("/owner/stays/{stay_id}")
@@ -741,20 +755,83 @@ def create_ledger_entry(body: LedgerCreate, actor: dict = Depends(require_roles(
     if body.resident_stay_id:
         stay = db.get(m.ResidentStay, body.resident_stay_id)
         if not stay or stay.property_id != body.property_id: raise HTTPException(422, "Stay does not belong to this property")
+    if body.paid_at is not None and body.category != "payment":
+        raise HTTPException(422, "A payment date can only be attached to a payment ledger entry")
+    if body.provider_status != "manual_record":
+        raise HTTPException(422, "Payment-provider confirmation is unavailable. Record this entry manually until a provider is integrated.")
     entry = m.LedgerEntry(property_id=body.property_id, created_by=actor_user_id(actor), **body.model_dump(exclude={"property_id"}))
-    if body.category == "payment" and body.provider_status in {"provider_confirmed", "reconciled"}:
-        entry.paid_at = datetime.now(timezone.utc)
     db.add(entry); db.flush(); audit(db, actor, "ledger_entry", entry.id, "created", new={"category": entry.category, "amount": entry.amount, "status": entry.status}); db.commit(); db.refresh(entry)
     return {"id": entry.id, "category": entry.category, "amount": entry.amount, "status": entry.status, "provider_status": entry.provider_status,
             "paid_at": entry.paid_at.isoformat() if entry.paid_at else None}
 
+def ledger_entry_payload(entry: m.LedgerEntry, property_name: str, resident_id: str = "", unit_code: str = "") -> dict:
+    return {
+        "id": entry.id, "property_id": entry.property_id, "property_name": property_name,
+        "resident_stay_id": entry.resident_stay_id, "resident_id": resident_id, "unit_code": unit_code,
+        "category": entry.category, "amount": entry.amount, "currency": entry.currency,
+        "billing_period": entry.billing_period, "due_date": entry.due_date.isoformat() if entry.due_date else None,
+        "paid_at": entry.paid_at.isoformat() if entry.paid_at else None,
+        "payment_method": entry.payment_method, "payment_reference": entry.payment_reference,
+        "provider_status": entry.provider_status, "status": entry.status, "description": entry.description,
+        "created_at": entry.created_at.isoformat()
+    }
+
 @app.get("/owner/ledger")
-def list_ledger(property_id: int, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
-    require_property_manager(db, actor, property_id, "finance.view")
-    rows = list(db.scalars(select(m.LedgerEntry).where(m.LedgerEntry.property_id == property_id).order_by(m.LedgerEntry.created_at.desc()).limit(1000)))
-    return [{"id": e.id, "category": e.category, "amount": e.amount, "billing_period": e.billing_period, "due_date": e.due_date.isoformat() if e.due_date else None,
-             "payment_method": e.payment_method, "payment_reference": e.payment_reference, "provider_status": e.provider_status, "status": e.status, "description": e.description,
-             "created_at": e.created_at.isoformat()} for e in rows]
+def list_ledger(property_id: int | None = None, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
+    if property_id is not None:
+        require_property_manager(db, actor, property_id, "finance.view")
+        stmt = select(m.LedgerEntry).where(m.LedgerEntry.property_id == property_id)
+    elif actor["role"] == "admin":
+        stmt = select(m.LedgerEntry)
+    else:
+        scoped_ids = visible_property_ids(db, actor, "finance") or []
+        stmt = select(m.LedgerEntry).where(m.LedgerEntry.property_id.in_(scoped_ids))
+    rows = list(db.scalars(stmt.order_by(m.LedgerEntry.created_at.desc()).limit(1000)))
+    property_ids = {entry.property_id for entry in rows}
+    property_names = {
+        prop.id: prop.name
+        for prop in db.scalars(select(m.Property).where(m.Property.id.in_(property_ids)))
+    } if property_ids else {}
+    stay_ids = {entry.resident_stay_id for entry in rows if entry.resident_stay_id is not None}
+    stays = {stay.id: stay for stay in db.scalars(select(m.ResidentStay).where(m.ResidentStay.id.in_(stay_ids)))} if stay_ids else {}
+    unit_ids = {stay.unit_id for stay in stays.values()}
+    units = {unit.id: unit for unit in db.scalars(select(m.PropertyUnit).where(m.PropertyUnit.id.in_(unit_ids)))} if unit_ids else {}
+    return [
+        ledger_entry_payload(
+            entry, property_names.get(entry.property_id, f"Property #{entry.property_id}"),
+            stays[entry.resident_stay_id].resident_id if entry.resident_stay_id in stays else "",
+            units[stays[entry.resident_stay_id].unit_id].unit_code if entry.resident_stay_id in stays and stays[entry.resident_stay_id].unit_id in units else ""
+        )
+        for entry in rows
+    ]
+
+@app.get("/ledger/me")
+def list_my_ledger(actor: dict = Depends(require_roles("customer")), db: Session = Depends(get_db)):
+    stay_ids = list(db.scalars(select(m.ResidentStay.id).where(m.ResidentStay.resident_id == actor_user_id(actor))))
+    if not stay_ids:
+        return []
+    rows = list(db.scalars(
+        select(m.LedgerEntry)
+        .where(m.LedgerEntry.resident_stay_id.in_(stay_ids))
+        .order_by(m.LedgerEntry.created_at.desc())
+        .limit(1000)
+    ))
+    property_ids = {entry.property_id for entry in rows}
+    property_names = {
+        prop.id: prop.name
+        for prop in db.scalars(select(m.Property).where(m.Property.id.in_(property_ids)))
+    } if property_ids else {}
+    stays = {stay.id: stay for stay in db.scalars(select(m.ResidentStay).where(m.ResidentStay.id.in_(stay_ids)))} if stay_ids else {}
+    unit_ids = {stay.unit_id for stay in stays.values()}
+    units = {unit.id: unit for unit in db.scalars(select(m.PropertyUnit).where(m.PropertyUnit.id.in_(unit_ids)))} if unit_ids else {}
+    return [
+        ledger_entry_payload(
+            entry, property_names.get(entry.property_id, f"Property #{entry.property_id}"),
+            stays[entry.resident_stay_id].resident_id if entry.resident_stay_id in stays else "",
+            units[stays[entry.resident_stay_id].unit_id].unit_code if entry.resident_stay_id in stays and stays[entry.resident_stay_id].unit_id in units else ""
+        )
+        for entry in rows
+    ]
 
 @app.post("/issues", status_code=201)
 def create_issue(body: IssueCreate, actor: dict = Depends(get_actor), db: Session = Depends(get_db)):
