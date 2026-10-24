@@ -353,6 +353,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     val remoteListings = remember { mutableStateListOf<PgListing>() }
     val favorites = remember { mutableStateListOf<Long>().apply { addAll(StayUserDataStore.loadFavorites(context)) } }
     var route by remember { mutableStateOf("home") }
+    var apiConnectionReturnRoute by remember { mutableStateOf("feature_hub") }
     var ownerMode by remember { mutableStateOf(false) }
     var selectedId by remember { mutableLongStateOf(101L) }
     var comparisonIds by remember { mutableStateOf<List<Long>>(emptyList()) }
@@ -395,7 +396,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     }.let { rows -> when (advancedFilters.sortBy) {
         "Price: low to high" -> rows.sortedBy { it.monthlyRent }; "Distance" -> rows.filter { it.distanceIsVerified }.sortedBy { it.distanceKm } + rows.filterNot { it.distanceIsVerified }; "Availability" -> rows.sortedByDescending { it.availableBeds }; "Rating" -> rows.sortedByDescending { it.rating }; else -> rows.sortedWith(compareByDescending<PgListing> { it.featuredListing }.thenByDescending { it.availableBeds })
     } }
-    val hideNav = route in setOf("add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection") || route.startsWith("records:")
+    val hideNav = route in setOf("add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account") || route.startsWith("records:")
 
     Scaffold(
         containerColor = SE.Background,
@@ -432,7 +433,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (route) {
-                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { route = "filters" }, { ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "profile" })
+                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { route = "filters" }, { ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "profile" }, { route = "account" })
                 "search" -> SearchResultsScreen(location, { location = it; route = "search_location" }, searchQuery, { searchQuery = it }, guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, filteredListings, favorites, { selectedId = it; route = "details" }, { route = "map" }, { route = "filters" }, toggleFavorite, {
                     val criteria = "Location: $location; query: ${searchQuery.ifBlank { "any PG" }}; eligibility: $guestChoice; max rent: ${money(maxBudget.toInt())}; room types: ${advancedFilters.roomTypes.joinToString().ifBlank { "any" }}; amenities: ${chosenAmenities.joinToString().ifBlank { "any" }}; availability: ${if (advancedFilters.availableOnly) "available now" else advancedFilters.moveInDate.ifBlank { "any" }}; sort: ${advancedFilters.sortBy}"
                     StayRecordStore.add(context, StayRecord(category = "saved_searches", title = "${location.substringBefore(",")}: ${guestChoice} stays", details = criteria, property = location, amount = maxBudget.toInt(), status = "Active"))
@@ -564,13 +565,24 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }
                     }
                 })
+                "account" -> AccountScreen(
+                    apiBaseUrl = preferences.apiBaseUrl,
+                    onBack = { route = "home" },
+                    onConfigureApi = { apiConnectionReturnRoute = "account"; route = "api_connection" },
+                    onAccountReady = { accessToken, role, displayName ->
+                        StayApiClient.setSessionToken(accessToken, preferences.apiBaseUrl)
+                        ownerMode = role == "owner"
+                        notify("Welcome to StayEasy, $displayName")
+                        route = if (ownerMode) "owner_dashboard" else "home"
+                    }
+                )
                 "profile" -> ProfileScreen({ ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "feature_hub" })
                 "notifications" -> FeatureRecordsScreen("notifications", ownerMode) { route = if (ownerMode) "feature_hub" else "feature_hub" }
-                "feature_hub" -> FeatureHubScreen(ownerMode, { route = "records:$it" }, { comparisonIds = favorites.take(3); route = "compare" }, { route = "theme_settings" }, { route = "api_connection" }, { route = if (ownerMode) "owner_more" else "profile" })
+                "feature_hub" -> FeatureHubScreen(ownerMode, { route = "records:$it" }, { comparisonIds = favorites.take(3); route = "compare" }, { route = "theme_settings" }, { apiConnectionReturnRoute = "feature_hub"; route = "api_connection" }, { route = if (ownerMode) "owner_more" else "profile" })
                 "api_connection" -> ApiConnectionScreen(preferences.apiBaseUrl,
                     { onPreferencesChanged(preferences.copy(apiBaseUrl = it.trimEnd('/'))) },
                     { fetched -> remoteListings.clear(); remoteListings.addAll(fetched); notify("Loaded ${fetched.size} published server listing(s); distance is still unverified") },
-                    { route = "feature_hub" })
+                    { route = apiConnectionReturnRoute })
                 "compare" -> ComparePropertiesScreen(allListings, comparisonIds, { route = "feature_hub" })
                 "theme_settings" -> ThemeSettingsScreen(preferences, { updated -> onPreferencesChanged(updated); notify("Appearance preferences saved") }, { route = "feature_hub" })
                 "owner_dashboard" -> OwnerDashboardScreen(ownerListings, { route = "owner_properties" }, { route = "owner_beds" }, { route = "owner_enquiries" }, { route = "owner_payments" }, { route = "owner_issues" }, { ownerMode = false; route = "home" }, { route = "owner_analytics" }, { route = "owner_residents" })
@@ -640,7 +652,7 @@ private data class NavItem(val label: String, val route: String, val icon: andro
 private fun HomeScreen(
     location: String, onLocationChange: (String) -> Unit, guestChoice: String, onGuestChoice: (String) -> Unit,
     maxBudget: Float, listings: List<PgListing>, favorites: List<Long>, onListing: (Long) -> Unit, onFavorite: (Long) -> Unit,
-    onSearch: () -> Unit, onMap: () -> Unit, onFilters: () -> Unit, onOwner: () -> Unit, onNotifications: () -> Unit, onProfile: () -> Unit
+    onSearch: () -> Unit, onMap: () -> Unit, onFilters: () -> Unit, onOwner: () -> Unit, onNotifications: () -> Unit, onProfile: () -> Unit, onAccount: () -> Unit
 ) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(14.dp))
@@ -665,6 +677,18 @@ private fun HomeScreen(
         }
         Spacer(Modifier.height(8.dp))
         Text("Thoughtful stays for students, professionals, friends and couples.", color = SE.Muted, fontSize = 14.sp, lineHeight = 20.sp)
+        Spacer(Modifier.height(13.dp))
+        Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft), modifier = Modifier.fillMaxWidth().clickable(onClick = onAccount)) {
+            Row(Modifier.padding(horizontal = 13.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.PersonAdd, null, tint = SE.Blue, modifier = Modifier.size(23.dp))
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("New to StayEasy?", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    Text("Create an account as a Tenant or Owner.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
+                }
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = SE.Blue)
+            }
+        }
         Spacer(Modifier.height(18.dp))
         Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), elevation = CardDefaults.cardElevation(2.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(15.dp)) {
