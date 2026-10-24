@@ -19,9 +19,10 @@ from sqlalchemy import delete, select
 
 from backend.app import main as api
 from backend.app.database import Base, engine, SessionLocal
-from backend.app.security import create_access_token, get_actor
+from backend.app.security import create_access_token, get_actor, verify_password
 from backend.app import models as m
 from backend.app import auth as auth_routes
+from backend.scripts.provision_admin import provision_admin
 
 client = TestClient(api.app)
 
@@ -649,6 +650,51 @@ def test_email_account_registration_login_role_boundary_logout_and_password_rese
     new_header = {"Authorization": f"Bearer {new_login.json()['access_token']}"}
     assert client.post("/auth/logout", headers=new_header).status_code == 200
     assert client.get("/auth/me", headers=new_header).status_code == 401
+
+
+def test_admin_bootstrap_creates_verified_hashed_account_and_audit_event():
+    with SessionLocal() as db:
+        user = provision_admin(
+            db,
+            " First.Admin@Example.test ",
+            " First StayEasy Admin ",
+            "Admin-Secret-Only-For-Tests-2026",
+        )
+        user_id = user.id
+        assert user.email == "first.admin@example.test"
+        assert user.display_name == "First StayEasy Admin"
+        assert user.role == "admin"
+        assert user.is_active is True
+
+    with SessionLocal() as db:
+        user = db.get(m.User, user_id)
+        credential = db.get(m.UserCredential, user_id)
+        assert credential is not None
+        assert credential.email_verified_at is not None
+        assert credential.owner_access_status == "not_requested"
+        assert credential.password_hash != "Admin-Secret-Only-For-Tests-2026"
+        assert verify_password("Admin-Secret-Only-For-Tests-2026", credential.password_hash)
+        event = db.scalar(select(m.AuditLog).where(
+            m.AuditLog.entity_type == "user",
+            m.AuditLog.entity_id == user_id,
+            m.AuditLog.action == "admin_account_bootstrapped",
+        ))
+        assert event is not None
+        assert event.actor_role == "system"
+
+    try:
+        with SessionLocal() as db:
+            provision_admin(db, "FIRST.ADMIN@example.test", "Duplicate Admin", "Another-Long-Secret-2026")
+        assert False, "Duplicate email must not create or replace an administrator"
+    except ValueError as exc:
+        assert "already exists" in str(exc)
+
+    try:
+        with SessionLocal() as db:
+            provision_admin(db, "short-password@example.test", "Short Password", "short")
+        assert False, "Weak administrator password must be rejected"
+    except ValueError as exc:
+        assert "12 to 128" in str(exc)
 
 
 def _create_owner_access_applicant(user_id, email, *, verified=True, request_status="pending_approval"):
