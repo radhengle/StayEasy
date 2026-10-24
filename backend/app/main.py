@@ -1337,14 +1337,38 @@ def patch_notice(notice_id: int, body: dict, actor: dict = Depends(require_roles
 
 @app.get("/notifications")
 def list_notifications(limit: int = Query(default=100, ge=1, le=500), actor: dict = Depends(get_actor), db: Session = Depends(get_db)):
-    rows = list(db.scalars(select(m.Notification).where(m.Notification.recipient_id == actor_user_id(actor)).order_by(m.Notification.created_at.desc()).limit(limit)))
-    return [{"id": n.id, "title": n.title, "body": n.body, "channel": n.channel, "status": n.status, "created_at": n.created_at.isoformat()} for n in rows]
+    if not actor.get("account_session"):
+        raise HTTPException(403, "Sign in with your StayEasy account to view shared notifications")
+    rows = list(db.scalars(
+        select(m.Notification)
+        .where(m.Notification.recipient_id == actor_user_id(actor))
+        .order_by(m.Notification.created_at.desc())
+        .limit(limit)
+    ))
+    return [{
+        "id": n.id,
+        "title": n.title,
+        "body": n.body,
+        "channel": n.channel,
+        "status": n.status,
+        "created_at": n.created_at.isoformat() if n.created_at else None,
+    } for n in rows]
+
 
 @app.patch("/notifications/{notification_id}/read")
 def mark_notification_read(notification_id: int, actor: dict = Depends(get_actor), db: Session = Depends(get_db)):
+    if not actor.get("account_session"):
+        raise HTTPException(403, "Sign in with your StayEasy account to update notifications")
     item = db.get(m.Notification, notification_id)
-    if not item or item.recipient_id != actor_user_id(actor): raise HTTPException(404, "Notification not found")
-    item.status = "read"; db.commit(); return {"id": item.id, "status": item.status}
+    if not item or item.recipient_id != actor_user_id(actor):
+        raise HTTPException(404, "Notification not found")
+    if item.status != "read":
+        old_status = item.status
+        item.status = "read"
+        audit(db, actor, "notification", item.id, "read", old={"status": old_status}, new={"status": "read"})
+        db.commit()
+        db.refresh(item)
+    return {"id": item.id, "status": item.status}
 
 @app.get("/owner/staff")
 def list_staff(property_id: int | None = None, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
