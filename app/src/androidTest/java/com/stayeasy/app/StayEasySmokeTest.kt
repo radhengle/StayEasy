@@ -1,6 +1,8 @@
 package com.stayeasy.app
 
-import android.os.ParcelFileDescriptor
+import android.graphics.Bitmap
+import java.io.File
+import java.io.FileOutputStream
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -30,16 +32,31 @@ class StayEasySmokeTest {
         composeRule.onNode(hasText(label, substring = true) and hasClickAction()).performScrollTo().performClick()
     }
 
-    /** Captures the actual emulator display into shared storage so the host runner can export it. */
+    /** Saves a genuine emulator-display PNG under app-specific external storage for host-side export. */
     private fun captureScreenshot(name: String) {
         composeRule.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val destination = "/sdcard/Download/stayeasy-screenshots/$name.png"
-        val command = "mkdir -p /sdcard/Download/stayeasy-screenshots && screencap -p $destination && test -s $destination && echo SCREENSHOT_OK"
-        val output = ParcelFileDescriptor.AutoCloseInputStream(
-            instrumentation.uiAutomation.executeShellCommand(command)
-        ).bufferedReader().use { it.readText() }
-        assertTrue("Emulator screenshot capture failed for $name: $output", output.contains("SCREENSHOT_OK"))
+        val bitmap = instrumentation.uiAutomation.takeScreenshot()
+        try {
+            val directory = File(
+                instrumentation.targetContext.getExternalFilesDir(null),
+                "stayeasy-screenshots"
+            )
+            assertTrue("Unable to create screenshot directory", directory.mkdirs() || directory.isDirectory)
+            val destination = File(directory, "$name.png")
+            FileOutputStream(destination).use { output ->
+                assertTrue(
+                    "Unable to encode emulator screenshot $name",
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+                )
+            }
+            assertTrue(
+                "Screenshot was not written: $destination",
+                destination.exists() && destination.length() > 1024
+            )
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     @Test
