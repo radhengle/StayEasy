@@ -19,7 +19,7 @@ This is the prioritized release backlog. A green build is necessary, but it is n
 - [ ] **Media and documents:** implement secure object storage, signed upload/download, file type/size validation, malware screening, moderation and authorization.
 - [ ] **Notifications and jobs:** configure email/push/SMS delivery, retries and idempotency; schedule reservation expiry, rent billing and reminders with timezone-safe tests.
 - [ ] **Trust and moderation:** complete abuse reporting, listing verification, review moderation/appeals, evidence retention and administrative audit.
-- [ ] **Automated coverage:** backend contracts now cover resident assignment, customer/owner stay isolation, tenant move-out submission, notice period, duplicate requests, approve/reject and unit occupancy. Still add authenticated end-to-end staging journeys, PostgreSQL concurrency tests and real-device/offline regression. Emulator screenshot PNGs for Customer Home, Explore search and Owner workspace preview are verified on every PR workflow run.
+- [ ] **Automated coverage:** backend contracts cover resident assignment, customer/owner stay isolation, tenant move-out submission, notice period, duplicate requests, approve/reject and unit occupancy. Still add authenticated end-to-end staging journeys, PostgreSQL concurrency tests and real-device/offline regression. The CI workflow captures Customer Home, Explore search and Owner workspace preview screenshots; run #312 uploaded the screenshot and UI-test-result artifacts successfully. Additional tenant Login and Owner Register action assertions are in PR #30 and still require green CI.
 
 ## P2 — post-launch / separate scope decisions
 
@@ -29,10 +29,10 @@ This is the prioritized release backlog. A green build is necessary, but it is n
 
 ## Current CI baseline
 
-- [x] Backend contract tests, clean-database migration validation and project contract validation passed on PR #12.
-- [x] Android API 35 emulator smoke tests passed on PR #12.
-- [x] Debug APK and unsigned release APK builds passed on PR #12.
-- [x] CI screenshot artifact: three genuine 1080×1920 emulator PNGs verified in [workflow run #274](https://github.com/radhengle/StayEasy/actions/runs/40130310803).
-- [ ] Authenticated staging acceptance for resident assignment, customer My Stay, Owner approval and tenant move-out request/review remains unverified.
+- [x] Backend contract tests, clean-database Alembic migration validation and project contract validation passed on [PR #28 CI run #312](https://github.com/radhengle/StayEasy/actions/runs/40139821954).
+- [x] Android API 35 emulator UI tests passed on [run #312](https://github.com/radhengle/StayEasy/actions/runs/40139821954).
+- [x] Debug APK (`stayeasy-debug-apk`) and unsigned release APK (`stayeasy-release-unsigned-apk`) built and uploaded successfully in [run #312](https://github.com/radhengle/StayEasy/actions/runs/40139821954). Download them from the run's **Artifacts** section; the release artifact is unsigned and not a store-ready release.
+- [x] Screenshot and Android UI-test-result artifacts uploaded successfully in [run #312](https://github.com/radhengle/StayEasy/actions/runs/40139821954). Artifacts are retained for 30 days.
+- [ ] Authenticated staging acceptance for resident assignment, customer My Stay, Owner approval, tenant move-out request/review, document authorization and real PostgreSQL concurrency remains unverified.
 
 **Release rule:** do not call StayEasy production-ready until all P0 items are closed, the relevant P1 items for enabled functionality are complete, and a signed release candidate passes the end-to-end acceptance suite.
