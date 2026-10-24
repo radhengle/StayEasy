@@ -19,7 +19,7 @@ from sqlalchemy import delete, select
 
 from backend.app import main as api
 from backend.app.database import Base, engine, SessionLocal
-from backend.app.security import get_actor
+from backend.app.security import create_access_token, get_actor
 from backend.app import models as m
 from backend.app import auth as auth_routes
 
@@ -675,6 +675,9 @@ def test_admin_owner_access_review_requires_verification_and_audits_decision():
     verified_requested_at = _create_owner_access_applicant(
         "owner-applicant-1", "owner-applicant-1@example.test", verified=True
     )
+    prior_customer_token = create_access_token(
+        "owner-applicant-1", "customer", scopes=["account"], auth_version=0
+    )
     _create_owner_access_applicant(
         "owner-applicant-unverified", "unverified-owner@example.test", verified=False
     )
@@ -752,6 +755,14 @@ def test_admin_owner_access_review_requires_verification_and_audits_decision():
         "decision": "reject", "note": "A second decision must not be accepted.",
     })
     assert already_decided.status_code == 409
+
+    # Approval increments auth_version so the applicant's prior customer token is no longer valid.
+    api.app.dependency_overrides.clear()
+    stale_customer_session = client.get(
+        "/auth/me",
+        headers={"Authorization": f"Bearer {prior_customer_token}"},
+    )
+    assert stale_customer_session.status_code == 401, stale_customer_session.text
 
 
 def test_owner_access_request_endpoint_requires_account_session_and_is_idempotent():
