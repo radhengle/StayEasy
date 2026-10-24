@@ -355,7 +355,12 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                                 source = "Server"
                             )
                         }
-                        "residents", "stays" -> StayApiClient.ownerStays(apiPreferences.apiBaseUrl, sessionToken).mapNotNull { row ->
+                        "residents", "stays" -> {
+                            val stayRows = StayApiClient.ownerStays(apiPreferences.apiBaseUrl, sessionToken)
+                            val displayRows = if (category == "residents") {
+                                stayRows.distinctBy { row -> "${row.optLong("property_id")}:${row.optString("resident_id")}" }
+                            } else stayRows
+                            displayRows.mapNotNull { row ->
                             val stayId = row.optLong("id")
                             if (stayId <= 0L) return@mapNotNull null
                             val residentName = row.optString("resident_name").ifBlank { "Resident ${row.optString("resident_id").take(8)}" }
@@ -385,6 +390,10 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                                 append("Server-confirmed stay #").append(stayId)
                                 if (residentEmail.isNotBlank()) append("\nCustomer email: ").append(residentEmail)
                                 if (row.optInt("deposit_held") > 0) append("\nSecurity deposit recorded: ").append(moneyText(row.optInt("deposit_held")))
+                                val noticeDate = row.optString("notice_date")
+                                if (noticeDate.isNotBlank()) append("\nNotice date: ").append(noticeDate)
+                                val moveOutDate = row.optString("move_out_date")
+                                if (moveOutDate.isNotBlank()) append("\nMove-out date: ").append(moveOutDate)
                                 val agreement = row.optString("agreement_reference")
                                 if (agreement.isNotBlank()) append("\nAgreement reference: ").append(agreement)
                             }
@@ -406,6 +415,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                                 updatedAt = timestamp,
                                 source = "Server"
                             )
+                            }
                         }
                         "payments", "charges", "deposits", "expenses", "food" -> {
                             val ledgerRows = if (ownerMode) StayApiClient.ownerLedger(apiPreferences.apiBaseUrl, sessionToken)
