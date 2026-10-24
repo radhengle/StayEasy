@@ -95,10 +95,18 @@ def test_enquiry_and_visit_creation_emit_owner_notifications():
     enquiry_rows = client.get("/enquiries")
     assert enquiry_rows.status_code == 200, enquiry_rows.text
     assert enquiry_rows.json()[0]["property_name"] == "Test House"
+    visit_rows = client.get("/visits")
+    assert visit_rows.status_code == 200, visit_rows.text
+    assert visit_rows.json()[0]["property_name"] == "Test House"
     set_actor("owner-1", "owner")
     enquiry_status = client.post(f"/owner/enquiries/{enquiry.json()['id']}/status", json={"status": "contacted", "owner_response": "We can arrange a visit."})
     assert enquiry_status.status_code == 200, enquiry_status.text
     assert enquiry_status.json()["status"] == "contacted"
+    visit_status = client.post(f"/owner/visits/{visit.json()['id']}/status", json={"status": "confirmed", "outcome": "Confirmed for the requested time."})
+    assert visit_status.status_code == 200, visit_status.text
+    assert visit_status.json()["status"] == "confirmed"
+    invalid_visit_status = client.post(f"/owner/visits/{visit.json()['id']}/status", json={"status": "requested"})
+    assert invalid_visit_status.status_code == 422
     messages = client.get("/notifications")
     assert messages.status_code == 200
     assert len(messages.json()) >= 2
