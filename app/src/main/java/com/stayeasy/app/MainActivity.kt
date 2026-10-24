@@ -85,6 +85,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -106,6 +107,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.Density
@@ -352,7 +354,24 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     val customListings = remember { mutableStateListOf<PgListing>().apply { addAll(ListingStore.load(context)) } }
     val remoteListings = remember { mutableStateListOf<PgListing>() }
     val favorites = remember { mutableStateListOf<Long>().apply { addAll(StayUserDataStore.loadFavorites(context)) } }
+    LaunchedEffect(preferences.apiBaseUrl) {
+        val baseUrl = preferences.apiBaseUrl.trim()
+        if (baseUrl.isNotBlank()) {
+            val restored = withContext(Dispatchers.IO) { StayApiClient.restoreAccountSession(context, baseUrl) }
+            signedInAccount = if (restored) runCatching {
+                withContext(Dispatchers.IO) { StayApiClient.currentAccount(baseUrl) }
+            }.getOrNull() else null
+            if (restored && signedInAccount == null) {
+                StayApiClient.clearSessionToken()
+                StayApiClient.clearPersistedAccountSession(context)
+            }
+        } else {
+            signedInAccount = null
+            StayApiClient.clearSessionToken()
+        }
+    }
     var route by remember { mutableStateOf("home") }
+    var signedInAccount by remember { mutableStateOf<JSONObject?>(null) }
     var ownerMode by remember { mutableStateOf(false) }
     var selectedId by remember { mutableLongStateOf(101L) }
     var comparisonIds by remember { mutableStateOf<List<Long>>(emptyList()) }
@@ -395,7 +414,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     }.let { rows -> when (advancedFilters.sortBy) {
         "Price: low to high" -> rows.sortedBy { it.monthlyRent }; "Distance" -> rows.filter { it.distanceIsVerified }.sortedBy { it.distanceKm } + rows.filterNot { it.distanceIsVerified }; "Availability" -> rows.sortedByDescending { it.availableBeds }; "Rating" -> rows.sortedByDescending { it.rating }; else -> rows.sortedWith(compareByDescending<PgListing> { it.featuredListing }.thenByDescending { it.availableBeds })
     } }
-    val hideNav = route in setOf("add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection") || route.startsWith("records:")
+    val hideNav = route in setOf("add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account_auth") || route.startsWith("records:")
 
     Scaffold(
         containerColor = SE.Background,
@@ -564,7 +583,21 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }
                     }
                 })
-                "profile" -> ProfileScreen({ ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "feature_hub" })
+                "profile" -> ProfileScreen({ ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "feature_hub" }, { route = "account_auth" })
+                "account_auth" -> AccountAuthScreen(
+                    baseUrl = preferences.apiBaseUrl,
+                    account = signedInAccount,
+                    onBack = { route = "profile" },
+                    onOpenConnection = { route = "api_connection" },
+                    onSignedIn = { user ->
+                        signedInAccount = user
+                        notify("You're signed in to StayEasy.")
+                    },
+                    onSignedOut = {
+                        signedInAccount = null
+                        notify("You've signed out.")
+                    }
+                )
                 "notifications" -> FeatureRecordsScreen("notifications", ownerMode) { route = if (ownerMode) "feature_hub" else "feature_hub" }
                 "feature_hub" -> FeatureHubScreen(ownerMode, { route = "records:$it" }, { comparisonIds = favorites.take(3); route = "compare" }, { route = "theme_settings" }, { route = "api_connection" }, { route = if (ownerMode) "owner_more" else "profile" })
                 "api_connection" -> ApiConnectionScreen(preferences.apiBaseUrl,
@@ -1189,14 +1222,282 @@ private fun IssueScreen(onBack: () -> Unit, onSubmit: (String, String, String) -
 }
 
 @Composable
-private fun ProfileScreen(onOwner: () -> Unit, onNotifications: () -> Unit, onSettings: () -> Unit) {
+private fun ProfileScreen(
+    onOwner: () -> Unit,
+    onNotifications: () -> Unit,
+    onSettings: () -> Unit,
+    onAccount: () -> Unit
+) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
         ScreenHeader("Your profile", "Your StayEasy account")
         Spacer(Modifier.height(16.dp))
-        Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(SE.Surface).padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(58.dp).clip(CircleShape).background(SE.BlueSoft), contentAlignment = Alignment.Center) { Icon(Icons.Filled.Person, null, tint = SE.Blue, modifier = Modifier.size(29.dp)) }; Spacer(Modifier.width(13.dp)); Column(Modifier.weight(1f)) { Text("Guest explorer", fontWeight = FontWeight.Bold, color = SE.Ink, fontSize = 17.sp); Text("Demo profile · not signed in", color = SE.Muted, fontSize = 11.sp) }; StatusPill("DEMO", SE.OrangeSoft, SE.Orange) }
-        Spacer(Modifier.height(16.dp)); MenuRow("Notifications", "Manage alerts and updates", Icons.Filled.Notifications, onNotifications); MenuRow("All tools & preferences", "Saved searches, compare, bookings, themes and privacy", Icons.Filled.Tune, onSettings); MenuRow("Privacy & security", "Controls and account data", Icons.Filled.Lock, onSettings); MenuRow("Help & support", "Get help with a stay", Icons.Filled.ReportProblem, onSettings); MenuRow("Share StayEasy", "Invite someone to explore", Icons.Filled.Share, onSettings)
-        Spacer(Modifier.height(18.dp)); Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth().clickable(onClick = onOwner)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.Apartment, null, tint = Color.White, modifier = Modifier.size(28.dp)); Spacer(Modifier.width(12.dp)); Column(Modifier.weight(1f)) { Text("Are you a PG owner?", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp); Text("Manage properties, beds and rent", color = Color.White.copy(alpha = 0.72f), fontSize = 11.sp) }; Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color.White) } }
-        Spacer(Modifier.height(18.dp)); Text("StayEasy UI prototype · v0.1", color = SE.Muted, fontSize = 10.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+        Row(
+            Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(SE.Surface)
+                .clickable(onClick = onAccount).padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(Modifier.size(58.dp).clip(CircleShape).background(SE.BlueSoft), contentAlignment = Alignment.Center) {
+                Icon(Icons.Filled.Person, null, tint = SE.Blue, modifier = Modifier.size(29.dp))
+            }
+            Spacer(Modifier.width(13.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Guest explorer", fontWeight = FontWeight.Bold, color = SE.Ink, fontSize = 17.sp)
+                Text("Sign in or create your StayEasy account", color = SE.Muted, fontSize = 11.sp)
+            }
+            Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = SE.Blue)
+        }
+        Spacer(Modifier.height(16.dp))
+        MenuRow("Sign in / Create account", "Verify your email and sync your account", Icons.Filled.Lock, onAccount)
+        MenuRow("Notifications", "Manage alerts and updates", Icons.Filled.Notifications, onNotifications)
+        MenuRow("All tools & preferences", "Saved searches, compare, bookings, themes and privacy", Icons.Filled.Tune, onSettings)
+        MenuRow("Privacy & security", "Controls and account data", Icons.Filled.Lock, onSettings)
+        MenuRow("Help & support", "Get help with a stay", Icons.Filled.ReportProblem, onSettings)
+        MenuRow("Share StayEasy", "Invite someone to explore", Icons.Filled.Share, onSettings)
+        Spacer(Modifier.height(18.dp))
+        Card(
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = SE.Ink),
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onOwner)
+        ) {
+            Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Apartment, null, tint = Color.White, modifier = Modifier.size(28.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Are you a PG owner?", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                    Text("Manage properties, beds and rent", color = Color.White.copy(alpha = 0.72f), fontSize = 11.sp)
+                }
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color.White)
+            }
+        }
+        Spacer(Modifier.height(18.dp))
+        Text("StayEasy UI prototype · v0.1", color = SE.Muted, fontSize = 10.sp, modifier = Modifier.align(Alignment.CenterHorizontally))
+    }
+}
+
+@Composable
+private fun AccountAuthScreen(
+    baseUrl: String,
+    account: JSONObject?,
+    onBack: () -> Unit,
+    onOpenConnection: () -> Unit,
+    onSignedIn: (JSONObject) -> Unit,
+    onSignedOut: () -> Unit
+) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val scope = rememberCoroutineScope()
+    var mode by remember { mutableStateOf("signin") }
+    var email by remember { mutableStateOf("") }
+    var displayName by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var verificationCode by remember { mutableStateOf("") }
+    var newPassword by remember { mutableStateOf("") }
+    var workspace by remember { mutableStateOf("tenant") }
+    var busy by remember { mutableStateOf(false) }
+    var message by remember { mutableStateOf("") }
+    var isError by remember { mutableStateOf(false) }
+
+    fun showMessage(text: String, error: Boolean = false) {
+        message = text
+        isError = error
+    }
+    fun runRequest(action: suspend () -> Unit) {
+        if (busy) return
+        scope.launch {
+            busy = true
+            message = ""
+            isError = false
+            try {
+                action()
+            } catch (e: Exception) {
+                showMessage(e.message ?: "StayEasy could not complete that request. Check the API connection.", true)
+            } finally {
+                busy = false
+            }
+        }
+    }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp, vertical = 12.dp)) {
+        ScreenHeader("StayEasy account", "Secure access to your stay records", onBack = onBack)
+        Spacer(Modifier.height(14.dp))
+        if (account != null) {
+            Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(52.dp).clip(CircleShape).background(SE.BlueSoft), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Filled.VerifiedUser, null, tint = SE.Blue, modifier = Modifier.size(27.dp))
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(account.optString("display_name", "StayEasy member"), color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                            Text(account.optString("email"), color = SE.Muted, fontSize = 12.sp)
+                        }
+                        StatusPill("VERIFIED", SE.BlueSoft, SE.Blue)
+                    }
+                    Spacer(Modifier.height(18.dp))
+                    Text("Account role", color = SE.Muted, fontSize = 12.sp)
+                    Text(account.optString("role", "customer").replaceFirstChar { it.uppercase() }, color = SE.Ink, fontWeight = FontWeight.SemiBold)
+                    if (account.optString("owner_access_status") == "pending_approval") {
+                        Spacer(Modifier.height(12.dp))
+                        Text("Owner workspace requested", color = SE.Ink, fontWeight = FontWeight.Bold)
+                        Text("Your account stays in Tenant mode until the StayEasy team approves Owner access.", color = SE.Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                    }
+                    Spacer(Modifier.height(18.dp))
+                    OutlinedButton(onClick = {
+                        runRequest {
+                            val fresh = withContext(Dispatchers.IO) { StayApiClient.currentAccount(baseUrl) }
+                            onSignedIn(fresh)
+                            showMessage("Account details refreshed.")
+                        }
+                    }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Refresh account") }
+                    Button(onClick = {
+                        runRequest {
+                            withContext(Dispatchers.IO) { StayApiClient.logoutAccount(context, baseUrl) }
+                            onSignedOut()
+                        }
+                    }, enabled = !busy, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = SE.Ink)) {
+                        Text(if (busy) "Please wait…" else "Sign out", color = Color.White)
+                    }
+                }
+            }
+        } else if (baseUrl.isBlank()) {
+            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp)) {
+                    Icon(Icons.Filled.Lock, null, tint = SE.Blue, modifier = Modifier.size(32.dp))
+                    Spacer(Modifier.height(9.dp))
+                    Text("Connect your StayEasy API first", color = SE.Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    Text("Account creation and email verification need a configured backend URL and a server with SMTP email delivery enabled.", color = SE.Muted, fontSize = 13.sp, lineHeight = 19.sp)
+                    Spacer(Modifier.height(14.dp))
+                    Button(onClick = onOpenConnection, modifier = Modifier.fillMaxWidth()) { Text("Configure API connection") }
+                }
+            }
+        } else {
+            if (mode == "signin" || mode == "signup") {
+                Row(Modifier.fillMaxWidth().background(SE.BlueSoft, RoundedCornerShape(14.dp)).padding(4.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    FilterChip(selected = mode == "signin", onClick = { mode = "signin"; showMessage("") }, label = { Text("Sign in") }, modifier = Modifier.weight(1f))
+                    FilterChip(selected = mode == "signup", onClick = { mode = "signup"; showMessage("") }, label = { Text("Create account") }, modifier = Modifier.weight(1f))
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Text(
+                when (mode) {
+                    "signup" -> "Create your account"
+                    "verify" -> "Verify your email"
+                    "forgot" -> "Reset your password"
+                    "reset" -> "Choose a new password"
+                    else -> "Welcome back"
+                },
+                color = SE.Ink, fontSize = 23.sp, fontWeight = FontWeight.Bold
+            )
+            Text(
+                when (mode) {
+                    "signup" -> "One account for enquiries, bookings and stay records."
+                    "verify" -> "Enter the six-digit code sent to $email."
+                    "forgot" -> "We’ll send a short-lived recovery code if the account exists."
+                    "reset" -> "Enter the code from your email and a new password."
+                    else -> "Sign in to sync account activity across devices."
+                },
+                color = SE.Muted, fontSize = 12.sp, lineHeight = 18.sp
+            )
+            Spacer(Modifier.height(13.dp))
+            if (mode == "signup") {
+                OutlinedTextField(displayName, { displayName = it }, label = { Text("Full name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+            if (mode != "verify" && mode != "reset") {
+                OutlinedTextField(email, { email = it }, label = { Text("Email address") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+            if (mode == "signin" || mode == "signup" || mode == "verify") {
+                if (mode != "verify" || password.isNotBlank()) {
+                    OutlinedTextField(password, { password = it }, label = { Text("Password") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+                }
+            }
+            if (mode == "signup") {
+                Spacer(Modifier.height(8.dp))
+                Text("Choose your starting workspace", color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(selected = workspace == "tenant", onClick = { workspace = "tenant" }, label = { Text("Tenant") })
+                    FilterChip(selected = workspace == "owner", onClick = { workspace = "owner" }, label = { Text("Owner") })
+                }
+                if (workspace == "owner") {
+                    Text("Owner access requires approval. Choosing this option does not grant owner permissions.", color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                }
+            }
+            if (mode == "verify" || mode == "reset") {
+                OutlinedTextField(verificationCode, { verificationCode = it.filter(Char::isDigit).take(6) }, label = { Text("Six-digit email code") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+            }
+            if (mode == "reset") {
+                OutlinedTextField(newPassword, { newPassword = it }, label = { Text("New password (12+ characters)") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth())
+            }
+            Spacer(Modifier.height(12.dp))
+            when (mode) {
+                "signup" -> Button(onClick = {
+                    if (displayName.trim().length < 2 || !email.contains("@") || password.length < 12) {
+                        showMessage("Enter your name, a valid email, and a password of at least 12 characters.", true)
+                    } else runRequest {
+                        withContext(Dispatchers.IO) { StayApiClient.registerAccount(baseUrl, email, displayName, password, workspace) }
+                        mode = "verify"
+                        verificationCode = ""
+                        showMessage("Verification email requested. Enter the code from your inbox.")
+                    }
+                }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Creating account…" else "Create account") }
+                "verify" -> {
+                    Button(onClick = {
+                        if (verificationCode.length != 6) showMessage("Enter the six-digit code from your email.", true)
+                        else runRequest {
+                            withContext(Dispatchers.IO) { StayApiClient.verifyAccountEmail(baseUrl, email, verificationCode) }
+                            mode = "signin"
+                            verificationCode = ""
+                            showMessage("Email verified. Sign in to continue.")
+                        }
+                    }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Verifying…" else "Verify email") }
+                    TextButton(onClick = {
+                        if (password.isBlank()) showMessage("Enter your password to request another verification code.", true)
+                        else runRequest {
+                            withContext(Dispatchers.IO) { StayApiClient.resendAccountVerification(baseUrl, email, password) }
+                            showMessage("If the account still needs verification, a new code has been sent.")
+                        }
+                    }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Resend verification code") }
+                }
+                "forgot" -> Button(onClick = {
+                    if (!email.contains("@")) showMessage("Enter your account email address.", true)
+                    else runRequest {
+                        withContext(Dispatchers.IO) { StayApiClient.requestPasswordReset(baseUrl, email) }
+                        mode = "reset"
+                        verificationCode = ""
+                        showMessage("If a verified account exists, a recovery code has been sent.")
+                    }
+                }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Requesting code…" else "Send recovery code") }
+                "reset" -> Button(onClick = {
+                    if (verificationCode.length != 6 || newPassword.length < 12) showMessage("Enter the six-digit code and a new password of at least 12 characters.", true)
+                    else runRequest {
+                        withContext(Dispatchers.IO) { StayApiClient.resetAccountPassword(baseUrl, email, verificationCode, newPassword) }
+                        mode = "signin"
+                        password = ""
+                        newPassword = ""
+                        verificationCode = ""
+                        showMessage("Password changed. Sign in with your new password.")
+                    }
+                }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Updating password…" else "Update password") }
+                else -> Button(onClick = {
+                    if (!email.contains("@") || password.isBlank()) showMessage("Enter your email and password.", true)
+                    else runRequest {
+                        val response = withContext(Dispatchers.IO) { StayApiClient.loginAccount(context, baseUrl, email, password) }
+                        onSignedIn(response.getJSONObject("user"))
+                    }
+                }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text(if (busy) "Signing in…" else "Sign in") }
+            }
+            if (mode == "signin") {
+                TextButton(onClick = { mode = "forgot"; verificationCode = ""; showMessage("") }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Forgot password?") }
+            }
+            if (mode == "verify" || mode == "reset") {
+                TextButton(onClick = { mode = "signin"; showMessage("") }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("Back to sign in") }
+            }
+            if (message.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(message, color = if (isError) SE.Red else SE.Blue, fontSize = 12.sp, lineHeight = 18.sp)
+            }
+        }
+        Spacer(Modifier.height(28.dp))
+        Text("Account verification requires an active email delivery provider. StayEasy never treats selecting Owner as proof of ownership.", color = SE.Muted, fontSize = 10.sp, lineHeight = 15.sp)
     }
 }
 
