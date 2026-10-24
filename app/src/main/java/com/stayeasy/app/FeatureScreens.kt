@@ -476,6 +476,8 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
     var showDeleteId by remember(category) { mutableStateOf<String?>(null) }
     var showServerStatusId by remember(category) { mutableStateOf<String?>(null) }
     var updatingServerStatus by remember(category) { mutableStateOf(false) }
+    var serverStatusError by remember(category) { mutableStateOf("") }
+    var serverStayDateText by remember(category) { mutableStateOf(java.time.LocalDate.now().toString()) }
 
     fun refresh() { records.clear(); records.addAll(StayRecordStore.load(context, category)) }
     fun updateServerStatus(record: StayRecord, nextStatus: String) {
@@ -487,28 +489,58 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             return
         }
         if (updatingServerStatus) return
+        val normalizedStatus = nextStatus.trim().lowercase(Locale.ROOT).replace(' ', '_')
+        val lifecycleDate = serverStayDateText.trim()
+        if (category == "stays" && normalizedStatus in setOf("notice_given", "completed") &&
+            runCatching { java.time.LocalDate.parse(lifecycleDate) }.isFailure
+        ) {
+            serverStatusError = if (normalizedStatus == "notice_given") {
+                "Enter the notice date as YYYY-MM-DD."
+            } else {
+                "Enter the move-out date as YYYY-MM-DD."
+            }
+            return
+        }
         updatingServerStatus = true
+        serverStatusError = ""
         remoteScope.launch {
+            var updatedOnServer = false
             try {
                 val response = withContext(Dispatchers.IO) {
                     when (category) {
                         "reservations" -> StayApiClient.updateReservation(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
                         "visits" -> StayApiClient.updateVisit(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
                         "issues" -> StayApiClient.updateIssue(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
+                        "stays" -> StayApiClient.updateOwnerStay(
+                            apiPreferences.apiBaseUrl,
+                            token,
+                            serverId,
+                            nextStatus,
+                            noticeDate = lifecycleDate.takeIf { normalizedStatus == "notice_given" },
+                            moveOutDate = lifecycleDate.takeIf { normalizedStatus == "completed" }
+                        )
                         else -> StayApiClient.updateEnquiry(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
                     }
                 }
                 val rawStatus = response.optString("status", nextStatus.lowercase(Locale.ROOT).replace(' ', '_'))
                 val displayStatus = rawStatus.replace('_', ' ').replaceFirstChar { it.uppercase() }
-                StayRecordStore.update(context, category, record.copy(status = displayStatus, updatedAt = System.currentTimeMillis()))
-                refresh()
+                if (category == "stays") {
+                    // Re-read the canonical stay row so dates and unit occupancy reflect backend state.
+                    serverRefreshRequest++
+                } else {
+                    StayRecordStore.update(context, category, record.copy(status = displayStatus, updatedAt = System.currentTimeMillis()))
+                    refresh()
+                }
                 StayRecordStore.notify(context, "$title updated on server", "${record.title}: $displayStatus", record.property)
                 remoteSyncMessage = "Server confirmed status: $displayStatus"
+                updatedOnServer = true
             } catch (e: Exception) {
-                remoteSyncMessage = "Server update failed: ${e.message ?: "check owner permission"}"
+                val message = e.message ?: "check owner permission and the date values"
+                remoteSyncMessage = "Server update failed: $message"
+                serverStatusError = message
             } finally {
                 updatingServerStatus = false
-                showServerStatusId = null
+                if (updatedOnServer || category != "stays") showServerStatusId = null
             }
         }
     }
@@ -657,10 +689,14 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                                     StayRecordStore.update(context, category, updated); refresh()
                                     StayRecordStore.notify(context, "$title updated", "${r.title}: $next", r.property)
                                 }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Next status", color = SE.Blue, fontSize = 10.sp) }
-                                if (r.source == "Server" && ownerMode && category in setOf("enquiries", "reservations", "visits", "issues") && serverStatusOptions(category, r.status).isNotEmpty()) {
-                                    TextButton(onClick = { showServerStatusId = r.id }, enabled = !updatingServerStatus,
+                                if (r.source == "Server" && ownerMode && category in setOf("enquiries", "reservations", "visits", "issues", "stays") && serverStatusOptions(category, r.status).isNotEmpty()) {
+                                    TextButton(onClick = {
+                                        showServerStatusId = r.id
+                                        serverStatusError = ""
+                                        serverStayDateText = java.time.LocalDate.now().toString()
+                                    }, enabled = !updatingServerStatus,
                                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
-                                        Text(if (updatingServerStatus) "Updating…" else "Update status", color = SE.Blue, fontSize = 10.sp)
+                                        Text(if (updatingServerStatus) "Updating…" else if (category == "stays") "Manage stay" else "Update status", color = SE.Blue, fontSize = 10.sp)
                                     }
                                 }
                                 if (r.source != "Server" && category in setOf("saved_searches", "tasks", "notices", "messages", "profile", "privacy", "documents", "quality", "admin", "housekeeping", "food", "visits", "enquiries", "reservations")) TextButton(onClick = { showDeleteId = r.id }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Remove", color = SE.Red, fontSize = 10.sp) }
@@ -916,11 +952,27 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
         val options = serverStatusOptions(category, selectedServerStatusRecord.status)
         AlertDialog(
             onDismissRequest = { if (!updatingServerStatus) showServerStatusId = null },
-            title = { Text("Update server status", color = SE.Ink, fontWeight = FontWeight.Bold) },
+            title = { Text(if (category == "stays") "Manage resident stay" else "Update server status", color = SE.Ink, fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(selectedServerStatusRecord.title, color = SE.Text, fontWeight = FontWeight.SemiBold)
-                    Text("Choose an allowed action. StayEasy will save the change only after the server confirms it.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
+                    Text(
+                        if (category == "stays") "Record notice or move-out dates. The server validates the transition and releases the room/bed only after confirmation."
+                        else "Choose an allowed action. StayEasy will save the change only after the server confirms it.",
+                        color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp
+                    )
+                    if (category == "stays") {
+                        OutlinedTextField(
+                            value = serverStayDateText,
+                            onValueChange = { serverStayDateText = it.trim().take(10); serverStatusError = "" },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Notice / move-out date (YYYY-MM-DD)") },
+                            placeholder = { Text("2026-11-30") },
+                            singleLine = true
+                        )
+                        Text("Required for “Notice given” and “Completed”. Leave it unchanged for “Active”.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
+                    }
+                    if (serverStatusError.isNotBlank()) Text(serverStatusError, color = SE.Red, fontSize = 11.sp, lineHeight = 15.sp)
                     options.forEach { target ->
                         Button(
                             onClick = { updateServerStatus(selectedServerStatusRecord, target) },
