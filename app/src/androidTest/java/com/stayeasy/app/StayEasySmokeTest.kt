@@ -67,6 +67,16 @@ class StayEasySmokeTest {
     }
 
     @Test
+    fun customerCanOpenAccountAuthenticationFromProfile() {
+        composeRule.onNodeWithText("Profile").performClick()
+        composeRule.onNodeWithText("Your profile").assertIsDisplayed()
+        clickControlContaining("Sign in / Create account")
+        composeRule.onNodeWithText("StayEasy account").assertIsDisplayed()
+        composeRule.onNodeWithText("Connect your StayEasy API first").assertIsDisplayed()
+        composeRule.onNodeWithText("Configure API connection").assertIsDisplayed()
+    }
+
+    @Test
     fun sessionTokenIsBoundToItsApiOrigin() {
         StayApiClient.clearSessionToken()
         try {

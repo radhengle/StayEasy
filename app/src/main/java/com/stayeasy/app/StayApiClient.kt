@@ -1,5 +1,15 @@
 package com.stayeasy.app
 
+import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
+import android.util.Base64
+import java.security.KeyStore
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
+
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -12,8 +22,76 @@ import java.util.TimeZone
 
 /** Small dependency-free API client for public discovery and connection diagnostics. */
 internal object StayApiClient {
+    private const val SESSION_PREFS = "stayeasy_account_session_v1"
+    private const val SESSION_CIPHER = "encrypted_access_token"
+    private const val SESSION_IV = "access_token_iv"
+    private const val SESSION_ORIGIN = "api_origin"
+    private const val SESSION_KEY_ALIAS = "stayeasy.account.session.aes.v1"
+
     @Volatile private var sessionToken: String? = null
     @Volatile private var sessionTokenOrigin: String? = null
+
+    private fun sessionKey(): SecretKey {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        (keyStore.getKey(SESSION_KEY_ALIAS, null) as? SecretKey)?.let { return it }
+        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        generator.init(
+            KeyGenParameterSpec.Builder(
+                SESSION_KEY_ALIAS,
+                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+            ).setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                .setRandomizedEncryptionRequired(true)
+                .build()
+        )
+        return generator.generateKey()
+    }
+
+    private fun persistAccountToken(context: Context, token: String, baseUrl: String) {
+        val origin = normalizedOrigin(baseUrl) ?: throw IllegalArgumentException("Invalid API origin")
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, sessionKey())
+        val encrypted = cipher.doFinal(token.toByteArray(Charsets.UTF_8))
+        context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE).edit()
+            .putString(SESSION_CIPHER, Base64.encodeToString(encrypted, Base64.NO_WRAP))
+            .putString(SESSION_IV, Base64.encodeToString(cipher.iv, Base64.NO_WRAP))
+            .putString(SESSION_ORIGIN, origin)
+            .apply()
+    }
+
+    /** Restores only a token encrypted with this device's Android Keystore key and for this API origin. */
+    fun restoreAccountSession(context: Context, baseUrl: String): Boolean {
+        val prefs = context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE)
+        val origin = normalizedOrigin(baseUrl)
+        val savedOrigin = prefs.getString(SESSION_ORIGIN, null)
+        val encryptedText = prefs.getString(SESSION_CIPHER, null)
+        val ivText = prefs.getString(SESSION_IV, null)
+        if (origin == null || savedOrigin != origin || encryptedText.isNullOrBlank() || ivText.isNullOrBlank()) {
+            if (!encryptedText.isNullOrBlank() || savedOrigin != null) clearPersistedAccountSession(context)
+            clearSessionToken()
+            return false
+        }
+        return runCatching {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                sessionKey(),
+                GCMParameterSpec(128, Base64.decode(ivText, Base64.NO_WRAP))
+            )
+            val token = cipher.doFinal(Base64.decode(encryptedText, Base64.NO_WRAP)).toString(Charsets.UTF_8)
+            require(token.isNotBlank()) { "Stored session token is empty" }
+            setSessionToken(token, baseUrl)
+            true
+        }.getOrElse {
+            clearPersistedAccountSession(context)
+            clearSessionToken()
+            false
+        }
+    }
+
+    fun clearPersistedAccountSession(context: Context) {
+        context.getSharedPreferences(SESSION_PREFS, Context.MODE_PRIVATE).edit().clear().apply()
+    }
 
     private fun normalizedOrigin(baseUrl: String): String? = runCatching {
         val parsed = java.net.URI(baseUrl.trim().trimEnd('/'))
@@ -167,6 +245,58 @@ internal object StayApiClient {
                 expectedVacancy = availableUnit?.let { "${it.unitCode} available" } ?: "Availability needs confirmation",
                 nearbyPlaces = nearbyText, serverPropertyId = sourceId, serverUnits = parsedUnits
             )
+        }
+    }
+
+    /** Registers a customer-level account; Owner workspace requests remain pending server approval. */
+    fun registerAccount(baseUrl: String, email: String, displayName: String, password: String, workspace: String): JSONObject {
+        val body = JSONObject().put("email", email.trim()).put("display_name", displayName.trim())
+            .put("password", password).put("requested_workspace", workspace)
+        return JSONObject(request(baseUrl, "/auth/register", method = "POST", body = body))
+    }
+
+    fun verifyAccountEmail(baseUrl: String, email: String, code: String): JSONObject {
+        val body = JSONObject().put("email", email.trim()).put("code", code.trim())
+        return JSONObject(request(baseUrl, "/auth/verify-email", method = "POST", body = body))
+    }
+
+    /** On successful sign-in, bind the short-lived session to this API origin. */
+    fun loginAccount(context: Context, baseUrl: String, email: String, password: String): JSONObject {
+        val body = JSONObject().put("email", email.trim()).put("password", password)
+        val response = JSONObject(request(baseUrl, "/auth/login", method = "POST", body = body))
+        val token = response.getString("access_token")
+        persistAccountToken(context, token, baseUrl)
+        setSessionToken(token, baseUrl)
+        return response
+    }
+
+    fun resendAccountVerification(baseUrl: String, email: String, password: String): JSONObject {
+        val body = JSONObject().put("email", email.trim()).put("password", password)
+        return JSONObject(request(baseUrl, "/auth/resend-verification", method = "POST", body = body))
+    }
+
+    fun requestPasswordReset(baseUrl: String, email: String): JSONObject {
+        val body = JSONObject().put("email", email.trim())
+        return JSONObject(request(baseUrl, "/auth/forgot-password", method = "POST", body = body))
+    }
+
+    fun resetAccountPassword(baseUrl: String, email: String, code: String, newPassword: String): JSONObject {
+        val body = JSONObject().put("email", email.trim()).put("code", code.trim()).put("new_password", newPassword)
+        return JSONObject(request(baseUrl, "/auth/reset-password", method = "POST", body = body))
+    }
+
+    fun currentAccount(baseUrl: String): JSONObject {
+        val token = currentSessionToken(baseUrl) ?: throw IllegalStateException("Sign in before requesting account details")
+        return JSONObject(request(baseUrl, "/auth/me", token = token))
+    }
+
+    fun logoutAccount(context: Context, baseUrl: String): JSONObject {
+        val token = currentSessionToken(baseUrl) ?: throw IllegalStateException("No active account session")
+        return try {
+            JSONObject(request(baseUrl, "/auth/logout", token = token, method = "POST", body = JSONObject()))
+        } finally {
+            clearSessionToken()
+            clearPersistedAccountSession(context)
         }
     }
 

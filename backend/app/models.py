@@ -338,3 +338,22 @@ class ResidentDocument(Base):
 
 Index("ix_platform_report_open", PlatformReport.status, PlatformReport.created_at)
 Index("ix_privacy_request_open", PrivacyRequest.status, PrivacyRequest.requested_at)
+
+
+class UserCredential(Base):
+    """Private authentication state separated from the public user/profile record."""
+    __tablename__ = "user_credentials"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    password_hash: Mapped[str] = mapped_column(String(255))
+    requested_workspace: Mapped[str] = mapped_column(String(16), default="tenant")
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verification_code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    verification_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reset_code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reset_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    auth_version: Mapped[int] = mapped_column(Integer, default=0)
+    failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    verification_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    reset_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

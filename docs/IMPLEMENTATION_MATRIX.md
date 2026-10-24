@@ -88,7 +88,7 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 
 | Checklist item | Delivered behaviour / location | Status / acceptance condition |
 |---|---|---|
-| Authentication/roles | API JWT validation and role checks; dev-only token bootstrap guarded by environment + shared local password | Identity/OTP/OIDC/MFA/session revocation must be integrated. Not ready for public production |
+| Authentication/roles | Email/password account API; interactive Android registration, email verification, sign-in, password reset, account status and sign-out; access token encrypted with Android Keystore and API-origin-bound | SMTP credentials, refresh-token rotation, approved Owner promotion, MFA, external rate limiting, account deletion and security review remain release gates |
 | Shared property database | PostgreSQL backend schema and endpoints with property/inventory/record models | Foundation implemented; Android app not connected yet; no multi-device sync claim |
 | Search | API filters for city, locality, text/PIN, rent, eligibility, couples, verified and availability | Basic API search; advanced geospatial search and full amenities joins require expansion |
 | Media storage | Android image picker remembers selected content URI locally; database supports listing photo metadata | No production object storage, upload/access-control/compression pipeline yet |
