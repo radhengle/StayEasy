@@ -10,6 +10,7 @@ import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -32,6 +33,11 @@ class StayEasySmokeTest {
 
     private fun clickControlContaining(label: String) {
         composeRule.onNode(hasText(label, substring = true) and hasClickAction()).performScrollTo().performClick()
+    }
+
+    private fun enterGuestPreview() {
+        composeRule.onNodeWithText("Browse sample listings").performScrollTo().performClick()
+        composeRule.waitForIdle()
     }
 
     /** Publishes a genuine emulator-display PNG to Downloads, outside app data cleanup. */
@@ -83,7 +89,17 @@ class StayEasySmokeTest {
     }
 
     @Test
-    fun launchesCustomerHome() {
+    fun launchesLoginEntryWithActionsForBothRoles() {
+        composeRule.onNodeWithText("Welcome home.").assertIsDisplayed()
+        composeRule.onNodeWithText("Tenant / Customer").assertIsDisplayed()
+        composeRule.onNodeWithText("Property Owner").assertExists()
+        composeRule.onAllNodesWithText("Login").assertCountEquals(2)
+        composeRule.onAllNodesWithText("Register").assertCountEquals(2)
+    }
+
+    @Test
+    fun launchesCustomerHomeFromExplicitPreviewAction() {
+        enterGuestPreview()
         composeRule.onNodeWithText("StayEasy").assertIsDisplayed()
         composeRule.onNodeWithText("Find a place that").assertIsDisplayed()
         composeRule.onNodeWithText("Explore").assertIsDisplayed()
@@ -92,6 +108,7 @@ class StayEasySmokeTest {
 
     @Test
     fun systemBackReturnsFromExploreToHomeInsteadOfClosingActivity() {
+        enterGuestPreview()
         composeRule.onNodeWithText("Explore").performClick()
         composeRule.onNodeWithText("Explore stays").assertIsDisplayed()
         composeRule.activity.onBackPressedDispatcher.onBackPressed()
@@ -101,6 +118,7 @@ class StayEasySmokeTest {
 
     @Test
     fun customerCanOpenExploreAndSeeSearchControls() {
+        enterGuestPreview()
         composeRule.onNodeWithText("Explore").performClick()
         composeRule.onNodeWithText("Explore stays").assertIsDisplayed()
         composeRule.onNodeWithText("Filters").assertIsDisplayed()
@@ -111,6 +129,7 @@ class StayEasySmokeTest {
 
     @Test
     fun customerCanChooseTenantWorkspace() {
+        enterGuestPreview()
         composeRule.onNodeWithText("Profile").performClick()
         composeRule.onNodeWithText("Your profile").assertIsDisplayed()
         clickControlContaining("Are you a PG owner?")
@@ -123,6 +142,7 @@ class StayEasySmokeTest {
 
     @Test
     fun customerCanChooseOwnerWorkspace() {
+        enterGuestPreview()
         composeRule.onNodeWithText("Profile").performClick()
         composeRule.onNodeWithText("Your profile").assertIsDisplayed()
         clickControlContaining("Are you a PG owner?")
@@ -136,6 +156,7 @@ class StayEasySmokeTest {
 
     @Test
     fun customerCanChangePaletteAndRestoreDefault() {
+        enterGuestPreview()
         composeRule.onNodeWithText("Profile").performClick()
         composeRule.onNodeWithText("Your profile").assertIsDisplayed()
         clickControlContaining("All tools & preferences")
@@ -150,6 +171,7 @@ class StayEasySmokeTest {
 
     @Test
     fun customerCanOpenAccountAuthenticationFromProfile() {
+        enterGuestPreview()
         composeRule.onNodeWithText("Profile").performClick()
         composeRule.onNodeWithText("Your profile").assertIsDisplayed()
         clickControlContaining("Sign in / Create account")
