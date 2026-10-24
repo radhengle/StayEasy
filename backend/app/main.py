@@ -1571,6 +1571,8 @@ def accept_tenant_invitation(body: TenantInvitationAccept,
         "billable_start_date": quote["billable_start_date"],
         "billable_start_trigger": quote["billing_start_trigger"],
         "billable_terms_acknowledged": True,
+        "profile_completion_acknowledged": True,
+        "profile_completion_acknowledged_at": now.isoformat(),
         "billable_terms_acknowledged_at": now.isoformat(),
         "monthly_rent": quote["monthly_rent"],
         "daily_rate_paise": quote["daily_rate_paise"],
@@ -2136,6 +2138,19 @@ def update_reservation_status_action(reservation_id: int, body: ReservationStatu
     item = db.get(m.Reservation, reservation_id)
     if not item:
         raise HTTPException(404, "Reservation not found")
+    if body.status == "confirmed":
+        invitation = db.scalar(select(m.PropertyInvitation).where(m.PropertyInvitation.reservation_id == item.id))
+        if invitation is not None:
+            require_property_manager(db, actor, item.property_id, "reservations.manage")
+            if invitation.registration_submitted_at is None or not invitation.registration_profile.get("profile_completion_acknowledged"):
+                raise HTTPException(409, "The tenant must complete and acknowledge the registration profile before approval.")
+            required_categories = set(invitation.required_document_categories or [])
+            if required_categories:
+                documents = list(db.scalars(select(m.InvitationDocument).where(m.InvitationDocument.invitation_id == invitation.id)))
+                approved = {document.category for document in documents if document.status == "approved"}
+                missing = sorted(required_categories - approved)
+                if missing:
+                    raise HTTPException(409, "Approve all required registration documents before approving this reservation: " + ", ".join(missing))
     if body.status in {"cancelled", "expired"}:
         require_property_manager(db, actor, item.property_id, "reservations.manage")
         recorded_payments = list(db.scalars(select(m.LedgerEntry).where(
