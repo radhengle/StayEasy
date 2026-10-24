@@ -808,13 +808,50 @@ def update_stay(stay_id: int, body: StayPatch, actor: dict = Depends(require_rol
     stay = db.get(m.ResidentStay, stay_id)
     if not stay: raise HTTPException(404, "Stay not found")
     require_property_manager(db, actor, stay.property_id, "residents.manage")
-    old = {"status": stay.status}; stay.status = body.status; stay.notice_date = body.notice_date; stay.move_out_date = body.move_out_date
-    if body.status == "completed":
-        if not body.move_out_date: raise HTTPException(422, "Move-out date is required to complete a stay")
-        unit = db.get(m.PropertyUnit, stay.unit_id)
-        if unit: unit.status = "available"
-    audit(db, actor, "resident_stay", stay.id, "status_changed", old=old, new={"status": stay.status})
-    db.commit(); return {"id": stay.id, "status": stay.status}
+
+    old_status = stay.status
+    if old_status in {"completed", "cancelled"} and body.status != old_status:
+        raise HTTPException(409, f"A {old_status} stay is terminal and cannot be reactivated")
+
+    next_notice_date = body.notice_date if body.notice_date is not None else stay.notice_date
+    next_move_out_date = body.move_out_date if body.move_out_date is not None else stay.move_out_date
+    if body.status == "notice_given" and next_notice_date is None:
+        raise HTTPException(422, "Notice date is required when giving notice")
+    if body.status == "completed" and body.move_out_date is None:
+        raise HTTPException(422, "Move-out date is required to complete a stay")
+    if next_move_out_date is not None and next_move_out_date < stay.joining_date:
+        raise HTTPException(422, "Move-out date cannot be before the joining date")
+    if next_notice_date is not None and next_move_out_date is not None and next_notice_date > next_move_out_date:
+        raise HTTPException(422, "Notice date cannot be after the move-out date")
+
+    releasing_unit = body.status in {"completed", "cancelled"} and old_status not in {"completed", "cancelled"}
+    unit = None
+    if releasing_unit:
+        unit = db.scalar(select(m.PropertyUnit).where(m.PropertyUnit.id == stay.unit_id).with_for_update())
+        other_active_stay = db.scalar(select(m.ResidentStay.id).where(
+            m.ResidentStay.unit_id == stay.unit_id,
+            m.ResidentStay.id != stay.id,
+            m.ResidentStay.status.in_(["active", "notice_given"])
+        ))
+        if other_active_stay:
+            raise HTTPException(409, "Unit still has another active resident stay and cannot be released")
+
+    old = {"status": stay.status, "notice_date": stay.notice_date.isoformat() if stay.notice_date else None,
+           "move_out_date": stay.move_out_date.isoformat() if stay.move_out_date else None}
+    stay.status = body.status
+    if body.notice_date is not None:
+        stay.notice_date = body.notice_date
+    if body.move_out_date is not None:
+        stay.move_out_date = body.move_out_date
+    if unit is not None:
+        unit.status = "available"
+    new = {"status": stay.status, "notice_date": stay.notice_date.isoformat() if stay.notice_date else None,
+           "move_out_date": stay.move_out_date.isoformat() if stay.move_out_date else None}
+    audit(db, actor, "resident_stay", stay.id, "status_changed", old=old, new=new)
+    db.commit(); db.refresh(stay)
+    return {"id": stay.id, "status": stay.status,
+            "notice_date": stay.notice_date.isoformat() if stay.notice_date else None,
+            "move_out_date": stay.move_out_date.isoformat() if stay.move_out_date else None}
 
 @app.post("/owner/ledger", status_code=201)
 def create_ledger_entry(body: LedgerCreate, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
