@@ -58,6 +58,19 @@ def setup_property(owner_id="owner-1"):
     return prop, unit.json()
 
 
+def create_test_stay(payload):
+    """Create the verified test account required by the real resident-assignment contract."""
+    resident_id = payload["resident_id"]
+    with SessionLocal() as db:
+        if db.get(m.User, resident_id) is None:
+            db.add(m.User(id=resident_id, email=f"{resident_id}@example.test", display_name=resident_id,
+                          role="customer", is_active=True))
+            db.add(m.UserCredential(user_id=resident_id, password_hash="test-only-hash",
+                                    email_verified_at=datetime.now(timezone.utc)))
+            db.commit()
+    return client.post("/owner/stays", json=payload)
+
+
 def setup_function():
     clear_db()
 
@@ -84,6 +97,36 @@ def test_property_review_publish_and_search():
     assert item["inventory"]["available"] == 1
     assert item["verification_status"] == "verified"
 
+
+
+def test_owner_resident_candidates_only_returns_verified_customers_related_to_property():
+    prop, _unit = setup_property()
+    verified = m.User(id="verified-customer", email="verified@example.test", display_name="Verified Customer", role="customer", is_active=True)
+    credential = m.UserCredential(user_id=verified.id, password_hash="test-only-hash", email_verified_at=datetime.now(timezone.utc))
+    unverified = m.User(id="unverified-customer", email="unverified@example.test", display_name="Unverified Customer", role="customer", is_active=True)
+    unverified_credential = m.UserCredential(user_id=unverified.id, password_hash="test-only-hash")
+    with SessionLocal() as db:
+        db.add_all([verified, credential, unverified, unverified_credential])
+        db.flush()
+        db.add(m.Enquiry(property_id=prop["id"], customer_id=verified.id, message="Interested"))
+        db.add(m.Enquiry(property_id=prop["id"], customer_id=unverified.id, message="Interested"))
+        db.commit()
+    set_actor("owner-1", "owner")
+    response = client.get("/owner/resident-candidates", params={"property_id": prop["id"]})
+    assert response.status_code == 200, response.text
+    assert [row["id"] for row in response.json()] == ["verified-customer"]
+    assert response.json()[0]["email_verified"] is True
+
+
+def test_owner_cannot_assign_unverified_or_unknown_resident_account():
+    prop, unit = setup_property()
+    set_actor("owner-1", "owner")
+    payload = {
+        "property_id": prop["id"], "unit_id": unit["id"], "resident_id": "not-a-real-account",
+        "joining_date": date.today().isoformat(), "agreed_monthly_rent": 9000, "deposit_held": 0,
+    }
+    rejected = client.post("/owner/stays", json=payload)
+    assert rejected.status_code == 422, rejected.text
 
 def test_owner_property_inventory_is_scoped_and_contains_server_units():
     first_property, first_unit = setup_property(owner_id="owner-1")
@@ -296,7 +339,7 @@ def test_photo_metadata_and_admin_misleading_listing_reports():
 def test_privacy_requests_and_idempotent_pro_rata_billing():
     prop, unit = setup_property()
     set_actor("owner-1", "owner")
-    stay_response = client.post("/owner/stays", json={
+    stay_response = create_test_stay({
         "property_id": prop["id"], "unit_id": unit["id"], "resident_id": "customer-1",
         "joining_date": "2026-11-16", "agreed_monthly_rent": 9000, "deposit_held": 18000,
     })
@@ -317,7 +360,7 @@ def test_privacy_requests_and_idempotent_pro_rata_billing():
 def test_resident_cannot_read_another_stays_documents():
     prop, unit = setup_property()
     set_actor("owner-1", "owner")
-    stay = client.post("/owner/stays", json={
+    stay = create_test_stay({
         "property_id": prop["id"], "unit_id": unit["id"], "resident_id": "customer-1",
         "joining_date": date.today().isoformat(), "agreed_monthly_rent": 9000, "deposit_held": 18000,
     })
@@ -329,7 +372,7 @@ def test_resident_cannot_read_another_stays_documents():
 def test_urgent_maintenance_report_notifies_owner_and_blocks_unit():
     prop, unit = setup_property()
     set_actor("owner-1", "owner")
-    stay = client.post("/owner/stays", json={
+    stay = create_test_stay({
         "property_id": prop["id"], "unit_id": unit["id"], "resident_id": "customer-1",
         "joining_date": date.today().isoformat(), "agreed_monthly_rent": 9000, "deposit_held": 18000,
     })
@@ -354,7 +397,7 @@ def test_maintenance_issues_are_scoped_to_staff_permissions():
 
     def create_resident_issue(owner_id, customer_id, prop, unit):
         set_actor(owner_id, "owner")
-        stay = client.post("/owner/stays", json={
+        stay = create_test_stay({
             "property_id": prop["id"], "unit_id": unit["id"], "resident_id": customer_id,
             "joining_date": date.today().isoformat(), "agreed_monthly_rent": 9000, "deposit_held": 18000,
         })
@@ -413,14 +456,14 @@ def test_resident_ledger_is_scoped_to_the_authenticated_resident():
     property_b, unit_b = setup_property(owner_id="owner-b")
 
     set_actor("owner-a", "owner")
-    stay_a = client.post("/owner/stays", json={
+    stay_a = create_test_stay({
         "property_id": property_a["id"], "unit_id": unit_a["id"], "resident_id": "resident-a",
         "joining_date": "2026-10-01", "agreed_monthly_rent": 9000, "deposit_held": 18000,
     })
     assert stay_a.status_code == 201, stay_a.text
 
     set_actor("owner-b", "owner")
-    stay_b = client.post("/owner/stays", json={
+    stay_b = create_test_stay({
         "property_id": property_b["id"], "unit_id": unit_b["id"], "resident_id": "resident-b",
         "joining_date": "2026-10-01", "agreed_monthly_rent": 8500, "deposit_held": 15000,
     })
@@ -492,7 +535,7 @@ def test_owner_ledger_is_scoped_and_manual_payment_cannot_claim_provider_verific
 def test_move_in_deposit_is_added_to_the_resident_ledger_as_manual_record():
     prop, unit = setup_property(owner_id="owner-1")
     set_actor("owner-1", "owner")
-    stay = client.post("/owner/stays", json={
+    stay = create_test_stay({
         "property_id": prop["id"], "unit_id": unit["id"], "resident_id": "resident-deposit",
         "joining_date": "2026-10-01", "agreed_monthly_rent": 9000, "deposit_held": 18000,
     })
