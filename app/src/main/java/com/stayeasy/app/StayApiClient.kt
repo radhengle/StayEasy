@@ -490,6 +490,19 @@ internal object StayApiClient {
         return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
     }
 
+    /** Server-authoritative inbox for the currently authenticated account. */
+    fun myNotifications(baseUrl: String, token: String, limit: Int = 100): List<JSONObject> {
+        require(limit in 1..500) { "Notification limit must be between 1 and 500." }
+        val result = JSONArray(request(baseUrl, "/notifications?limit=$limit", token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    /** Mark only the signed-in recipient's server notification as read. */
+    fun markNotificationRead(baseUrl: String, token: String, notificationId: Long): JSONObject {
+        require(notificationId > 0L) { "Select a valid server notification." }
+        return JSONObject(request(baseUrl, "/notifications/$notificationId/read", token, "PATCH", JSONObject()))
+    }
+
     fun myMoveOutRequests(baseUrl: String, token: String): List<JSONObject> {
         val result = JSONArray(request(baseUrl, "/stays/me/move-out-requests", token))
         return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
