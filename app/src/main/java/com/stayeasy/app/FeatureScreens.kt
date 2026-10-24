@@ -286,6 +286,8 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
         val displayStatus = if (ledgerCategory == "payment" && providerStatus == "manual_record") "Recorded manually"
             else rawStatus.replaceFirstChar { it.uppercase() }
         val residentId = row.optString("resident_id")
+        val createdAt = runCatching { java.time.Instant.parse(row.optString("created_at")).toEpochMilli() }
+            .getOrDefault(System.currentTimeMillis())
         StayRecord(
             id = "server-ledger-${row.optLong("id")}",
             category = category,
@@ -297,6 +299,8 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             property = propertyName,
             unit = row.optString("unit_code"),
             date = if (ledgerCategory == "payment") paidAt.ifBlank { dueDate.ifBlank { period } } else dueDate.ifBlank { period },
+            createdAt = createdAt,
+            updatedAt = createdAt,
             source = "Server"
         )
     }
