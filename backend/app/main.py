@@ -282,7 +282,11 @@ def can_manage_property(db: Session, actor: dict[str, Any], prop: m.Property, pe
     assignment = db.scalar(select(m.StaffAssignment).where(
         m.StaffAssignment.staff_user_id == actor_user_id(actor),
         m.StaffAssignment.property_id == prop.id, m.StaffAssignment.status == "active"))
-    return bool(assignment and (permission in (assignment.permissions or []) or "*" in (assignment.permissions or [])))
+    permissions = set(assignment.permissions or []) if assignment else set()
+    accepted = {permission, "*"}
+    if permission == "maintenance.manage": accepted.add("issues.manage")
+    if permission == "maintenance.view": accepted.update({"issues.view", "issues.manage", "maintenance.manage"})
+    return bool(permissions.intersection(accepted))
 
 def require_property_manager(db: Session, actor: dict[str, Any], property_id: int, permission: str = "property.manage") -> m.Property:
     prop = property_or_404(db, property_id)
@@ -298,6 +302,8 @@ def visible_property_ids(db: Session, actor: dict[str, Any], resource: str) -> l
     if actor["role"] == "owner":
         return list(db.scalars(select(m.Property.id).where(m.Property.owner_id == subject)))
     allowed = {f"{resource}.view", f"{resource}.manage", "*"}
+    if resource == "issues": allowed.update({"maintenance.view", "maintenance.manage"})
+    if resource == "maintenance": allowed.update({"issues.view", "issues.manage"})
     assignments = db.scalars(select(m.StaffAssignment).where(
         m.StaffAssignment.staff_user_id == subject,
         m.StaffAssignment.status == "active"
@@ -768,7 +774,8 @@ def create_issue(body: IssueCreate, actor: dict = Depends(get_actor), db: Sessio
 def list_issues(property_id: int | None = None, actor: dict = Depends(get_actor), db: Session = Depends(get_db)):
     stmt = select(m.MaintenanceIssue)
     if actor["role"] in {"owner", "manager", "staff"}:
-        stmt = stmt.where(m.MaintenanceIssue.property_id.in_(select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))))
+        property_ids = visible_property_ids(db, actor, "issues") or []
+        stmt = stmt.where(m.MaintenanceIssue.property_id.in_(property_ids))
     elif actor["role"] == "customer": stmt = stmt.where(m.MaintenanceIssue.reported_by == actor_user_id(actor))
     if property_id: stmt = stmt.where(m.MaintenanceIssue.property_id == property_id)
     return [{"id": i.id, "property_id": i.property_id, "unit_id": i.unit_id, "title": i.title, "description": i.description, "priority": i.priority,

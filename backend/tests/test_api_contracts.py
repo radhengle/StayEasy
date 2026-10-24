@@ -308,3 +308,47 @@ def test_urgent_maintenance_report_notifies_owner_and_blocks_unit():
     messages = client.get("/notifications")
     assert messages.status_code == 200
     assert any("Maintenance issue reported" in n["title"] for n in messages.json())
+
+
+def test_maintenance_issues_are_scoped_to_staff_permissions():
+    property_a, unit_a = setup_property(owner_id="owner-a")
+    property_b, unit_b = setup_property(owner_id="owner-b")
+
+    def create_resident_issue(owner_id, customer_id, prop, unit):
+        set_actor(owner_id, "owner")
+        stay = client.post("/owner/stays", json={
+            "property_id": prop["id"], "unit_id": unit["id"], "resident_id": customer_id,
+            "joining_date": date.today().isoformat(), "agreed_monthly_rent": 9000, "deposit_held": 18000,
+        })
+        assert stay.status_code == 201, stay.text
+        set_actor(customer_id, "customer")
+        issue = client.post("/issues", json={
+            "property_id": prop["id"], "unit_id": unit["id"], "category": "plumbing",
+            "title": "Bathroom leak", "description": "Water is leaking around the shower.",
+            "priority": "normal",
+        })
+        assert issue.status_code == 201, issue.text
+        return issue.json()
+
+    issue_a = create_resident_issue("owner-a", "resident-a", property_a, unit_a)
+    issue_b = create_resident_issue("owner-b", "resident-b", property_b, unit_b)
+
+    with SessionLocal() as db:
+        db.add(m.StaffAssignment(
+            owner_id="owner-a", staff_user_id="maintenance-a", property_id=property_a["id"],
+            role="maintenance", permissions=["issues.view", "issues.manage"], status="active"
+        ))
+        db.commit()
+
+    set_actor("maintenance-a", "staff")
+    visible = client.get("/issues")
+    assert visible.status_code == 200, visible.text
+    assert len(visible.json()) == 1
+    assert visible.json()[0]["property_id"] == property_a["id"]
+
+    updated = client.patch(f"/owner/issues/{issue_a['id']}", json={"status": "in_progress"})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["status"] == "in_progress"
+
+    denied = client.patch(f"/owner/issues/{issue_b['id']}", json={"status": "resolved"})
+    assert denied.status_code == 403

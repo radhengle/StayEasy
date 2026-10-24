@@ -46,7 +46,7 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 |---|---|---|
 | 3.1 My Stay | Stay lifecycle, move-in/renewal/notice/move-out records and contact/detail access paths | Local records UI; API resident stay records support history |
 | 3.2 Rent/financial records | Payment, charges, deposits and receipt/ledger records; CSV export/share | Local records are manually entered; backend ledger distinguishes manual/provider-confirmed/reconciled values; no live payment integration |
-| 3.3 Maintenance/support | Issue category/details/priority/affected-unit notes, status updates and resolution history records | Local UI; API ticket lifecycle and audit endpoints. Photo upload and SLA escalation automation not included |
+| 3.3 Maintenance/support | Customer issue submission, property/unit scope, priority, owner queue and server-confirmed status updates | API-backed when the customer has a valid session and active server stay, or when an owner/staff member has property-scoped maintenance access; otherwise explicitly local-only. Photo upload and SLA escalation automation not included |
 | 3.4 Resident lifecycle | Bed change, renewal, notice and settlement can be tracked as stay records; final statement concept supported by ledger | Local workflow foundation; server lifecycle endpoints exist; agreement signing and automated pro-rata settlement are not integrated |
 
 ## 4. Owner app — property onboarding and management
@@ -67,7 +67,7 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 | 5.1 Rent/payments | Generic charge/payment records with amount/method/reference/status and exports | Local UI; API ledger/audit exists; recurring monthly invoice generation and late-fee policy engine are not scheduled |
 | 5.2 Deposits | Separate deposit, deduction/refund/settlement record categories | Local UI; ledger supports category records; legal dispute/receipt and approval workflow requires refinement |
 | 5.3 Expenses/reports | Categorized expense entries, report records, CSV export/share; owner analytics destination | Local UI; API ledger/dashboard. Report calculations need accounting validation before formal use |
-| 5.4 Maintenance | Category, priority, status, assigned person, record history and unit state actions | Local UI; API issue creation/status routes + audit; preventive schedule routes are partial via housekeeping tasks |
+| 5.4 Maintenance | Category, priority, status, assigned person, record history and unit state actions | Server-backed issue queue and status transitions with property-scoped staff visibility; unrelated maintenance schedules and record types remain local until integrated |
 | 5.5 Staff/access | Role/permission records on device; server staff-assignment CRUD with property-specific permission checks | Local records are not authorization; API is the enforcement layer but authentication provider is a production prerequisite |
 | 5.6 Communications | Enquiry/message/notice/notification categories; API notices and notification inbox with read status | Local UI + API queue; no SMS, email, push provider, delivery retry worker or read receipt from an external provider |
 
