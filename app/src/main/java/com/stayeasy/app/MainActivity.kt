@@ -526,6 +526,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
         route = if (route.startsWith("records:")) when (route.substringAfter("records:")) {
             "saved_searches" -> "search"
             "residents" -> if (ownerMode) "owner_beds" else "profile"
+            "move_out_requests" -> if (ownerMode) "owner_more" else "stay"
             "payments", "charges", "deposits", "stays" -> if (ownerMode) "owner_payments" else "stay"
             "issues" -> if (ownerMode) "owner_issues" else "stay"
             "enquiries" -> if (ownerMode) "owner_enquiries" else "search"
@@ -577,7 +578,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 )
                 NavigationBar(containerColor = SE.Surface, tonalElevation = 0.dp) {
                     navItems.forEach { item ->
-                        val selected = route == item.route || (item.route == "search" && route == "map") || (item.route == "owner_more" && route in setOf("owner_properties", "owner_residents", "owner_issues", "owner_analytics"))
+                        val selected = route == item.route || (item.route == "search" && route == "map") || (item.route == "owner_more" && (route in setOf("owner_properties", "owner_residents", "owner_issues", "owner_analytics") || route == "records:move_out_requests"))
                         NavigationBarItem(
                             selected = selected,
                             onClick = { route = item.route },
@@ -980,7 +981,15 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "owner_settings" -> ThemeSettingsScreen(preferences, { updated -> onPreferencesChanged(updated) }, { route = "feature_hub" })
                 else -> if (route.startsWith("records:")) {
                     FeatureRecordsScreen(route.substringAfter("records:"), ownerMode) { route = "feature_hub" }
-                } else OwnerMoreScreen({ route = "owner_properties" }, { route = "records:residents" }, { route = "records:issues" }, { route = "records:reports" }, { ownerMode = false; route = "home" }, { route = "feature_hub" })
+                } else OwnerMoreScreen(
+                    onProperties = { route = "owner_properties" },
+                    onResidents = { route = "records:residents" },
+                    onMoveOutRequests = { route = "records:move_out_requests" },
+                    onIssues = { route = "records:issues" },
+                    onAnalytics = { route = "records:reports" },
+                    onTenant = { ownerMode = false; route = "home" },
+                    onProfile = { route = "feature_hub" }
+                )
             }
         }
     }
@@ -3269,10 +3278,24 @@ private fun OwnerAnalyticsScreen(onBack: () -> Unit) {
 }
 
 @Composable
-private fun OwnerMoreScreen(onProperties: () -> Unit, onResidents: () -> Unit, onIssues: () -> Unit, onAnalytics: () -> Unit, onTenant: () -> Unit, onProfile: () -> Unit) {
+private fun OwnerMoreScreen(
+    onProperties: () -> Unit,
+    onResidents: () -> Unit,
+    onMoveOutRequests: () -> Unit,
+    onIssues: () -> Unit,
+    onAnalytics: () -> Unit,
+    onTenant: () -> Unit,
+    onProfile: () -> Unit
+) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
         ScreenHeader("Manage your business", "Everything beyond today's dashboard")
-        Spacer(Modifier.height(17.dp)); MenuRow("My properties", "Listing details, rooms and publishing", Icons.Filled.Apartment, onProperties); MenuRow("Residents", "Stay records and move-in / move-out", Icons.Filled.Person, onResidents); MenuRow("Maintenance", "Issue queue and resolution", Icons.Filled.ReportProblem, onIssues); MenuRow("Business insights", "Occupancy and collection trends", Icons.AutoMirrored.Filled.TrendingUp, onAnalytics); MenuRow("All owner workflows", "Rent, deposits, expenses, staff, food, reports and settings", Icons.Filled.Settings) { onProfile() }
+        Spacer(Modifier.height(17.dp))
+        MenuRow("My properties", "Listing details, rooms and publishing", Icons.Filled.Apartment, onProperties)
+        MenuRow("Residents", "Stay records and move-in / move-out", Icons.Filled.Person, onResidents)
+        MenuRow("Move-out requests", "Review tenant dates, approve notice or respond with a note", Icons.Filled.CalendarToday, onMoveOutRequests)
+        MenuRow("Maintenance", "Issue queue and resolution", Icons.Filled.ReportProblem, onIssues)
+        MenuRow("Business insights", "Occupancy and collection trends", Icons.AutoMirrored.Filled.TrendingUp, onAnalytics)
+        MenuRow("All owner workflows", "Rent, deposits, expenses, staff, food, reports and settings", Icons.Filled.Settings) { onProfile() }
         Spacer(Modifier.height(14.dp)); Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth().clickable(onClick = onTenant)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.Home, null, tint = Color.White); Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text("Switch to tenant view", color = Color.White, fontWeight = FontWeight.Bold); Text("Preview the customer experience", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp) }; Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color.White) } }
     }
 }
