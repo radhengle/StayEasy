@@ -85,6 +85,43 @@ def test_property_review_publish_and_search():
     assert item["verification_status"] == "verified"
 
 
+def test_owner_property_inventory_is_scoped_and_contains_server_units():
+    first_property, first_unit = setup_property(owner_id="owner-1")
+    second_property, _ = setup_property(owner_id="owner-2")
+
+    set_actor("owner-1", "owner")
+    response = client.get("/owner/properties")
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    assert [row["id"] for row in rows] == [first_property["id"]]
+    assert rows[0]["units"][0]["id"] == first_unit["id"]
+    assert rows[0]["units"][0]["status"] == "available"
+    assert rows[0]["inventory"]["total"] == 1
+
+    set_actor("customer-1", "customer")
+    assert client.get("/owner/properties").status_code == 403
+
+    set_actor("admin-1", "admin")
+    admin_rows = client.get("/owner/properties")
+    assert admin_rows.status_code == 200, admin_rows.text
+    assert {row["id"] for row in admin_rows.json()} == {first_property["id"], second_property["id"]}
+
+
+def test_owner_inventory_status_update_is_server_confirmed_and_property_scoped():
+    prop, unit = setup_property(owner_id="owner-1")
+    set_actor("owner-1", "owner")
+    updated = client.patch(f"/owner/units/{unit['id']}/status", json={"status": "maintenance"})
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["status"] == "maintenance"
+    rows = client.get("/owner/units", params={"property_id": prop["id"]})
+    assert rows.status_code == 200, rows.text
+    assert rows.json()[0]["status"] == "maintenance"
+
+    set_actor("owner-2", "owner")
+    denied = client.patch(f"/owner/units/{unit['id']}/status", json={"status": "available"})
+    assert denied.status_code == 403
+
+
 def test_enquiry_and_visit_creation_emit_owner_notifications():
     prop, _ = setup_property()
     set_actor("customer-1", "customer")

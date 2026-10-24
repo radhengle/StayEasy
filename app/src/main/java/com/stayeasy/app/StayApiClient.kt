@@ -172,7 +172,14 @@ internal object StayApiClient {
     fun publishedProperties(baseUrl: String, city: String = "Pune"): List<PgListing> {
         val encodedCity = java.net.URLEncoder.encode(city, "UTF-8")
         val result = JSONObject(request(baseUrl, "/properties?city=$encodedCity"))
-        val items = result.optJSONArray("items") ?: JSONArray()
+        return parsePropertyItems(result.optJSONArray("items") ?: JSONArray())
+    }
+
+    /** Includes draft/pending listings, but only for the authenticated owner (or admin). */
+    fun ownerProperties(baseUrl: String, token: String): List<PgListing> =
+        parsePropertyItems(JSONArray(request(baseUrl, "/owner/properties", token)))
+
+    private fun parsePropertyItems(items: JSONArray): List<PgListing> {
         return (0 until items.length()).mapNotNull { index ->
             val p = items.optJSONObject(index) ?: return@mapNotNull null
             val inventory = p.optJSONObject("inventory") ?: JSONObject()
@@ -537,6 +544,17 @@ internal object StayApiClient {
             else body.put("due_date", normalizedDueDate)
         }
         return JSONObject(request(baseUrl, "/owner/ledger", token, "POST", body))
+    }
+
+    /** Update a server-owned unit; the UI must wait for this response before reflecting the change. */
+    fun updateUnitStatus(baseUrl: String, token: String, unitId: Long, status: String): JSONObject {
+        require(unitId > 0L) { "Enter a valid server unit ID." }
+        val normalized = status.trim().lowercase(Locale.ROOT)
+        require(normalized in setOf("available", "reserved", "occupied", "maintenance", "inactive")) {
+            "Unsupported inventory status."
+        }
+        val body = JSONObject().put("status", normalized)
+        return JSONObject(request(baseUrl, "/owner/units/$unitId/status", token, "PATCH", body))
     }
 
     /** Idempotent server-side rent generation for a property's billing period. */
