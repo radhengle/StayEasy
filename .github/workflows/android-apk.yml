@@ -36,6 +36,14 @@ jobs:
       - name: Run API contract tests
         run: python -m pytest backend/tests -q
 
+      - name: Validate Alembic migration on a clean database
+        env:
+          DATABASE_URL: sqlite:////tmp/stayeasy_alembic_test.db
+        run: |
+          rm -f /tmp/stayeasy_alembic_test.db
+          python -m alembic -c backend/alembic.ini upgrade head
+          python -m alembic -c backend/alembic.ini current
+
       - name: Validate project layout and feature contracts
         run: python tools/validate_project.py
 
