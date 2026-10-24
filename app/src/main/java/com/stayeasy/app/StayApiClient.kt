@@ -207,7 +207,8 @@ internal object StayApiClient {
         residentId: String,
         joiningDate: String,
         agreedMonthlyRent: Int,
-        depositHeld: Int
+        depositHeld: Int,
+        reservationId: Long? = null
     ): JSONObject {
         require(propertyId > 0L) { "Select a valid server property." }
         require(unitId > 0L) { "Select an available room or bed." }
@@ -223,6 +224,7 @@ internal object StayApiClient {
             .put("joining_date", normalizedDate)
             .put("agreed_monthly_rent", agreedMonthlyRent)
             .put("deposit_held", depositHeld)
+        reservationId?.takeIf { it > 0L }?.let { body.put("reservation_id", it) }
         return JSONObject(request(baseUrl, "/owner/stays", token, "POST", body))
     }
 
