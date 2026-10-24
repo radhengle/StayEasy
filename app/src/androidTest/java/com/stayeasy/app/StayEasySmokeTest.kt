@@ -1,6 +1,6 @@
 package com.stayeasy.app
 
-import android.graphics.Bitmap
+import android.os.ParcelFileDescriptor
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -10,8 +10,6 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import java.io.File
-import java.io.FileOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -32,19 +30,16 @@ class StayEasySmokeTest {
         composeRule.onNode(hasText(label, substring = true) and hasClickAction()).performScrollTo().performClick()
     }
 
-    /** Keeps lightweight, credential-free emulator screenshots available as a CI artifact. */
+    /** Captures the actual emulator display into shared storage so the host runner can export it. */
     private fun captureScreenshot(name: String) {
         composeRule.waitForIdle()
         val instrumentation = InstrumentationRegistry.getInstrumentation()
-        val bitmap = instrumentation.uiAutomation.takeScreenshot()
-        val directory = File(instrumentation.targetContext.filesDir, "stayeasy-screenshots")
-        assertTrue("Unable to create screenshot directory", directory.mkdirs() || directory.isDirectory)
-        val destination = File(directory, "$name.png")
-        FileOutputStream(destination).use { output ->
-            assertTrue("Unable to encode screenshot $name", bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
-        }
-        bitmap.recycle()
-        assertTrue("Screenshot was not written: $destination", destination.exists() && destination.length() > 0)
+        val destination = "/sdcard/Download/stayeasy-screenshots/$name.png"
+        val command = "mkdir -p /sdcard/Download/stayeasy-screenshots && screencap -p $destination && test -s $destination && echo SCREENSHOT_OK"
+        val output = ParcelFileDescriptor.AutoCloseInputStream(
+            instrumentation.uiAutomation.executeShellCommand(command)
+        ).bufferedReader().use { it.readText() }
+        assertTrue("Emulator screenshot capture failed for $name: $output", output.contains("SCREENSHOT_OK"))
     }
 
     @Test
