@@ -24,7 +24,7 @@ model_text = models.read_text(encoding="utf-8")
 admin_text = admin.read_text(encoding="utf-8")
 
 required_routes = [
-    '"home" ->', '"search" ->', '"map" ->', '"filters" ->', '"details" ->',
+    '"home" ->', '"account_type" ->', '"search" ->', '"map" ->', '"filters" ->', '"details" ->',
     '"request_visit" ->', '"saved" ->', '"enquiries" ->', '"chat" ->',
     '"stay" ->', '"payments" ->', '"issue" ->', '"profile" ->',
     '"owner_dashboard" ->', '"owner_properties" ->', '"add_pg" ->', '"edit_pg" ->',
@@ -39,7 +39,7 @@ for marker in [
     '"Boys only"', '"Girls only"', '"Mixed"', 'couplesAllowed',
     'ListingStore.save(context, customListings.toList())', 'takePersistableUriPermission',
     'DemoMapArt', 'distanceIsVerified', 'StayUserDataStore.saveFavorites',
-    'remoteListings', 'LocalDensity'
+    'remoteListings', 'LocalDensity', 'AccountTypeScreen', 'Choose your workspace', 'Continue as Tenant', 'Continue as Owner', 'Preview mode:'
 ]:
     assert marker in main_text, f"Missing Android behaviour marker: {marker}"
 for marker in [
