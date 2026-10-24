@@ -51,6 +51,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -130,7 +131,7 @@ internal fun TenantInvitationRegistrationScreen(
             invitations = emptyList()
         } else {
             runCatching {
-                withContext(Dispatchers.IO) { StayApiClient.tenantInvitations(baseUrl, sessionToken) }
+                withContext(Dispatchers.IO) { StayApiClient.tenantInvitations(baseUrl, sessionToken!!) }
             }.onSuccess { invitations = it }
              .onFailure { error = it.message ?: "Could not load invitations for this account." }
         }
