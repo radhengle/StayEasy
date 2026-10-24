@@ -974,12 +974,20 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                     }
                     if (serverStatusError.isNotBlank()) Text(serverStatusError, color = SE.Red, fontSize = 11.sp, lineHeight = 15.sp)
                     options.forEach { target ->
+                        val actionLabel = if (category == "stays") {
+                            when (target) {
+                                "Notice given" -> "Give notice"
+                                "Completed" -> "Complete stay"
+                                "Active" -> "Reactivate stay"
+                                else -> target
+                            }
+                        } else target
                         Button(
                             onClick = { updateServerStatus(selectedServerStatusRecord, target) },
                             enabled = !updatingServerStatus,
                             modifier = Modifier.fillMaxWidth(),
                             colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)
-                        ) { Text(if (updatingServerStatus) "Updating…" else target) }
+                        ) { Text(if (updatingServerStatus) "Updating…" else actionLabel) }
                     }
                 }
             },
