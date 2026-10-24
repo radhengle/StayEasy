@@ -1,5 +1,10 @@
 package com.stayeasy.app
 
+import android.content.ContentValues
+import android.graphics.Bitmap
+import android.os.Environment
+import android.provider.MediaStore
+import java.io.ByteArrayOutputStream
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -8,6 +13,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -28,11 +34,60 @@ class StayEasySmokeTest {
         composeRule.onNode(hasText(label, substring = true) and hasClickAction()).performScrollTo().performClick()
     }
 
+    /** Publishes a genuine emulator-display PNG to Downloads, outside app data cleanup. */
+    private fun captureScreenshot(name: String) {
+        composeRule.waitForIdle()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val resolver = instrumentation.targetContext.contentResolver
+        val bitmap = instrumentation.uiAutomation.takeScreenshot()
+        var destinationUri: android.net.Uri? = null
+        try {
+            val image = ByteArrayOutputStream().use { bytes ->
+                assertTrue(
+                    "Unable to encode emulator screenshot $name",
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, bytes)
+                )
+                bytes.toByteArray()
+            }
+            assertTrue("Emulator screenshot $name is unexpectedly small", image.size > 1024)
+
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, "$name.png")
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                put(
+                    MediaStore.MediaColumns.RELATIVE_PATH,
+                    "${Environment.DIRECTORY_DOWNLOADS}/stayeasy-screenshots"
+                )
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                ?: throw AssertionError("MediaStore could not create a Downloads entry for $name")
+            destinationUri = uri
+            resolver.openOutputStream(uri, "w").use { output ->
+                assertTrue("Unable to open output stream for $name", output != null)
+                output!!.write(image)
+                output.flush()
+            }
+            val published = ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }
+            assertTrue("Unable to publish emulator screenshot $name", resolver.update(uri, published, null, null) == 1)
+            resolver.query(uri, arrayOf(MediaStore.MediaColumns.SIZE), null, null, null).use { cursor ->
+                assertTrue("Screenshot metadata missing for $name", cursor != null && cursor.moveToFirst())
+                assertTrue("Screenshot size missing for $name", cursor!!.getLong(0) > 1024)
+            }
+        } catch (error: Throwable) {
+            destinationUri?.let { runCatching { resolver.delete(it, null, null) } }
+            throw error
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
     @Test
     fun launchesCustomerHome() {
         composeRule.onNodeWithText("StayEasy").assertIsDisplayed()
         composeRule.onNodeWithText("Find a place that").assertIsDisplayed()
         composeRule.onNodeWithText("Explore").assertIsDisplayed()
+        captureScreenshot("customer-home")
     }
 
     @Test
@@ -51,6 +106,7 @@ class StayEasySmokeTest {
         composeRule.onNodeWithText("Filters").assertIsDisplayed()
         composeRule.onNodeWithText("Map").assertIsDisplayed()
         composeRule.onNode(hasText("Monthly rent", substring = true)).assertIsDisplayed()
+        captureScreenshot("explore-search")
     }
 
     @Test
@@ -75,6 +131,7 @@ class StayEasySmokeTest {
         composeRule.onNodeWithText("Continue as Owner").performClick()
         composeRule.onNodeWithText("Your business, at a glance").assertIsDisplayed()
         composeRule.onNodeWithText("Your properties", useUnmergedTree = true).assertIsDisplayed()
+        captureScreenshot("owner-workspace-preview")
     }
 
     @Test
