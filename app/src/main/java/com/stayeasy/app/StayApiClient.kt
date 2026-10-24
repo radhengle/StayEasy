@@ -380,7 +380,7 @@ internal object StayApiClient {
             require(Regex("^\\d{4}-(0[1-9]|1[0-2])$").matches(period)) { "Enter the billing period as YYYY-MM, for example 2026-11." }
         }
         val normalizedDueDate = if (dueDate.isBlank()) null else
-            normalizeDate(dueDate) ?: throw IllegalArgumentException("Enter a valid due date, for example 2026-11-05.")
+            normalizeDate(dueDate) ?: throw IllegalArgumentException("Enter a valid date, for example 2026-11-05.")
         val safeStatus = when (category) {
             "rent_charge", "food", "utility", "late_fee", "expense" -> "open"
             "deposit" -> "held"
@@ -402,7 +402,10 @@ internal object StayApiClient {
             require(residentStayId > 0L) { "Enter a valid resident stay ID." }
             body.put("resident_stay_id", residentStayId)
         }
-        if (normalizedDueDate != null) body.put("due_date", normalizedDueDate)
+        if (normalizedDueDate != null) {
+            if (category == "payment") body.put("paid_at", "${normalizedDueDate}T00:00:00Z")
+            else body.put("due_date", normalizedDueDate)
+        }
         return JSONObject(request(baseUrl, "/owner/ledger", token, "POST", body))
     }
 
