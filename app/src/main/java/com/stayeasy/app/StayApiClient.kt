@@ -345,5 +345,28 @@ internal object StayApiClient {
         return null
     }
 
+    fun registerAccount(
+        baseUrl: String,
+        displayName: String,
+        email: String,
+        phone: String,
+        password: String,
+        role: String
+    ): JSONObject {
+        require(role in setOf("customer", "owner")) { "Choose Tenant or Owner before registering." }
+        val body = JSONObject()
+            .put("display_name", displayName.trim())
+            .put("email", email.trim())
+            .put("phone", phone.trim())
+            .put("password", password)
+            .put("role", role)
+        return JSONObject(request(baseUrl, "/auth/register", method = "POST", body = body))
+    }
+
+    fun loginAccount(baseUrl: String, email: String, password: String): JSONObject {
+        val body = JSONObject().put("email", email.trim()).put("password", password)
+        return JSONObject(request(baseUrl, "/auth/login", method = "POST", body = body))
+    }
+
     fun ownerDashboard(baseUrl: String, token: String): JSONObject = JSONObject(request(baseUrl, "/owner/dashboard", token))
 }
