@@ -54,10 +54,25 @@ class StayEasySmokeTest {
     }
 
     @Test
-    fun customerCanOpenOwnerWorkspace() {
+    fun customerCanChooseTenantWorkspace() {
         composeRule.onNodeWithText("Profile").performClick()
         composeRule.onNodeWithText("Your profile").assertIsDisplayed()
         clickControlContaining("Are you a PG owner?")
+        composeRule.onNodeWithText("Choose your workspace").assertIsDisplayed()
+        composeRule.onNodeWithText("I'm looking for a place").assertIsDisplayed()
+        composeRule.onNodeWithText("I have a property to rent").assertIsDisplayed()
+        composeRule.onNodeWithText("Continue as Tenant").performClick()
+        composeRule.onNodeWithText("Find a place that").assertIsDisplayed()
+    }
+
+    @Test
+    fun customerCanChooseOwnerWorkspace() {
+        composeRule.onNodeWithText("Profile").performClick()
+        composeRule.onNodeWithText("Your profile").assertIsDisplayed()
+        clickControlContaining("Are you a PG owner?")
+        composeRule.onNodeWithText("Choose your workspace").assertIsDisplayed()
+        composeRule.onNodeWithText("Preview mode:", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Continue as Owner").performClick()
         composeRule.onNodeWithText("Your business, at a glance").assertIsDisplayed()
         composeRule.onNodeWithText("Your properties", useUnmergedTree = true).assertIsDisplayed()
     }
