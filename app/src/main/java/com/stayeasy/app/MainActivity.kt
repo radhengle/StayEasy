@@ -376,6 +376,8 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     val context = androidx.compose.ui.platform.LocalContext.current
     val customListings = remember { mutableStateListOf<PgListing>().apply { addAll(ListingStore.load(context)) } }
     val remoteListings = remember { mutableStateListOf<PgListing>() }
+    val remoteOwnerListings = remember { mutableStateListOf<PgListing>() }
+    var ownerInventoryLoaded by remember { mutableStateOf(false) }
     val favorites = remember { mutableStateListOf<Long>().apply { addAll(StayUserDataStore.loadFavorites(context)) } }
     var route by remember { mutableStateOf("home") }
     var workspaceReturnRoute by remember { mutableStateOf("home") }
@@ -419,9 +421,32 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val notify: (String) -> Unit = { message -> scope.launch { snackbar.showSnackbar(message) } }
+    LaunchedEffect(preferences.apiBaseUrl, ownerMode) {
+        val baseUrl = preferences.apiBaseUrl.trim()
+        val token = if (baseUrl.isNotBlank()) StayApiClient.currentSessionToken(baseUrl) else null
+        if (!ownerMode || baseUrl.isBlank() || token == null) {
+            remoteOwnerListings.clear()
+            ownerInventoryLoaded = false
+        } else {
+            try {
+                val rows = withContext(Dispatchers.IO) { StayApiClient.ownerProperties(baseUrl, token) }
+                remoteOwnerListings.clear()
+                remoteOwnerListings.addAll(rows)
+                ownerInventoryLoaded = true
+            } catch (e: Exception) {
+                ownerInventoryLoaded = false
+                notify("Owner inventory could not sync; local records remain available. ${e.message ?: "Check the API connection and owner permissions."}")
+            }
+        }
+    }
     val allListings = remoteListings.toList() + customListings.filter { local -> remoteListings.none { remote -> remote.id == local.id } } + demoListings.filter { demo -> customListings.none { it.id == demo.id } && remoteListings.none { it.id == demo.id } }
     val selectedListing = allListings.firstOrNull { it.id == selectedId } ?: allListings.firstOrNull() ?: demoListings.first()
-    val ownerListings = customListings.toList() + demoListings.take(2).filter { demo -> customListings.none { it.id == demo.id } }
+    val localOwnerListings = customListings.filter { local ->
+        if (ownerInventoryLoaded) local.serverPropertyId == null
+        else remoteOwnerListings.none { remote -> remote.serverPropertyId != null && remote.serverPropertyId == local.serverPropertyId }
+    }
+    val ownerListings = remoteOwnerListings.toList() + localOwnerListings +
+        if (!ownerInventoryLoaded && remoteOwnerListings.isEmpty() && localOwnerListings.isEmpty()) demoListings.take(2) else emptyList()
     val filteredListings = allListings.filter { p ->
         val textMatch = searchQuery.isBlank() || listOf(p.name, p.area, p.description, p.pinCode, p.sharing, p.allowedFor).any { it.contains(searchQuery, true) }
         val loc = location.substringBefore(",").trim()
@@ -683,7 +708,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "compare" -> ComparePropertiesScreen(allListings, comparisonIds, { route = "feature_hub" })
                 "theme_settings" -> ThemeSettingsScreen(preferences, { updated -> onPreferencesChanged(updated); notify("Appearance preferences saved") }, { route = "feature_hub" })
                 "owner_dashboard" -> OwnerDashboardScreen(ownerListings, { route = "owner_properties" }, { route = "owner_beds" }, { route = "owner_enquiries" }, { route = "owner_payments" }, { route = "owner_issues" }, { ownerMode = false; route = "home" }, { route = "owner_analytics" }, { route = "owner_residents" })
-                "owner_properties" -> OwnerPropertiesScreen(ownerListings, { route = "add_pg" }, { selectedId = it; route = "owner_beds" }, { selectedId = it; route = "edit_pg" })
+                "owner_properties" -> OwnerPropertiesScreen(ownerListings, ownerInventoryLoaded, { route = "add_pg" }, { selectedId = it; route = "owner_beds" }, { selectedId = it; route = "edit_pg" })
                 "add_pg" -> AddPropertyWizard(onPublish = { listing ->
                     val baseUrl = preferences.apiBaseUrl
                     val token = StayApiClient.currentSessionToken(preferences.apiBaseUrl)
@@ -693,12 +718,24 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                             try {
                                 val saved = withContext(Dispatchers.IO) { StayApiClient.createOwnerListing(baseUrl, token, listing) }
                                 val serverId = saved.optLong("id").takeIf { it > 0L }
-                                val remoteDraft = listing.copy(id = -(serverId ?: listing.id), serverPropertyId = serverId, isPublished = false, serverUnits = emptyList())
+                                val refreshedRows = if (serverId != null) runCatching {
+                                    withContext(Dispatchers.IO) { StayApiClient.ownerProperties(baseUrl, token) }
+                                }.getOrNull() else null
+                                if (refreshedRows != null) {
+                                    remoteOwnerListings.clear()
+                                    remoteOwnerListings.addAll(refreshedRows)
+                                    ownerInventoryLoaded = true
+                                }
+                                val remoteDraft = refreshedRows?.firstOrNull { it.serverPropertyId == serverId }
+                                    ?: listing.copy(id = -(serverId ?: listing.id), serverPropertyId = serverId, isPublished = false, serverUnits = emptyList())
+                                if (serverId != null && remoteOwnerListings.none { it.serverPropertyId == serverId }) {
+                                    remoteOwnerListings.add(0, remoteDraft)
+                                }
                                 val previous = customListings.indexOfFirst { it.serverPropertyId != null && it.serverPropertyId == serverId }
                                 if (previous >= 0) customListings[previous] = remoteDraft else customListings.add(0, remoteDraft)
                                 ListingStore.save(context, customListings.toList())
                                 selectedId = remoteDraft.id
-                                notify("${listing.name} was saved to the server and submitted for listing review. It will appear in customer search after approval.")
+                                notify("${listing.name} was saved to the server and submitted for review. ${if (remoteDraft.serverUnits.isNotEmpty()) "Live room/bed inventory is loaded." else "Inventory will refresh when server access is available."}")
                             } catch (e: Exception) {
                                 val localDraft = listing.copy(isPublished = false)
                                 customListings.add(0, localDraft); ListingStore.save(context, customListings.toList()); selectedId = localDraft.id
@@ -725,6 +762,38 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     residentPropertyName = propertyName
                     residentBedOptions = bedOptions
                     route = "add_resident"
+                }, { listing, unit, status ->
+                    val baseUrl = preferences.apiBaseUrl.trim()
+                    val token = if (baseUrl.isNotBlank()) StayApiClient.currentSessionToken(baseUrl) else null
+                    if (token == null) {
+                        notify("Connect the API with an owner-authorized session before changing server inventory.")
+                    } else scope.launch {
+                        try {
+                            val response = withContext(Dispatchers.IO) {
+                                StayApiClient.updateUnitStatus(baseUrl, token, unit.id, status.lowercase(Locale.ROOT))
+                            }
+                            val updatedUnit = unit.copy(status = response.optString("status", status.lowercase(Locale.ROOT)))
+                            fun updateListing(source: PgListing): PgListing {
+                                val units = source.serverUnits.map { if (it.id == unit.id) updatedUnit else it }
+                                return source.copy(
+                                    serverUnits = units,
+                                    totalBeds = units.size,
+                                    totalRooms = units.map { it.roomCode }.distinct().size.coerceAtLeast(1),
+                                    availableBeds = units.count { it.status.equals("available", true) }
+                                )
+                            }
+                            val remoteIndex = remoteOwnerListings.indexOfFirst { it.serverPropertyId == listing.serverPropertyId }
+                            if (remoteIndex >= 0) remoteOwnerListings[remoteIndex] = updateListing(remoteOwnerListings[remoteIndex])
+                            val localIndex = customListings.indexOfFirst { it.serverPropertyId == listing.serverPropertyId && listing.serverPropertyId != null }
+                            if (localIndex >= 0) {
+                                customListings[localIndex] = updateListing(customListings[localIndex])
+                                ListingStore.save(context, customListings.toList())
+                            }
+                            notify("${listing.name}: ${unit.unitCode} updated to ${response.optString("status", status.lowercase(Locale.ROOT))} on the server.")
+                        } catch (e: Exception) {
+                            notify("Server did not confirm the inventory change; the displayed status is unchanged. ${e.message ?: "Check owner access and retry."}")
+                        }
+                    }
                 }, { notify(it) }, { route = "owner_properties" })
                 "owner_enquiries" -> FeatureRecordsScreen("enquiries", ownerMode = true) { route = "feature_hub" }
                 "owner_residents" -> FeatureRecordsScreen("residents", ownerMode = true) { route = "feature_hub" }
