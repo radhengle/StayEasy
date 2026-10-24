@@ -650,41 +650,43 @@ def create_my_move_out_request(
         reason=body.reason.strip(),
         status="pending",
     )
-    db.add(request)
-    db.flush()
-    resident = db.get(m.User, stay.resident_id)
-    resident_label = resident.display_name if resident else "A resident"
-    add_notification(
-        db,
-        prop.owner_id,
-        "Move-out request received",
-        f"{resident_label} requested move-out from {prop.name} on {body.requested_move_out_date.isoformat()}.",
-    )
-    audit(
-        db,
-        actor,
-        "resident_move_out_request",
-        request.id,
-        "submitted",
-        new={
-            "resident_stay_id": stay.id,
-            "property_id": stay.property_id,
-            "requested_move_out_date": body.requested_move_out_date.isoformat(),
-        },
-    )
     try:
+        db.add(request)
+        db.flush()
+        resident = db.get(m.User, stay.resident_id)
+        resident_label = resident.display_name if resident else "A resident"
+        add_notification(
+            db,
+            prop.owner_id,
+            "Move-out request received",
+            f"{resident_label} requested move-out from {prop.name} on {body.requested_move_out_date.isoformat()}.",
+        )
+        audit(
+            db,
+            actor,
+            "resident_move_out_request",
+            request.id,
+            "submitted",
+            new={
+                "resident_stay_id": stay.id,
+                "property_id": stay.property_id,
+                "requested_move_out_date": body.requested_move_out_date.isoformat(),
+            },
+        )
         db.commit()
         db.refresh(request)
     except IntegrityError as exc:
         db.rollback()
         raise HTTPException(409, "A move-out request is already awaiting the owner's response") from exc
+    resident = db.get(m.User, stay.resident_id)
+    unit = db.get(m.PropertyUnit, stay.unit_id)
     return move_out_request_payload(
         request,
         property_name=prop.name,
-        resident_name=resident_label,
+        resident_name=resident.display_name if resident else "",
         resident_email=resident.email if resident else "",
-        room_code=(db.get(m.PropertyUnit, stay.unit_id).room_code if db.get(m.PropertyUnit, stay.unit_id) else ""),
-        unit_code=(db.get(m.PropertyUnit, stay.unit_id).unit_code if db.get(m.PropertyUnit, stay.unit_id) else ""),
+        room_code=unit.room_code if unit else "",
+        unit_code=unit.unit_code if unit else "",
         joining_date=stay.joining_date,
     )
 
