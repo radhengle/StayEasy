@@ -99,6 +99,20 @@ class StayEasySmokeTest {
     }
 
     @Test
+    fun tenantLoginActionOpensApiSetupWhenBackendIsNotConfigured() {
+        composeRule.onNodeWithText("Login").performClick()
+        composeRule.onNodeWithText("Connect your StayEasy API first").assertIsDisplayed()
+        composeRule.onNodeWithText("Configure API connection").assertIsDisplayed()
+    }
+
+    @Test
+    fun ownerRegisterActionOpensApiSetupWhenBackendIsNotConfigured() {
+        composeRule.onAllNodesWithText("Register")[1].performScrollTo().performClick()
+        composeRule.onNodeWithText("Connect your StayEasy API first").assertIsDisplayed()
+        composeRule.onNodeWithText("Configure API connection").assertIsDisplayed()
+    }
+
+    @Test
     fun launchesCustomerHomeFromExplicitPreviewAction() {
         enterGuestPreview()
         composeRule.onNodeWithText("StayEasy").assertIsDisplayed()
