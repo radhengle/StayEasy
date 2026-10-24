@@ -80,6 +80,75 @@ def teardown_function():
     api.app.dependency_overrides.clear()
 
 
+def test_account_notifications_are_recipient_scoped_and_require_real_account_session():
+    with SessionLocal() as db:
+        db.add_all([
+            m.Notification(
+                recipient_id="notification-customer-a",
+                title="Move-out request received",
+                body="Your request was sent to the owner.",
+                channel="in_app",
+                status="queued",
+            ),
+            m.Notification(
+                recipient_id="notification-customer-a",
+                title="Move-out request reviewed",
+                body="The owner approved your requested date.",
+                channel="in_app",
+                status="queued",
+            ),
+            m.Notification(
+                recipient_id="notification-customer-b",
+                title="Private notification",
+                body="This belongs to another account.",
+                channel="in_app",
+                status="queued",
+            ),
+        ])
+        db.commit()
+
+    # Role-only/development sessions are not allowed to read or mutate shared inbox data.
+    set_actor("notification-customer-a", "customer")
+    assert client.get("/notifications").status_code == 403
+    assert client.patch("/notifications/1/read").status_code == 403
+
+    _set_account_actor("notification-customer-a")
+    response = client.get("/notifications")
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    assert len(rows) == 2
+    assert {row["title"] for row in rows} == {"Move-out request received", "Move-out request reviewed"}
+    assert all(row["channel"] == "in_app" for row in rows)
+
+    first_id = next(row["id"] for row in rows if row["title"] == "Move-out request received")
+    other_id = None
+    with SessionLocal() as db:
+        other_id = db.scalar(select(m.Notification.id).where(
+            m.Notification.recipient_id == "notification-customer-b"
+        ))
+    assert other_id is not None
+
+    marked = client.patch(f"/notifications/{first_id}/read")
+    assert marked.status_code == 200, marked.text
+    assert marked.json() == {"id": first_id, "status": "read"}
+    repeated = client.patch(f"/notifications/{first_id}/read")
+    assert repeated.status_code == 200, repeated.text
+    assert repeated.json()["status"] == "read"
+
+    # Recipient scoping is enforced identically for reads and writes.
+    foreign_read = client.patch(f"/notifications/{other_id}/read")
+    assert foreign_read.status_code == 404
+    assert client.get("/notifications").json()[0]["status"] in {"queued", "read"}
+
+    _set_account_actor("notification-customer-b")
+    inbox_b = client.get("/notifications")
+    assert inbox_b.status_code == 200, inbox_b.text
+    assert len(inbox_b.json()) == 1
+    assert inbox_b.json()[0]["title"] == "Private notification"
+    missing = client.patch("/notifications/999999/read")
+    assert missing.status_code == 404
+
+
 def test_health_and_admin_authorization():
     assert client.get("/health").status_code == 200
     api.app.dependency_overrides.clear()
