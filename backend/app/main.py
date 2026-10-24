@@ -1088,15 +1088,7 @@ def list_saved_searches(actor: dict = Depends(require_roles("customer")), db: Se
 
 @app.get("/owner/dashboard")
 def owner_dashboard(actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
-    if actor["role"] == "admin":
-        prop_ids = list(db.scalars(select(m.Property.id)))
-    elif actor["role"] == "owner":
-        prop_ids = list(db.scalars(select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))))
-    else:
-        prop_ids = sorted(set(db.scalars(select(m.StaffAssignment.property_id).where(
-            m.StaffAssignment.staff_user_id == actor_user_id(actor),
-            m.StaffAssignment.status == "active"
-        ))))
+    prop_ids = list(db.scalars(select(m.Property.id))) if actor["role"] == "admin" else (visible_property_ids(db, actor, "dashboard") or [])
     if not prop_ids: return {"property_count": 0, "units": {"total": 0, "available": 0, "reserved": 0, "occupied": 0, "maintenance": 0}, "enquiries_new": 0, "reservations_pending": 0, "issues_open": 0, "rent_due": 0}
     units = list(db.scalars(select(m.PropertyUnit).where(m.PropertyUnit.property_id.in_(prop_ids))))
     return {"property_count": len(prop_ids), "units": {"total": len(units), "available": sum(x.status == "available" for x in units), "reserved": sum(x.status == "reserved" for x in units), "occupied": sum(x.status == "occupied" for x in units), "maintenance": sum(x.status == "maintenance" for x in units)},
