@@ -379,6 +379,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     val favorites = remember { mutableStateListOf<Long>().apply { addAll(StayUserDataStore.loadFavorites(context)) } }
     var route by remember { mutableStateOf("home") }
     var detailsReturnRoute by remember { mutableStateOf("search") }
+    var filtersReturnRoute by remember { mutableStateOf("search") }
     var signedInAccount by remember { mutableStateOf<JSONObject?>(null) }
     LaunchedEffect(preferences.apiBaseUrl) {
         val baseUrl = preferences.apiBaseUrl.trim()
@@ -462,7 +463,8 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             else -> if (ownerMode) "owner_dashboard" else "feature_hub"
         } else when (route) {
             "search" -> "home"
-            "filters", "map", "search_location" -> "search"
+            "filters" -> filtersReturnRoute
+            "map", "search_location" -> "search"
             "details" -> detailsReturnRoute
             "request_visit", "request_booking" -> "details"
             "chat" -> chatReturnRoute
@@ -518,16 +520,16 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (route) {
-                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { detailsReturnRoute = "home"; selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { route = "filters" }, { ownerReturnRoute = "home"; ownerMode = true; route = "owner_dashboard" }, { notificationsReturnRoute = "home"; route = "notifications" }, { route = "profile" })
-                "search" -> SearchResultsScreen(location, { location = it; route = "search_location" }, searchQuery, { searchQuery = it }, guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, filteredListings, favorites, { detailsReturnRoute = "search"; selectedId = it; route = "details" }, { route = "map" }, { route = "filters" }, toggleFavorite, {
+                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { detailsReturnRoute = "home"; selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { filtersReturnRoute = "home"; route = "filters" }, { ownerReturnRoute = "home"; ownerMode = true; route = "owner_dashboard" }, { notificationsReturnRoute = "home"; route = "notifications" }, { route = "profile" })
+                "search" -> SearchResultsScreen(location, { location = it; route = "search_location" }, searchQuery, { searchQuery = it }, guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, filteredListings, favorites, { detailsReturnRoute = "search"; selectedId = it; route = "details" }, { route = "map" }, { filtersReturnRoute = "search"; route = "filters" }, toggleFavorite, {
                     val criteria = "Location: $location; query: ${searchQuery.ifBlank { "any PG" }}; eligibility: $guestChoice; max rent: ${money(maxBudget.toInt())}; room types: ${advancedFilters.roomTypes.joinToString().ifBlank { "any" }}; amenities: ${chosenAmenities.joinToString().ifBlank { "any" }}; availability: ${if (advancedFilters.availableOnly) "available now" else advancedFilters.moveInDate.ifBlank { "any" }}; sort: ${advancedFilters.sortBy}"
                     StayRecordStore.add(context, StayRecord(category = "saved_searches", title = "${location.substringBefore(",")}: ${guestChoice} stays", details = criteria, property = location, amount = maxBudget.toInt(), status = "Active"))
                     StayRecordStore.notify(context, "Search saved", "We'll track this criteria locally; live availability alerts require the backend.")
                     notify("Search criteria saved on this device"); route = "records:saved_searches"
                 }, { guestChoice = "Any"; maxBudget = 30000f; chosenAmenities.clear(); advancedFilters = DiscoveryFilters(); searchQuery = "" })
                 "search_location" -> LocationSearchScreen(location, { location = it; StayUserDataStore.addRecentLocation(context, it); route = "search" }, { route = "search" })
-                "map" -> MapSearchScreen(location, { location = it }, filteredListings, { detailsReturnRoute = "map"; selectedId = it; route = "details" }, { route = "search" }, { route = "filters" })
-                "filters" -> FilterScreen(guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, chosenAmenities, advancedFilters, { advancedFilters = it }, { route = "search" }, { guestChoice = "Any"; maxBudget = 30000f; chosenAmenities.clear(); advancedFilters = DiscoveryFilters() })
+                "map" -> MapSearchScreen(location, { location = it }, filteredListings, { detailsReturnRoute = "map"; selectedId = it; route = "details" }, { route = "search" }, { filtersReturnRoute = "map"; route = "filters" })
+                "filters" -> FilterScreen(guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, chosenAmenities, advancedFilters, { advancedFilters = it }, { route = filtersReturnRoute }, { guestChoice = "Any"; maxBudget = 30000f; chosenAmenities.clear(); advancedFilters = DiscoveryFilters() })
                 "details" -> ListingDetailsScreen(selectedListing, favorites.contains(selectedListing.id), { toggleFavorite(selectedListing.id) }, { chatReturnRoute = "details"; route = "chat" }, { route = "request_visit" }, { route = detailsReturnRoute }, { route = "request_booking" })
                 "request_visit" -> VisitRequestScreen(selectedListing, { route = "details" }) { moveIn, roomType, visitSlot, note ->
                     val serverId = selectedListing.serverPropertyId
