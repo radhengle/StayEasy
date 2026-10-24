@@ -170,6 +170,55 @@ internal object StayApiClient {
         }
     }
 
+    /** Registers a customer-level account; Owner workspace requests remain pending server approval. */
+    fun registerAccount(baseUrl: String, email: String, displayName: String, password: String, workspace: String): JSONObject {
+        val body = JSONObject().put("email", email.trim()).put("display_name", displayName.trim())
+            .put("password", password).put("requested_workspace", workspace)
+        return JSONObject(request(baseUrl, "/auth/register", method = "POST", body = body))
+    }
+
+    fun verifyAccountEmail(baseUrl: String, email: String, code: String): JSONObject {
+        val body = JSONObject().put("email", email.trim()).put("code", code.trim())
+        return JSONObject(request(baseUrl, "/auth/verify-email", method = "POST", body = body))
+    }
+
+    /** On successful sign-in, bind the short-lived session to this API origin. */
+    fun loginAccount(baseUrl: String, email: String, password: String): JSONObject {
+        val body = JSONObject().put("email", email.trim()).put("password", password)
+        val response = JSONObject(request(baseUrl, "/auth/login", method = "POST", body = body))
+        setSessionToken(response.getString("access_token"), baseUrl)
+        return response
+    }
+
+    fun resendAccountVerification(baseUrl: String, email: String, password: String): JSONObject {
+        val body = JSONObject().put("email", email.trim()).put("password", password)
+        return JSONObject(request(baseUrl, "/auth/resend-verification", method = "POST", body = body))
+    }
+
+    fun requestPasswordReset(baseUrl: String, email: String): JSONObject {
+        val body = JSONObject().put("email", email.trim())
+        return JSONObject(request(baseUrl, "/auth/forgot-password", method = "POST", body = body))
+    }
+
+    fun resetAccountPassword(baseUrl: String, email: String, code: String, newPassword: String): JSONObject {
+        val body = JSONObject().put("email", email.trim()).put("code", code.trim()).put("new_password", newPassword)
+        return JSONObject(request(baseUrl, "/auth/reset-password", method = "POST", body = body))
+    }
+
+    fun currentAccount(baseUrl: String): JSONObject {
+        val token = currentSessionToken(baseUrl) ?: throw IllegalStateException("Sign in before requesting account details")
+        return JSONObject(request(baseUrl, "/auth/me", token = token))
+    }
+
+    fun logoutAccount(baseUrl: String): JSONObject {
+        val token = currentSessionToken(baseUrl) ?: throw IllegalStateException("No active account session")
+        return try {
+            JSONObject(request(baseUrl, "/auth/logout", token = token, method = "POST", body = JSONObject()))
+        } finally {
+            clearSessionToken()
+        }
+    }
+
     fun requestDevelopmentToken(baseUrl: String, subject: String, role: String, devPassword: String): String {
         val body = JSONObject().put("subject", subject.trim()).put("role", role).put("dev_password", devPassword)
         val response = JSONObject(request(baseUrl, "/auth/dev-token", method = "POST", body = body))
