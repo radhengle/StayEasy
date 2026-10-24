@@ -351,7 +351,7 @@ class UserCredential(Base):
     )
     owner_access_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     owner_access_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    owner_access_review_note: Mapped[str] = mapped_column(String(500), default="", server_default="", nullable=False)
+    owner_access_review_note: Mapped[str] = mapped_column(String(500), default="", server_default=text("''"), nullable=False)
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     verification_code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     verification_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
