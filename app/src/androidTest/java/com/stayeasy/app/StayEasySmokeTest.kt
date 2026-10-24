@@ -8,6 +8,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -61,5 +64,33 @@ class StayEasySmokeTest {
         composeRule.onNodeWithText("Appearance & settings").assertIsDisplayed()
         clickControlContaining("Midnight Cobalt")
         composeRule.onNodeWithText("Appearance & settings").assertIsDisplayed()
+    }
+
+    @Test
+    fun sessionTokenIsBoundToItsApiOrigin() {
+        StayApiClient.clearSessionToken()
+        try {
+            StayApiClient.setSessionToken("test-token", "https://api.example.com/v1")
+            assertEquals("test-token", StayApiClient.currentSessionToken("https://api.example.com/v2"))
+            assertNull(StayApiClient.currentSessionToken("https://other.example.com/v1"))
+            assertNull(StayApiClient.currentSessionToken("http://api.example.com/v1"))
+        } finally {
+            StayApiClient.clearSessionToken()
+        }
+    }
+
+    @Test
+    fun malformedMoveInDateIsRejectedBeforeSendingARequest() {
+        val error = runCatching {
+            StayApiClient.createEnquiry(
+                "https://api.example.invalid",
+                "test-token",
+                1L,
+                "Private room",
+                "Test enquiry",
+                "15 Nov 2026 trailing text"
+            )
+        }.exceptionOrNull()
+        assertTrue("A partial date parse must be rejected before network access", error is IllegalArgumentException)
     }
 }
