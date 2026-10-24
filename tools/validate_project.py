@@ -35,7 +35,7 @@ required_routes = [
     '"owner_beds" ->', '"owner_enquiries" ->', '"owner_residents" ->',
     '"add_resident" ->', '"owner_payments" ->', '"owner_issues" ->',
     '"owner_analytics" ->', '"owner_settings" ->', '"feature_hub" ->',
-    '"theme_settings" ->', '"api_connection" ->', '"compare" ->', '"account_auth" ->'
+    '"theme_settings" ->', '"api_connection" ->', '"compare" ->', '"account_auth" ->', '"account_type" ->'
 ]
 for route in required_routes:
     assert route in main_text, f"Missing Android route: {route}"
@@ -44,7 +44,7 @@ for marker in [
     'ListingStore.save(context, customListings.toList())', 'takePersistableUriPermission',
     'DemoMapArt', 'distanceIsVerified', 'StayUserDataStore.saveFavorites',
     'remoteListings', 'LocalDensity', 'AccountAuthScreen', 'restoreAccountSession',
-    'Sign in / Create account', 'Verify email', 'Forgot password?'
+    'Sign in / Create account', 'Verify email', 'Forgot password?', 'AccountTypeScreen', 'Choose your workspace', 'Continue as Tenant', 'Continue as Owner', 'Preview mode:'
 ]:
     assert marker in main_text, f"Missing Android behaviour marker: {marker}"
 for marker in [
