@@ -1793,7 +1793,7 @@ private fun MyStayScreen(
                 enabled = currentStay.optString("status").lowercase(Locale.ROOT) in setOf("active", "notice_given"),
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp)
-            ) { Text("Move-out request status", color = SE.Ink) }
+            ) { Text("Check move-out options", color = SE.Ink) }
         }
 
         if (stays.size > 1) {
