@@ -29,14 +29,22 @@ def upgrade() -> None:
             ("required_document_categories", sa.JSON(), sa.text("'[]'")),
             ("document_request_reason", sa.Text(), sa.text("''")),
             ("registration_profile", sa.JSON(), sa.text("'{}'")),
+            ("proposed_unit_id", sa.Integer(), None),
+            ("proposed_rent_snapshot", sa.Integer(), None),
+            ("proposed_deposit_snapshot", sa.Integer(), None),
         )
         for name, column_type, default in additions:
             if name not in columns:
-                op.add_column(
-                    "property_invitations",
-                    sa.Column(name, column_type, nullable=False, server_default=default),
-                )
+                if default is None:
+                    op.add_column("property_invitations", sa.Column(name, column_type, nullable=True))
+                else:
+                    op.add_column(
+                        "property_invitations",
+                        sa.Column(name, column_type, nullable=False, server_default=default),
+                    )
         columns = {column["name"] for column in inspect(bind).get_columns("property_invitations")}
+        if "reassignment_proposed_at" not in columns:
+            op.add_column("property_invitations", sa.Column("reassignment_proposed_at", sa.DateTime(timezone=True), nullable=True))
         if "registration_submitted_at" not in columns:
             op.add_column(
                 "property_invitations",
@@ -63,6 +71,10 @@ def upgrade() -> None:
             sa.Column("retention_until", sa.DateTime(timezone=True), nullable=False),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
         )
+
+    invitation_indexes = {index["name"] for index in inspect(bind).get_indexes("property_invitations")} if inspect(bind).has_table("property_invitations") else set()
+    if "ix_property_invitations_proposed_unit_id" not in invitation_indexes:
+        op.create_index("ix_property_invitations_proposed_unit_id", "property_invitations", ["proposed_unit_id"], unique=False)
 
     indexes = {index["name"] for index in inspect(bind).get_indexes("invitation_documents")}
     for name, columns in (
