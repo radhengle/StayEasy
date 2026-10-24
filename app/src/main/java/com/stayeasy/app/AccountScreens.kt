@@ -51,12 +51,13 @@ import kotlinx.coroutines.withContext
 @Composable
 internal fun AccountScreen(
     apiBaseUrl: String,
+    initialRole: String = "customer",
     onBack: () -> Unit,
     onConfigureApi: () -> Unit,
     onAccountReady: (accessToken: String, role: String, displayName: String) -> Unit
 ) {
     var isRegistering by remember { mutableStateOf(true) }
-    var selectedRole by remember { mutableStateOf("customer") }
+    var selectedRole by remember(initialRole) { mutableStateOf(initialRole) }
     var displayName by remember { mutableStateOf("") }
     var email by remember { mutableStateOf("") }
     var phone by remember { mutableStateOf("") }
