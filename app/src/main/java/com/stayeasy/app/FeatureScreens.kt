@@ -425,7 +425,12 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                         }
                     }
                 }
-                StayRecordStore.replaceServerRecords(context, category, pulled, preserveLocal = category !in financeCategories)
+                StayRecordStore.replaceServerRecords(
+                    context,
+                    category,
+                    pulled,
+                    preserveLocal = category !in financeCategories && !serverOwnerStayMode
+                )
                 records.clear(); records.addAll(StayRecordStore.load(context, category))
                 remoteSyncMessage = "Synced ${pulled.size} server record(s)"
             } catch (e: Exception) {
@@ -523,6 +528,10 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                 if (isFinanceCategory && !serverFinanceMode && !readOnlyServerFinance) {
                     Text("Demo-only records · connect the API and a valid account session for shared financial data.", color = SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
                 }
+                if (category in setOf("residents", "stays") && !serverOwnerStayMode) {
+                    Text("Local records are device-only. Connect the API and sign in with an authorized owner account to view shared stay history.", color = SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
+                }
+                if (serverOwnerStayMode) Text("Server-synced · records come from authorized properties and refresh from StayEasy.", color = SE.Blue, fontSize = 9.sp, lineHeight = 13.sp)
                 if (readOnlyServerFinance) Text("Read-only · these entries are linked to your server-backed stay.", color = SE.Blue, fontSize = 9.sp, lineHeight = 13.sp)
                 if (remoteSyncMessage.isNotBlank()) Text(remoteSyncMessage, color = if (remoteSyncMessage.startsWith("Synced") || remoteSyncMessage.startsWith("Server confirmed") || remoteSyncMessage.startsWith("Saved to server")) SE.Blue else SE.Orange, fontSize = 9.sp, lineHeight = 13.sp)
             }
@@ -544,6 +553,18 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             }, contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp), shape = RoundedCornerShape(11.dp)) { Icon(Icons.Filled.Download, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("Export") }
         }
         Spacer(Modifier.height(8.dp))
+        if (serverOwnerStayMode) {
+            OutlinedButton(
+                onClick = { serverRefreshRequest++ },
+                enabled = !remoteSyncing,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(13.dp)
+            ) {
+                Icon(Icons.Filled.Refresh, null, modifier = Modifier.size(17.dp))
+                Spacer(Modifier.width(7.dp))
+                Text(if (remoteSyncing) "Refreshing from server…" else "Refresh from server")
+            }
+        }
         if (category == "charges" && serverFinanceMode) {
             OutlinedButton(
                 onClick = { billingError = ""; showBillingDialog = true },
@@ -565,9 +586,31 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.fillMaxWidth().padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(Icons.Filled.FilterAlt, null, tint = SE.Blue, modifier = Modifier.size(30.dp)); Spacer(Modifier.height(7.dp))
-                    Text(if (records.isEmpty()) "No records yet" else "No matching records", color = SE.Ink, fontWeight = FontWeight.Bold)
-                    Text(if (records.isEmpty()) "Create the first record to start this workflow. Data will remain on this device in the prototype." else "Try clearing the filter or search text.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
-                    if (records.isEmpty() && !readOnlyServerFinance) { Spacer(Modifier.height(8.dp)); Button(onClick = { openCreate() }, colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(5.dp)); Text("Add record") } }
+                    Text(
+                        if (records.isEmpty()) {
+                            if (serverOwnerStayMode) "No server-backed stays found" else "No records yet"
+                        } else "No matching records",
+                        color = SE.Ink,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        if (records.isEmpty() && serverOwnerStayMode) {
+                            "Refresh to check the authorized server records, or assign a verified resident from Rooms & beds. Empty server results are not replaced with demo residents."
+                        } else if (records.isEmpty()) {
+                            "Create the first record to start this workflow. Data will remain on this device in the prototype."
+                        } else "Try clearing the filter or search text.",
+                        color = SE.Muted,
+                        fontSize = 11.sp,
+                        lineHeight = 15.sp
+                    )
+                    if (records.isEmpty() && !readOnlyServerFinance && !serverOwnerStayMode) {
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = { openCreate() }, colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) {
+                            Icon(Icons.Filled.Add, null)
+                            Spacer(Modifier.width(5.dp))
+                            Text("Add record")
+                        }
+                    }
                 }
             }
         } else {
@@ -609,7 +652,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                 }
             }
         }
-        if (visible.isNotEmpty() && !readOnlyServerFinance) {
+        if (visible.isNotEmpty() && !readOnlyServerFinance && !serverOwnerStayMode) {
             Spacer(Modifier.height(6.dp))
             Button(onClick = { openCreate() }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) { Icon(Icons.Filled.Add, null); Spacer(Modifier.width(7.dp)); Text(if (serverFinanceMode) "Add manual ledger entry" else "Add ${title.removeSuffix("s").lowercase(Locale.getDefault())}") }
         }
