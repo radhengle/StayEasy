@@ -22,7 +22,7 @@ class StayEasySmokeTest {
     val composeRule = createAndroidComposeRule<MainActivity>()
 
     private fun clickControlContaining(label: String) {
-        composeRule.onNode(hasText(label, substring = true) and hasClickAction()).performClick()
+        composeRule.onNode(hasText(label, substring = true) and hasClickAction()).performScrollTo().performClick()
     }
 
     @Test
