@@ -217,7 +217,7 @@ internal fun OwnerEnquiriesInboxScreen(baseUrl: String, token: String?, onBack: 
                     OutlinedTextField(moveInDate, { moveInDate = it }, label = { Text("Proposed move-in date (YYYY-MM-DD)") }, modifier = Modifier.fillMaxWidth(), singleLine = true)
                     if (available.isEmpty()) Text("No available server-backed beds are listed. Add/release a bed in inventory and refresh.", color = SE.Orange, fontSize = 11.sp)
                     else available.forEach { unit ->
-                        FilterChip(selected = unitId == unit.id, onClick = { unitId = unit.id }, label = { Text("Room ${unit.roomCode} · ${unit.unitCode} · ${unit.sharingCapacity}-sharing · ${priorityRupees(unit.monthlyRent)}/mo") })
+                        FilterChip(selected = unitId == unit.id, onClick = { unitId = unit.id }, label = { Text("Room ${unit.roomCode} · ${unit.unitCode} · ${unit.sharingCapacity}-sharing · ${priorityRupees(unit.monthlyRent.toLong())}/mo") })
                     }
                     Text("Optional documents for this property", color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                     Text("Select only documents needed for a disclosed, legitimate purpose. Aadhaar is not a default requirement.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
@@ -289,7 +289,7 @@ internal fun OwnerEnquiriesInboxScreen(baseUrl: String, token: String?, onBack: 
                                     inviteLink = invitation.pText("invitation_url")
                                     runCatching {
                                         withContext(Dispatchers.IO) {
-                                            StayApiClient.updateEnquiry(baseUrl, token, enquiry.optLong("id"), "contacted",
+                                            StayApiClient.updateEnquiry(baseUrl, token!!, enquiry.optLong("id"), "contacted",
                                                 listOf(reply, "Invitation sent for ${invitation.pText("room_code")} · ${invitation.pText("unit_code")}.").filter { it.isNotBlank() }.joinToString("\n"))
                                         }
                                     }
@@ -795,7 +795,6 @@ internal fun OwnerMoveInArrivalsScreen(
             containerColor = SE.Surface
         )
     }
-}
 }
 
 private data class ArrivalLoad(
