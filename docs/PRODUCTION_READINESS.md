@@ -3,7 +3,7 @@
 ## Must be completed before public launch
 
 - Integrate Android with the API using a typed network client, TLS, safe token storage, expiry/refresh/revocation and clear server-confirmed UI state. Do not assume local demo records have synced.
-- Replace dev-token bootstrapping with verified phone/email identity, account recovery, role onboarding, MFA for operators and least-privilege admin access.
+- Complete verified phone/email identity, account recovery, persistent sessions and least-privilege admin access. A Tenant/Owner workspace-choice screen is now in the UI, but it only switches the local preview experience; it is not account registration or authentication. Add MFA for operators before launch.
 - Apply Alembic migrations; do not rely on ORM `create_all()` after real customer data exists. Back up the database and rehearse restore/PITR.
 - Add secure object storage with signed uploads/downloads, image type/size validation, malware screening, compression, moderation and access controls for documents.
 - Configure Maps SDK, Places API and routing only with restricted keys, billing controls, data minimization and attribution. Never display uncomputed distances as facts.
