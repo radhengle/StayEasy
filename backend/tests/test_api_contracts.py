@@ -129,6 +129,52 @@ def test_reservations_block_duplicate_active_unit():
     assert status_update.json()["status"] == "confirmed"
 
 
+def test_assigned_manager_reads_only_scoped_marketplace_records():
+    property_a, unit_a = setup_property(owner_id="owner-a")
+    property_b, unit_b = setup_property(owner_id="owner-b")
+
+    def create_customer_records(customer_id, prop, unit):
+        set_actor(customer_id, "customer")
+        enquiry = client.post("/enquiries", json={
+            "property_id": prop["id"], "preferred_room_type": "2 sharing", "message": "Is a bed available?"
+        })
+        assert enquiry.status_code == 201, enquiry.text
+        visit = client.post("/visits", json={
+            "property_id": prop["id"], "enquiry_id": enquiry.json()["id"],
+            "preferred_at": (date.today() + timedelta(days=2)).isoformat() + "T15:00:00"
+        })
+        assert visit.status_code == 201, visit.text
+        reservation = client.post("/reservations", json={
+            "property_id": prop["id"], "unit_id": unit["id"],
+            "move_in_date": (date.today() + timedelta(days=7)).isoformat(),
+            "terms_snapshot": {"currency": "INR"}
+        })
+        assert reservation.status_code == 201, reservation.text
+        return enquiry.json(), visit.json(), reservation.json()
+
+    enquiry_a, visit_a, reservation_a = create_customer_records("customer-a", property_a, unit_a)
+    create_customer_records("customer-b", property_b, unit_b)
+
+    with SessionLocal() as db:
+        db.add(m.StaffAssignment(
+            owner_id="owner-a", staff_user_id="manager-1", property_id=property_a["id"],
+            role="manager", permissions=["enquiries.view", "visits.view", "reservations.view"], status="active"
+        ))
+        db.commit()
+
+    set_actor("manager-1", "manager")
+    assert client.get("/enquiries").json()[0]["property_id"] == property_a["id"]
+    assert client.get("/visits").json()[0]["property_id"] == property_a["id"]
+    assert client.get("/reservations").json()[0]["property_id"] == property_a["id"]
+    assert client.get("/owner/dashboard").json()["property_count"] == 1
+
+    denied_update = client.post(
+        f"/owner/enquiries/{enquiry_a['id']}/status",
+        json={"status": "contacted"}
+    )
+    assert denied_update.status_code == 403
+
+
 def test_ledger_notice_staff_and_amenity_contracts():
     prop, unit = setup_property()
     set_actor("owner-1", "owner")
