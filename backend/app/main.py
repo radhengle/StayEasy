@@ -1,6 +1,11 @@
+import calendar
+import hashlib
 import os
+import secrets
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Query, status
@@ -125,6 +130,29 @@ class ReservationReassignRequest(BaseModel):
     new_unit_id: int = Field(gt=0)
     reason: str = Field(min_length=3, max_length=1000)
 
+class TenantInvitationCreate(BaseModel):
+    property_id: int
+    unit_id: int
+    enquiry_id: int | None = None
+    recipient_email: str = Field(min_length=5, max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    recipient_name: str = Field(min_length=2, max_length=180)
+    recipient_phone: str = Field(default="", max_length=40)
+    move_in_date: date
+    expires_in_hours: int = Field(default=168, ge=24, le=720)
+
+
+class TenantInvitationReassign(BaseModel):
+    new_unit_id: int = Field(gt=0)
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+class TenantInvitationAccept(BaseModel):
+    invitation_id: int | None = Field(default=None, gt=0)
+    token: str | None = Field(default=None, min_length=20, max_length=200)
+    billable_start_date: date
+    billable_terms_acknowledged: bool = False
+
+
 class StayCreate(BaseModel):
     property_id: int
     unit_id: int
@@ -152,8 +180,10 @@ class MoveOutRequestReview(BaseModel):
 class LedgerCreate(BaseModel):
     property_id: int
     resident_stay_id: int | None = None
+    reservation_id: int | None = None
     category: str = Field(pattern="^(rent_charge|payment|deposit|refund|deduction|expense|food|utility|late_fee)$")
     amount: int = Field(ge=0)
+    amount_paise: int | None = Field(default=None, ge=0)
     billing_period: str = ""
     due_date: date | None = None
     paid_at: datetime | None = None
@@ -1120,6 +1150,448 @@ def update_visit_status_action(visit_id: int, body: VisitStatus, actor: dict = D
     db.refresh(item)
     return {"id": item.id, "status": item.status, "outcome": item.outcome, "preferred_at": item.preferred_at.isoformat()}
 
+def invitation_unit_state(db: Session, unit: m.PropertyUnit) -> str:
+    """Check reservation/stay records before trusting a stored unit availability label."""
+    if unit.status in {"maintenance", "inactive"}:
+        return unit.status
+    now = datetime.now(timezone.utc)
+    active_stay = db.scalar(select(m.ResidentStay.id).where(
+        m.ResidentStay.unit_id == unit.id,
+        m.ResidentStay.status.in_(["active", "notice_given"]),
+    ).limit(1))
+    if active_stay:
+        return "occupied"
+    active_reservation = db.scalar(select(m.Reservation.id).where(
+        m.Reservation.unit_id == unit.id,
+        or_(
+            m.Reservation.status.in_(["confirmed", "checked_in"]),
+            and_(m.Reservation.status == "pending",
+                 or_(m.Reservation.expires_at.is_(None), m.Reservation.expires_at > now)),
+        ),
+    ).limit(1))
+    return "reserved" if active_reservation else "available"
+
+
+def make_proration_quote(monthly_rent: int, billable_start_date: date) -> dict[str, Any]:
+    days_in_month = calendar.monthrange(billable_start_date.year, billable_start_date.month)[1]
+    billable_days = days_in_month - billable_start_date.day + 1
+    monthly_rent_paise = max(0, int(monthly_rent)) * 100
+    daily_rate_paise = int(
+        (Decimal(monthly_rent_paise) / Decimal(days_in_month)).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    )
+    first_period_rent_paise = int(
+        (Decimal(monthly_rent_paise) * Decimal(billable_days) / Decimal(days_in_month)).quantize(
+            Decimal("1"), rounding=ROUND_HALF_UP
+        )
+    )
+    return {
+        "billable_start_date": billable_start_date.isoformat(),
+        "days_in_billing_month": days_in_month,
+        "billable_days": billable_days,
+        "monthly_rent": int(monthly_rent),
+        "daily_rate_paise": daily_rate_paise,
+        "daily_rate": f"{Decimal(daily_rate_paise) / Decimal(100):.2f}",
+        "first_period_rent_paise": first_period_rent_paise,
+        "first_period_rent": f"{Decimal(first_period_rent_paise) / Decimal(100):.2f}",
+        "currency": "INR",
+        "billing_start_trigger": "tenant_registration_submission",
+    }
+
+
+def invitation_payload(db: Session, invitation: m.PropertyInvitation, include_private: bool = False) -> dict[str, Any]:
+    prop = db.get(m.Property, invitation.property_id)
+    unit = db.get(m.PropertyUnit, invitation.unit_id)
+    state = invitation_unit_state(db, unit) if unit else "unavailable"
+    now = datetime.now(timezone.utc)
+    expires_at = invitation.expires_at if invitation.expires_at.tzinfo else invitation.expires_at.replace(tzinfo=timezone.utc)
+    out = {
+        "id": invitation.id,
+        "property_id": invitation.property_id,
+        "property_name": prop.name if prop else "Property no longer available",
+        "unit_id": invitation.unit_id,
+        "floor_label": unit.floor_label if unit else "",
+        "room_code": unit.room_code if unit else "",
+        "unit_code": unit.unit_code if unit else "",
+        "rentable_type": unit.rentable_type if unit else "",
+        "sharing_capacity": unit.sharing_capacity if unit else 1,
+        "move_in_date": invitation.move_in_date.isoformat(),
+        "monthly_rent": invitation.rent_snapshot,
+        "deposit": invitation.deposit_snapshot,
+        "status": invitation.status,
+        "unit_status": state,
+        "expires_at": invitation.expires_at.isoformat(),
+        "reassignment_reason": invitation.reassignment_reason,
+        "can_accept": invitation.status == "pending" and expires_at > now and state == "available",
+    }
+    if include_private:
+        out.update({
+            "recipient_email": invitation.recipient_email,
+            "recipient_name": invitation.recipient_name,
+            "recipient_phone": invitation.recipient_phone,
+            "recipient_user_id": invitation.recipient_user_id,
+            "enquiry_id": invitation.enquiry_id,
+            "reservation_id": invitation.reservation_id,
+            "created_at": invitation.created_at.isoformat(),
+        })
+    return out
+
+
+@app.post("/owner/invitations", status_code=201)
+def create_tenant_invitation(body: TenantInvitationCreate,
+                             actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")),
+                             db: Session = Depends(get_db)):
+    prop = require_property_manager(db, actor, body.property_id, "reservations.manage")
+    if prop.status != "published":
+        raise HTTPException(409, "Publish and approve this property before inviting a tenant to a bed.")
+    if body.move_in_date < date.today():
+        raise HTTPException(422, "Move-in date cannot be in the past.")
+
+    unit = db.scalar(select(m.PropertyUnit).where(
+        m.PropertyUnit.id == body.unit_id,
+        m.PropertyUnit.property_id == prop.id,
+    ).with_for_update())
+    if not unit:
+        raise HTTPException(404, "The selected bed does not belong to this property.")
+    if invitation_unit_state(db, unit) != "available":
+        raise HTTPException(409, "That bed is no longer available. Refresh inventory and select another bed.")
+
+    recipient_email = body.recipient_email.strip().lower()
+    recipient = db.scalar(select(m.User).where(func.lower(m.User.email) == recipient_email))
+    if recipient is not None and (recipient.role != "customer" or not recipient.is_active):
+        raise HTTPException(409, "The invitation email is already associated with an account that cannot register as a tenant.")
+    if body.enquiry_id is not None:
+        enquiry = db.get(m.Enquiry, body.enquiry_id)
+        if not enquiry or enquiry.property_id != prop.id:
+            raise HTTPException(404, "The enquiry does not belong to this property.")
+        enquiry_customer = db.get(m.User, enquiry.customer_id)
+        if not enquiry_customer or enquiry_customer.email.strip().lower() != recipient_email:
+            raise HTTPException(409, "The invitation email must match the tenant who submitted the selected enquiry.")
+
+    now = datetime.now(timezone.utc)
+    duplicate = db.scalar(select(m.PropertyInvitation.id).where(
+        m.PropertyInvitation.property_id == prop.id,
+        m.PropertyInvitation.unit_id == unit.id,
+        m.PropertyInvitation.recipient_email == recipient_email,
+        m.PropertyInvitation.status == "pending",
+        m.PropertyInvitation.expires_at > now,
+    ))
+    if duplicate:
+        raise HTTPException(409, "An active invitation already exists for this tenant and bed.")
+
+    token = secrets.token_urlsafe(32)
+    invitation = m.PropertyInvitation(
+        property_id=prop.id,
+        unit_id=unit.id,
+        enquiry_id=body.enquiry_id,
+        invited_by=actor_user_id(actor),
+        recipient_user_id=recipient.id if recipient else None,
+        recipient_email=recipient_email,
+        recipient_name=body.recipient_name.strip(),
+        recipient_phone=body.recipient_phone.strip(),
+        token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        move_in_date=body.move_in_date,
+        rent_snapshot=unit.monthly_rent or prop.rent_from,
+        deposit_snapshot=unit.deposit or prop.deposit_from,
+        status="pending",
+        expires_at=now + timedelta(hours=body.expires_in_hours),
+    )
+    db.add(invitation)
+    try:
+        db.flush()
+        audit(db, actor, "property_invitation", invitation.id, "created", new={
+            "property_id": prop.id, "unit_id": unit.id, "recipient_email": recipient_email,
+            "move_in_date": body.move_in_date.isoformat(), "expires_at": invitation.expires_at.isoformat(),
+        })
+        if recipient:
+            add_notification(
+                db, recipient.id, "Property-specific registration invitation",
+                f"{prop.name} invited you to {unit.room_code} · {unit.unit_code}. Open StayEasy > Invitations to review the proposed bed and rental terms."
+            )
+        db.commit()
+        db.refresh(invitation)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "The invitation could not be created because its state changed. Refresh and retry.") from exc
+
+    base_url = os.getenv("STAYEASY_INVITATION_BASE_URL", "").strip()
+    invitation_url = (
+        f"{base_url.rstrip('/')}{'&' if '?' in base_url else '?'}invitation={quote(token, safe='')}"
+        if base_url else f"stayeasy://invitation/{token}"
+    )
+    return {
+        **invitation_payload(db, invitation, include_private=True),
+        "invitation_url": invitation_url,
+        "token_returned_once": True,
+        "delivery": "copy_link",
+        "note": "Share this one-time link with the named tenant. The database stores only a SHA-256 token hash; the link is not returned by later list calls.",
+    }
+
+
+@app.get("/owner/invitations")
+def list_owner_invitations(property_id: int | None = None,
+                           actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")),
+                           db: Session = Depends(get_db)):
+    stmt = select(m.PropertyInvitation)
+    if property_id is not None:
+        require_property_manager(db, actor, property_id, "reservations.view")
+        stmt = stmt.where(m.PropertyInvitation.property_id == property_id)
+    elif actor["role"] != "admin":
+        scoped_ids = visible_property_ids(db, actor, "reservations") or []
+        stmt = stmt.where(m.PropertyInvitation.property_id.in_(scoped_ids))
+    rows = list(db.scalars(stmt.order_by(m.PropertyInvitation.created_at.desc()).limit(300)))
+    return [invitation_payload(db, row, include_private=True) for row in rows]
+
+
+@app.get("/tenant/invitations")
+def list_tenant_invitations(actor: dict = Depends(require_roles("customer")), db: Session = Depends(get_db)):
+    user = db.get(m.User, actor_user_id(actor))
+    if not user:
+        return []
+    email = user.email.strip().lower()
+    rows = list(db.scalars(select(m.PropertyInvitation).where(
+        or_(
+            m.PropertyInvitation.recipient_user_id == user.id,
+            m.PropertyInvitation.recipient_email == email,
+        ),
+        m.PropertyInvitation.status == "pending",
+    ).order_by(m.PropertyInvitation.created_at.desc()).limit(100)))
+    return [invitation_payload(db, row, include_private=False) for row in rows]
+
+
+@app.get("/invitations/resolve")
+def resolve_tenant_invitation(token: str = Query(min_length=20, max_length=200), db: Session = Depends(get_db)):
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    invitation = db.scalar(select(m.PropertyInvitation).where(m.PropertyInvitation.token_hash == token_hash))
+    if not invitation:
+        raise HTTPException(404, "Invitation link is invalid or has expired.")
+    now = datetime.now(timezone.utc)
+    expires_at = invitation.expires_at if invitation.expires_at.tzinfo else invitation.expires_at.replace(tzinfo=timezone.utc)
+    if invitation.status == "pending" and expires_at <= now:
+        invitation.status = "expired"
+        db.commit()
+    quote = make_proration_quote(invitation.rent_snapshot, date.today())
+    return {
+        **invitation_payload(db, invitation, include_private=False),
+        "recipient_email": invitation.recipient_email,
+        "recipient_name": invitation.recipient_name,
+        "billable_quote": quote,
+        "requires_email_match": True,
+        "requires_explicit_billable_terms_acknowledgement": True,
+    }
+
+
+@app.post("/owner/invitations/{invitation_id}/reassign")
+def reassign_tenant_invitation(invitation_id: int, body: TenantInvitationReassign,
+                               actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")),
+                               db: Session = Depends(get_db)):
+    invitation = db.scalar(select(m.PropertyInvitation).where(
+        m.PropertyInvitation.id == invitation_id
+    ).with_for_update())
+    if not invitation:
+        raise HTTPException(404, "Invitation not found")
+    require_property_manager(db, actor, invitation.property_id, "reservations.manage")
+    now = datetime.now(timezone.utc)
+    expiry = invitation.expires_at if invitation.expires_at.tzinfo else invitation.expires_at.replace(tzinfo=timezone.utc)
+    if invitation.status != "pending" or expiry <= now:
+        raise HTTPException(409, "Only a live pending invitation can be reassigned. Send a new invitation if this one is closed.")
+    new_unit = db.scalar(select(m.PropertyUnit).where(
+        m.PropertyUnit.id == body.new_unit_id,
+        m.PropertyUnit.property_id == invitation.property_id,
+    ).with_for_update())
+    if not new_unit:
+        raise HTTPException(404, "Replacement bed must belong to the same property.")
+    if new_unit.id == invitation.unit_id:
+        raise HTTPException(422, "Choose a different bed.")
+    state = invitation_unit_state(db, new_unit)
+    if state != "available":
+        raise HTTPException(409, f"Replacement bed is currently {state}. Refresh inventory and choose another.")
+    old_unit = db.get(m.PropertyUnit, invitation.unit_id)
+    old = {"unit_id": invitation.unit_id, "room_code": old_unit.room_code if old_unit else ""}
+    invitation.unit_id = new_unit.id
+    invitation.rent_snapshot = new_unit.monthly_rent or invitation.rent_snapshot
+    invitation.deposit_snapshot = new_unit.deposit or invitation.deposit_snapshot
+    invitation.reassignment_reason = body.reason.strip()
+    audit(db, actor, "property_invitation", invitation.id, "bed_reassigned", old=old, new={
+        "unit_id": new_unit.id, "room_code": new_unit.room_code, "unit_code": new_unit.unit_code,
+        "reason": invitation.reassignment_reason,
+    })
+    if invitation.recipient_user_id:
+        add_notification(db, invitation.recipient_user_id, "Proposed bed changed",
+                         f"The owner proposed {new_unit.room_code} · {new_unit.unit_code} instead. Reason: {invitation.reassignment_reason}. Review the updated rental terms before accepting.")
+    db.commit()
+    db.refresh(invitation)
+    return invitation_payload(db, invitation, include_private=True)
+
+
+@app.post("/owner/invitations/{invitation_id}/revoke")
+def revoke_tenant_invitation(invitation_id: int,
+                             actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")),
+                             db: Session = Depends(get_db)):
+    invitation = db.scalar(select(m.PropertyInvitation).where(
+        m.PropertyInvitation.id == invitation_id
+    ).with_for_update())
+    if not invitation:
+        raise HTTPException(404, "Invitation not found")
+    require_property_manager(db, actor, invitation.property_id, "reservations.manage")
+    if invitation.status != "pending":
+        raise HTTPException(409, "Only pending invitations can be revoked.")
+    old_status = invitation.status
+    invitation.status = "revoked"
+    audit(db, actor, "property_invitation", invitation.id, "revoked", old={"status": old_status}, new={"status": invitation.status})
+    if invitation.recipient_user_id:
+        add_notification(db, invitation.recipient_user_id, "Property invitation withdrawn",
+                         "The property owner withdrew the pending invitation. Contact the owner if you need further details.")
+    db.commit()
+    return {"id": invitation.id, "status": invitation.status}
+
+
+@app.post("/invitations/accept", status_code=201)
+def accept_tenant_invitation(body: TenantInvitationAccept,
+                             actor: dict = Depends(require_roles("customer")),
+                             db: Session = Depends(get_db)):
+    if (body.invitation_id is None) == (body.token is None):
+        raise HTTPException(422, "Provide either an invitation ID from your account list or the invitation token, not both.")
+    if not body.billable_terms_acknowledged:
+        raise HTTPException(422, "Review and acknowledge the billable start date and first-period rent before submitting registration.")
+    if body.billable_start_date != date.today():
+        raise HTTPException(409, "The billable-date quote has changed. Refresh the invitation and acknowledge today's date before submitting.")
+    user = db.get(m.User, actor_user_id(actor))
+    if not user or user.role != "customer" or not user.is_active:
+        raise HTTPException(403, "An active tenant account is required to accept this invitation.")
+    invitation_query = select(m.PropertyInvitation)
+    if body.invitation_id is not None:
+        invitation_query = invitation_query.where(m.PropertyInvitation.id == body.invitation_id)
+    else:
+        token_hash = hashlib.sha256((body.token or "").encode("utf-8")).hexdigest()
+        invitation_query = invitation_query.where(m.PropertyInvitation.token_hash == token_hash)
+    invitation = db.scalar(invitation_query.with_for_update())
+    if not invitation:
+        raise HTTPException(404, "Invitation not found.")
+    if invitation.recipient_email.strip().lower() != user.email.strip().lower():
+        raise HTTPException(403, "Sign in with the email address the owner invited.")
+    if invitation.recipient_user_id and invitation.recipient_user_id != user.id:
+        raise HTTPException(403, "This invitation is linked to a different account. Use the existing invited account.")
+    now = datetime.now(timezone.utc)
+    expiry = invitation.expires_at if invitation.expires_at.tzinfo else invitation.expires_at.replace(tzinfo=timezone.utc)
+    if invitation.status != "pending" or expiry <= now:
+        if invitation.status == "pending" and expiry <= now:
+            invitation.status = "expired"
+            db.commit()
+        raise HTTPException(409, "This invitation is no longer active. Ask the owner to send a new invitation.")
+    unit = db.scalar(select(m.PropertyUnit).where(
+        m.PropertyUnit.id == invitation.unit_id,
+        m.PropertyUnit.property_id == invitation.property_id,
+    ).with_for_update())
+    if not unit:
+        raise HTTPException(409, "The proposed bed is no longer part of this property. Ask the owner to update the invitation.")
+    # Expire timed-out pending holds before validating availability.
+    holds = list(db.scalars(select(m.Reservation).where(
+        m.Reservation.unit_id == unit.id,
+        m.Reservation.status == "pending",
+        m.Reservation.expires_at.is_not(None),
+        m.Reservation.expires_at <= now,
+    ).with_for_update()))
+    for hold in holds:
+        hold.status = "expired"
+        audit(db, actor, "reservation", hold.id, "expired_due_to_timeout", old={"status": "pending"}, new={"status": "expired"})
+    if invitation_unit_state(db, unit) != "available":
+        raise HTTPException(409, "That bed is no longer available. Your invitation remains unsubmitted; ask the owner to propose another bed.")
+    prop = db.get(m.Property, invitation.property_id)
+    if not prop or prop.status != "published":
+        raise HTTPException(409, "This property is no longer available for new reservations.")
+    quote = make_proration_quote(invitation.rent_snapshot, body.billable_start_date)
+    terms_snapshot = {
+        "currency": "INR",
+        "invitation_id": invitation.id,
+        "billable_start_date": quote["billable_start_date"],
+        "billable_start_trigger": quote["billing_start_trigger"],
+        "billable_terms_acknowledged": True,
+        "billable_terms_acknowledged_at": now.isoformat(),
+        "monthly_rent": quote["monthly_rent"],
+        "daily_rate_paise": quote["daily_rate_paise"],
+        "days_in_billing_month": quote["days_in_billing_month"],
+        "billable_days": quote["billable_days"],
+        "first_period_rent_paise": quote["first_period_rent_paise"],
+        "first_period_rent": quote["first_period_rent"],
+        "payment_charge_created": True,
+        "payment_note": "A prorated rent charge is recorded after registration submission and explicit acknowledgement. No payment is collected; the owner may review the registration, and a rejected/cancelled unpaid registration voids this charge.",
+    }
+    reservation = m.Reservation(
+        property_id=invitation.property_id,
+        unit_id=unit.id,
+        customer_id=user.id,
+        preferred_room_type=f"{unit.sharing_capacity} sharing" if unit.rentable_type == "bed" else "Private room",
+        move_in_date=invitation.move_in_date,
+        expires_at=now + timedelta(days=7),
+        status="pending",
+        rent_snapshot=invitation.rent_snapshot,
+        deposit_snapshot=invitation.deposit_snapshot,
+        terms_snapshot=terms_snapshot,
+    )
+    db.add(reservation)
+    unit.status = "reserved"
+    invitation.status = "accepted"
+    invitation.accepted_by = user.id
+    invitation.accepted_at = now
+    try:
+        db.flush()
+        invitation.reservation_id = reservation.id
+        first_period_paise = int(quote["first_period_rent_paise"])
+        rounded_rupees = int((Decimal(first_period_paise) / Decimal(100)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+        rent_charge = m.LedgerEntry(
+            property_id=prop.id,
+            resident_stay_id=None,
+            reservation_id=reservation.id,
+            category="rent_charge",
+            amount=rounded_rupees,
+            amount_paise=first_period_paise,
+            currency="INR",
+            billing_period=body.billable_start_date.strftime("%Y-%m"),
+            due_date=body.billable_start_date,
+            payment_method="manual",
+            provider_status="manual_record",
+            description=f"Prorated first-period rent for {quote['billable_days']} billable days from the explicitly accepted registration date {quote['billable_start_date']}. Exact amount ₹{quote['first_period_rent']}. No money has been collected.",
+            status="open",
+            created_by=actor_user_id(actor),
+        )
+        db.add(rent_charge)
+        db.flush()
+        add_notification(db, prop.owner_id, "Tenant registration submitted",
+                         f"{user.display_name or user.email} accepted the invitation for {unit.room_code} · {unit.unit_code}. Review the registration and approve or cancel the reservation.")
+        audit(db, actor, "property_invitation", invitation.id, "accepted", old={"status": "pending"}, new={
+            "status": "accepted", "reservation_id": reservation.id, "unit_id": unit.id,
+            "billable_start_date": quote["billable_start_date"],
+            "first_period_rent_paise": quote["first_period_rent_paise"],
+            "rent_charge_id": rent_charge.id,
+        })
+        audit(db, actor, "ledger_entry", rent_charge.id, "registration_prorated_rent_charged", new={
+            "reservation_id": reservation.id, "amount_paise": first_period_paise,
+            "billing_period": rent_charge.billing_period, "due_date": rent_charge.due_date.isoformat(),
+            "payment_collected": False,
+        })
+        db.commit()
+        db.refresh(reservation)
+        db.refresh(invitation)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Another tenant reserved this bed first. Refresh invitations and ask the owner for an available bed.") from exc
+    return {
+        "invitation_id": invitation.id,
+        "reservation_id": reservation.id,
+        "status": reservation.status,
+        "property_name": prop.name,
+        "room_code": unit.room_code,
+        "unit_code": unit.unit_code,
+        "monthly_rent": reservation.rent_snapshot,
+        "deposit": reservation.deposit_snapshot,
+        "billable_quote": quote,
+        "billing_status": "rent_due_recorded_registration_completed",
+        "charge_created": True,
+        "charge_amount_paise": int(quote["first_period_rent_paise"]),
+        "message": "Registration was submitted and the prorated rent charge was recorded for the date you explicitly acknowledged. No payment has been collected. Owner review does not change the agreed billable start date.",
+    }
+
+
 @app.post("/reservations", status_code=201)
 def create_reservation(body: ReservationCreate, actor: dict = Depends(require_roles("customer")), db: Session = Depends(get_db)):
     prop = property_or_404(db, body.property_id)
@@ -1253,8 +1725,35 @@ def reassign_reservation(reservation_id: int, body: ReservationReassignRequest, 
 
 @app.post("/owner/reservations/{reservation_id}/status")
 def update_reservation_status_action(reservation_id: int, body: ReservationStatus, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
-    """POST-compatible alias for Android clients that cannot issue HTTP PATCH."""
-    return update_reservation(reservation_id, body, actor, db)
+    """POST-compatible alias; cancelling an unpaid registration also voids its linked rent charge."""
+    item = db.get(m.Reservation, reservation_id)
+    if not item:
+        raise HTTPException(404, "Reservation not found")
+    if body.status in {"cancelled", "expired"}:
+        require_property_manager(db, actor, item.property_id, "reservations.manage")
+        recorded_payments = list(db.scalars(select(m.LedgerEntry).where(
+            m.LedgerEntry.reservation_id == item.id,
+            m.LedgerEntry.category == "payment",
+            m.LedgerEntry.status.notin_(["cancelled", "void", "rejected"]),
+        )))
+        if any((entry.amount_paise if entry.amount_paise is not None else entry.amount * 100) > 0 for entry in recorded_payments):
+            raise HTTPException(409, "This registration has a recorded payment. Reconcile or refund it before cancelling the reservation.")
+    result = update_reservation(reservation_id, body, actor, db)
+    if body.status in {"cancelled", "expired"}:
+        charges = list(db.scalars(select(m.LedgerEntry).where(
+            m.LedgerEntry.reservation_id == reservation_id,
+            m.LedgerEntry.category == "rent_charge",
+            m.LedgerEntry.status.in_(["open", "pending"]),
+        )))
+        for entry in charges:
+            old_status = entry.status
+            entry.status = "cancelled"
+            audit(db, actor, "ledger_entry", entry.id, "registration_rent_charge_voided", old={"status": old_status},
+                  new={"status": entry.status, "reservation_id": reservation_id})
+        if charges:
+            db.commit()
+            result["cancelled_rent_charge_ids"] = [entry.id for entry in charges]
+    return result
 
 @app.post("/owner/stays", status_code=201)
 def create_stay(body: StayCreate, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
@@ -1372,21 +1871,44 @@ def create_ledger_entry(body: LedgerCreate, actor: dict = Depends(require_roles(
     require_property_manager(db, actor, body.property_id, "finance.manage")
     if body.resident_stay_id:
         stay = db.get(m.ResidentStay, body.resident_stay_id)
-        if not stay or stay.property_id != body.property_id: raise HTTPException(422, "Stay does not belong to this property")
+        if not stay or stay.property_id != body.property_id:
+            raise HTTPException(422, "Stay does not belong to this property")
+    if body.reservation_id:
+        reservation = db.get(m.Reservation, body.reservation_id)
+        if not reservation or reservation.property_id != body.property_id:
+            raise HTTPException(422, "Reservation does not belong to this property")
+        if body.category == "payment" and reservation.status in {"cancelled", "expired"}:
+            raise HTTPException(409, "Cannot record a payment against a cancelled or expired reservation.")
     if body.paid_at is not None and body.category != "payment":
         raise HTTPException(422, "A payment date can only be attached to a payment ledger entry")
     if body.provider_status != "manual_record":
         raise HTTPException(422, "Payment-provider confirmation is unavailable. Record this entry manually until a provider is integrated.")
-    entry = m.LedgerEntry(property_id=body.property_id, created_by=actor_user_id(actor), **body.model_dump(exclude={"property_id"}))
-    db.add(entry); db.flush(); audit(db, actor, "ledger_entry", entry.id, "created", new={"category": entry.category, "amount": entry.amount, "status": entry.status}); db.commit(); db.refresh(entry)
-    return {"id": entry.id, "category": entry.category, "amount": entry.amount, "status": entry.status, "provider_status": entry.provider_status,
+    values = body.model_dump(exclude={"property_id"})
+    if values.get("amount_paise") is None:
+        values["amount_paise"] = body.amount * 100
+    if body.reservation_id is not None and body.resident_stay_id is None and body.category == "payment":
+        reservation = db.get(m.Reservation, body.reservation_id)
+        if reservation is None:
+            raise HTTPException(422, "Reservation does not exist.")
+    entry = m.LedgerEntry(property_id=body.property_id, created_by=actor_user_id(actor), **values)
+    db.add(entry); db.flush()
+    audit(db, actor, "ledger_entry", entry.id, "created", new={
+        "category": entry.category, "amount": entry.amount, "amount_paise": entry.amount_paise,
+        "reservation_id": entry.reservation_id, "status": entry.status
+    })
+    db.commit(); db.refresh(entry)
+    return {"id": entry.id, "category": entry.category, "amount": entry.amount,
+            "amount_paise": entry.amount_paise, "status": entry.status, "provider_status": entry.provider_status,
             "paid_at": entry.paid_at.isoformat() if entry.paid_at else None}
 
-def ledger_entry_payload(entry: m.LedgerEntry, property_name: str, resident_id: str = "", unit_code: str = "") -> dict:
+def ledger_entry_payload(entry: m.LedgerEntry, property_name: str, resident_id: str = "", unit_code: str = "", resident_name: str = "") -> dict:
+    amount_paise = entry.amount_paise if entry.amount_paise is not None else entry.amount * 100
     return {
         "id": entry.id, "property_id": entry.property_id, "property_name": property_name,
-        "resident_stay_id": entry.resident_stay_id, "resident_id": resident_id, "unit_code": unit_code,
-        "category": entry.category, "amount": entry.amount, "currency": entry.currency,
+        "resident_stay_id": entry.resident_stay_id, "reservation_id": entry.reservation_id,
+        "resident_id": resident_id, "resident_name": resident_name, "unit_code": unit_code,
+        "category": entry.category, "amount": entry.amount, "amount_paise": amount_paise,
+        "amount_precise": f"{amount_paise / 100:.2f}", "currency": entry.currency,
         "billing_period": entry.billing_period, "due_date": entry.due_date.isoformat() if entry.due_date else None,
         "paid_at": entry.paid_at.isoformat() if entry.paid_at else None,
         "payment_method": entry.payment_method, "payment_reference": entry.payment_reference,
@@ -1412,13 +1934,24 @@ def list_ledger(property_id: int | None = None, actor: dict = Depends(require_ro
     } if property_ids else {}
     stay_ids = {entry.resident_stay_id for entry in rows if entry.resident_stay_id is not None}
     stays = {stay.id: stay for stay in db.scalars(select(m.ResidentStay).where(m.ResidentStay.id.in_(stay_ids)))} if stay_ids else {}
-    unit_ids = {stay.unit_id for stay in stays.values()}
+    reservation_ids = {entry.reservation_id for entry in rows if entry.reservation_id is not None}
+    reservations = {reservation.id: reservation for reservation in db.scalars(select(m.Reservation).where(m.Reservation.id.in_(reservation_ids)))} if reservation_ids else {}
+    unit_ids = {stay.unit_id for stay in stays.values()} | {reservation.unit_id for reservation in reservations.values() if reservation.unit_id is not None}
     units = {unit.id: unit for unit in db.scalars(select(m.PropertyUnit).where(m.PropertyUnit.id.in_(unit_ids)))} if unit_ids else {}
+    user_ids = {stay.resident_id for stay in stays.values()} | {reservation.customer_id for reservation in reservations.values()}
+    users = {user.id: user for user in db.scalars(select(m.User).where(m.User.id.in_(user_ids)))} if user_ids else {}
     return [
         ledger_entry_payload(
             entry, property_names.get(entry.property_id, f"Property #{entry.property_id}"),
-            stays[entry.resident_stay_id].resident_id if entry.resident_stay_id in stays else "",
-            units[stays[entry.resident_stay_id].unit_id].unit_code if entry.resident_stay_id in stays and stays[entry.resident_stay_id].unit_id in units else ""
+            stays[entry.resident_stay_id].resident_id if entry.resident_stay_id in stays else (
+                reservations[entry.reservation_id].customer_id if entry.reservation_id in reservations else ""
+            ),
+            units[stays[entry.resident_stay_id].unit_id].unit_code if entry.resident_stay_id in stays and stays[entry.resident_stay_id].unit_id in units else (
+                units[reservations[entry.reservation_id].unit_id].unit_code if entry.reservation_id in reservations and reservations[entry.reservation_id].unit_id in units else ""
+            ),
+            users[stays[entry.resident_stay_id].resident_id].display_name if entry.resident_stay_id in stays and stays[entry.resident_stay_id].resident_id in users else (
+                users[reservations[entry.reservation_id].customer_id].display_name if entry.reservation_id in reservations and reservations[entry.reservation_id].customer_id in users else ""
+            )
         )
         for entry in rows
     ]
