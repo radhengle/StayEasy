@@ -104,10 +104,9 @@ def _account_payload(user: m.User, credential: m.UserCredential) -> dict[str, An
         "role": user.role,
         "requested_workspace": credential.requested_workspace,
         "email_verified": credential.email_verified_at is not None,
-        "owner_access_status": (
-            "pending_approval" if credential.requested_workspace == "owner" and user.role != "owner"
-            else "active" if user.role == "owner" else "not_requested"
-        ),
+        "owner_access_status": "active" if user.role == "owner" else credential.owner_access_status,
+        "owner_access_requested_at": credential.owner_access_requested_at.isoformat() if credential.owner_access_requested_at else None,
+        "owner_access_review_note": credential.owner_access_review_note if credential.owner_access_status == "rejected" else "",
     }
 
 
@@ -129,6 +128,8 @@ def register_account(body: AccountRegister, db: Session = Depends(get_db)):
         user_id=user_id,
         password_hash=hash_password(body.password),
         requested_workspace=body.requested_workspace,
+        owner_access_status="pending_approval" if body.requested_workspace == "owner" else "not_requested",
+        owner_access_requested_at=datetime.now(timezone.utc) if body.requested_workspace == "owner" else None,
         verification_code_hash=hash_one_time_code(user_id, code, "email-verification"),
         verification_expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
     )
@@ -233,6 +234,36 @@ def current_account(actor: dict[str, Any] = Depends(get_actor), db: Session = De
     credential = db.get(m.UserCredential, actor["subject"])
     if user is None or credential is None:
         raise HTTPException(status_code=401, detail="Account session is no longer valid")
+    return _account_payload(user, credential)
+
+
+@router.post("/owner-access-request")
+def request_owner_access(actor: dict[str, Any] = Depends(get_actor), db: Session = Depends(get_db)):
+    """A verified customer can request or re-request Owner access; only an admin can approve it."""
+    if not actor.get("account_session"):
+        raise HTTPException(status_code=403, detail="Sign in with a verified StayEasy account to request Owner access")
+    user = db.get(m.User, actor["subject"])
+    credential = db.get(m.UserCredential, actor["subject"])
+    if user is None or credential is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="Account session is no longer valid")
+    if user.role == "owner":
+        return _account_payload(user, credential)
+    if user.role != "customer":
+        raise HTTPException(status_code=403, detail="Only customer accounts can request Owner access")
+    if credential.email_verified_at is None:
+        raise HTTPException(status_code=403, detail="Verify your email before requesting Owner access")
+    if credential.owner_access_status == "pending_approval":
+        return _account_payload(user, credential)
+
+    now = datetime.now(timezone.utc)
+    credential.requested_workspace = "owner"
+    credential.owner_access_status = "pending_approval"
+    credential.owner_access_requested_at = now
+    credential.owner_access_reviewed_at = None
+    credential.owner_access_review_note = ""
+    db.commit()
+    db.refresh(user)
+    db.refresh(credential)
     return _account_payload(user, credential)
 
 
