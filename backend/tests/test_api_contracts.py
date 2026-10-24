@@ -361,10 +361,6 @@ def test_tenant_moveout_request_is_property_scoped_and_owner_approval_does_not_r
 
     # Approval records notice and target move-out date, but the bed remains occupied
     # until the owner confirms the actual move-out by completing the stay.
-    customer_requests = client.get("/stays/me/move-out-requests", headers={
-        "Authorization": "Bearer test-token",
-    })
-    # TestClient routes use dependency overrides, so restore the resident actor directly.
     _set_account_actor("moveout-resident")
     customer_requests = client.get("/stays/me/move-out-requests")
     assert customer_requests.status_code == 200, customer_requests.text
