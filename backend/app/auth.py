@@ -43,6 +43,10 @@ class AccountLogin(BaseModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class EmailRequest(BaseModel):
+    email: str = Field(min_length=5, max_length=255, pattern=r"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+
+
 class PasswordResetConfirm(EmailCodeRequest):
     new_password: str = Field(min_length=12, max_length=128)
 
@@ -231,7 +235,7 @@ def logout_account(actor: dict[str, Any] = Depends(get_actor), db: Session = Dep
 
 
 @router.post("/forgot-password", status_code=status.HTTP_202_ACCEPTED)
-def forgot_password(body: EmailCodeRequest, db: Session = Depends(get_db)):
+def forgot_password(body: EmailRequest, db: Session = Depends(get_db)):
     _configured_mail_or_503()
     email = _email(body.email)
     user = db.scalar(select(m.User).where(func.lower(m.User.email) == email))
