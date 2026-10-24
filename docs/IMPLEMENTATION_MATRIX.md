@@ -1,13 +1,14 @@
 # StayEasy feature checklist — implementation and acceptance matrix
 
-This matrix maps the full requested checklist to the current deliverable. “Local UI” means it is interactive and saved on the same Android device using SharedPreferences; it is not shared with other accounts/devices. “API foundation” means an endpoint/model exists in the FastAPI service but the Android client does not yet synchronize it. External integrations are deliberately not simulated as live services.
+This matrix maps the full requested checklist to the current deliverable. “Local UI” means it is interactive and saved on the same Android device using SharedPreferences; it is not shared with other accounts/devices. “API foundation” means an endpoint/model exists in FastAPI, but the Android client may not yet use it. The financial-records milestone now includes owner-ledger and resident-ledger API calls plus Android sync and manual-entry flows when a valid development session is configured. Production identity, deployment and external integrations remain separate release gates.
 
 ## Current status summary
 
 - **Android:** native Kotlin/Jetpack Compose screens, local sample discovery, filters, favourites, details, owner listing wizard, local draft record, theme settings, persisted generic operational records, bed state board, customer booking request flow, and comparison up to three properties.
 - **Backend:** FastAPI/SQLAlchemy/PostgreSQL service foundation, role/permission checks, property review queue, inventory, enquiry/visit/reservation/stay lifecycle, ledger, maintenance, notices, saved searches, staff, meal plans, housekeeping, visitor log, reviews, notifications and audit/report endpoints.
 - **Admin:** browser-based listing review console for admins with decision actions, platform counts and audit log.
-- **Not yet integrated:** Android ↔ API account/login/sync, actual Google Maps SDK/Places API, media object storage, push provider, payment gateway/reconciliation, full web owner portal, iOS and production account deletion. These need credentials, provider decisions and security/legal review.
+- **Partly integrated:** Android ↔ API workflows for published listings, enquiries/visits/reservations/issues and finance depend on a configured API URL plus a valid development token; registration, login and persistent production sessions are not implemented.
+- **Not yet integrated:** actual Google Maps SDK/Places API, media object storage, push provider, payment gateway/webhook reconciliation, database migrations, full web owner portal, iOS and production account deletion. These need credentials, provider decisions and security/legal review.
 
 ## 1. Customer app — finding a PG
 
@@ -45,7 +46,7 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 | Checklist item | Delivered behaviour / location | Status / acceptance condition |
 |---|---|---|
 | 3.1 My Stay | Stay lifecycle, move-in/renewal/notice/move-out records and contact/detail access paths | Local records UI; API resident stay records support history |
-| 3.2 Rent/financial records | Payment, charges, deposits and receipt/ledger records; CSV export/share | Local records are manually entered; backend ledger distinguishes manual/provider-confirmed/reconciled values; no live payment integration |
+| 3.2 Rent/financial records | Tenant and owner screens read server ledger rows when connected; owner can add manual payment/deposit/charge records; owner can generate idempotent monthly rent charges; CSV export retained | API scope-checks owner properties and returns only ledger entries linked to the authenticated resident's stays. Financial views replace local demo records after successful sync. Payment-provider verification/collection is not implemented; production auth/migrations and broader accounting validation remain required |
 | 3.3 Maintenance/support | Customer issue submission, property/unit scope, priority, owner queue and server-confirmed status updates | API-backed when the customer has a valid session and active server stay, or when an owner/staff member has property-scoped maintenance access; otherwise explicitly local-only. Photo upload and SLA escalation automation not included |
 | 3.4 Resident lifecycle | Bed change, renewal, notice and settlement can be tracked as stay records; final statement concept supported by ledger | Local workflow foundation; server lifecycle endpoints exist; agreement signing and automated pro-rata settlement are not integrated |
 
@@ -64,8 +65,8 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 
 | Checklist item | Delivered behaviour / location | Status / acceptance condition |
 |---|---|---|
-| 5.1 Rent/payments | Generic charge/payment records with amount/method/reference/status and exports | Local UI; API ledger/audit exists; recurring monthly invoice generation and late-fee policy engine are not scheduled |
-| 5.2 Deposits | Separate deposit, deduction/refund/settlement record categories | Local UI; ledger supports category records; legal dispute/receipt and approval workflow requires refinement |
+| 5.1 Rent/payments | Shared owner ledger and tenant statement; manual payment references/status; owner action to generate monthly rent charges; duplicate stay/period charges are skipped by the API | Android finance sync and manual record creation are implemented when a valid API development session is configured. Manual entries are explicitly labelled; billing generation does not collect payment. Scheduled jobs, provider integration and accounting sign-off remain |
+| 5.2 Deposits | Separate deposit, deduction and refund ledger entries; a move-in stay records a positive security deposit automatically as a manual ledger row | Owner and tenant can view entries tied to the stay. The entry is not provider-verified; formal settlement approval, dispute and legal workflows require refinement |
 | 5.3 Expenses/reports | Categorized expense entries, report records, CSV export/share; owner analytics destination | Local UI; API ledger/dashboard. Report calculations need accounting validation before formal use |
 | 5.4 Maintenance | Category, priority, status, assigned person, record history and unit state actions | Server-backed issue queue and status transitions with property-scoped staff visibility; unrelated maintenance schedules and record types remain local until integrated |
 | 5.5 Staff/access | Role/permission records on device; server staff-assignment CRUD with property-specific permission checks | Local records are not authorization; API is the enforcement layer but authentication provider is a production prerequisite |
