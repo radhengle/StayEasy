@@ -184,31 +184,45 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
     val remoteScope = rememberCoroutineScope()
     var remoteSyncMessage by remember(category) { mutableStateOf("") }
     LaunchedEffect(category, apiPreferences.apiBaseUrl, sessionToken) {
-        if (category in setOf("enquiries", "reservations") && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()) {
+        if (category in setOf("enquiries", "reservations", "visits") && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()) {
             try {
                 val pulled = withContext(Dispatchers.IO) {
-                    if (category == "enquiries") StayApiClient.enquiries(apiPreferences.apiBaseUrl, sessionToken).map { row ->
-                        val id = row.optLong("id")
-                        val property = row.optString("property_name", "Property #${row.optLong("property_id")}")
-                        val rawStatus = row.optString("status", "new").replace('_', ' ')
-                        val detail = buildString {
-                            append(row.optString("message"))
-                            val response = row.optString("owner_response")
-                            if (response.isNotBlank()) append("\nOwner response: ").append(response)
+                    when (category) {
+                        "enquiries" -> StayApiClient.enquiries(apiPreferences.apiBaseUrl, sessionToken).map { row ->
+                            val id = row.optLong("id")
+                            val property = row.optString("property_name", "Property #${row.optLong("property_id")}")
+                            val rawStatus = row.optString("status", "new").replace('_', ' ')
+                            val detail = buildString {
+                                append(row.optString("message"))
+                                val response = row.optString("owner_response")
+                                if (response.isNotBlank()) append("\nOwner response: ").append(response)
+                            }
+                            StayRecord(id = "server-enquiry-$id", category = "enquiries", title = "Enquiry · $property", details = detail,
+                                status = rawStatus.replaceFirstChar { it.uppercase() }, person = row.optString("customer_id"), property = property,
+                                date = row.optString("move_in_date"), source = "Server")
                         }
-                        StayRecord(id = "server-enquiry-$id", category = "enquiries", title = "Enquiry · $property", details = detail,
-                            status = rawStatus.replaceFirstChar { it.uppercase() }, person = row.optString("customer_id"), property = property,
-                            date = row.optString("move_in_date"), source = "Server")
-                    } else StayApiClient.reservations(apiPreferences.apiBaseUrl, sessionToken).map { row ->
-                        val id = row.optLong("id")
-                        val property = row.optString("property_name", "Property #${row.optLong("property_id")}")
-                        val rawStatus = row.optString("status", "pending").replace('_', ' ')
-                        val expires = row.optString("expires_at")
-                        StayRecord(id = "server-reservation-$id", category = "reservations", title = "Reservation · $property",
-                            details = "${row.optString("preferred_room_type")} requested.${if (expires.isNotBlank()) " Expires: $expires" else ""}",
-                            status = rawStatus.replaceFirstChar { it.uppercase() }, person = row.optString("customer_id"), property = property,
-                            unit = row.optLong("unit_id").takeIf { it > 0 }?.toString().orEmpty(), date = row.optString("move_in_date"),
-                            amount = row.optInt("rent_snapshot") + row.optInt("deposit_snapshot"), source = "Server")
+                        "reservations" -> StayApiClient.reservations(apiPreferences.apiBaseUrl, sessionToken).map { row ->
+                            val id = row.optLong("id")
+                            val property = row.optString("property_name", "Property #${row.optLong("property_id")}")
+                            val rawStatus = row.optString("status", "pending").replace('_', ' ')
+                            val expires = row.optString("expires_at")
+                            StayRecord(id = "server-reservation-$id", category = "reservations", title = "Reservation · $property",
+                                details = "${row.optString("preferred_room_type")} requested.${if (expires.isNotBlank()) " Expires: $expires" else ""}",
+                                status = rawStatus.replaceFirstChar { it.uppercase() }, person = row.optString("customer_id"), property = property,
+                                unit = row.optLong("unit_id").takeIf { it > 0 }?.toString().orEmpty(), date = row.optString("move_in_date"),
+                                amount = row.optInt("rent_snapshot") + row.optInt("deposit_snapshot"), source = "Server")
+                        }
+                        else -> StayApiClient.visits(apiPreferences.apiBaseUrl, sessionToken).map { row ->
+                            val id = row.optLong("id")
+                            val property = row.optString("property_name", "Property #${row.optLong("property_id")}")
+                            val rawStatus = row.optString("status", "requested").replace('_', ' ')
+                            val outcome = row.optString("outcome")
+                            val preferredAt = row.optString("preferred_at")
+                            StayRecord(id = "server-visit-$id", category = "visits", title = "Visit · $property",
+                                details = outcome.ifBlank { "Requested appointment: $preferredAt" },
+                                status = rawStatus.replaceFirstChar { it.uppercase() }, person = row.optString("customer_id"),
+                                property = property, date = preferredAt, source = "Server")
+                        }
                     }
                 }
                 StayRecordStore.replaceServerRecords(context, category, pulled)
@@ -250,10 +264,10 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
         remoteScope.launch {
             try {
                 val response = withContext(Dispatchers.IO) {
-                    if (category == "reservations") {
-                        StayApiClient.updateReservation(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
-                    } else {
-                        StayApiClient.updateEnquiry(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
+                    when (category) {
+                        "reservations" -> StayApiClient.updateReservation(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
+                        "visits" -> StayApiClient.updateVisit(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
+                        else -> StayApiClient.updateEnquiry(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
                     }
                 }
                 val rawStatus = response.optString("status", nextStatus.lowercase(Locale.ROOT).replace(' ', '_'))
@@ -348,7 +362,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                                     StayRecordStore.update(context, category, updated); refresh()
                                     StayRecordStore.notify(context, "$title updated", "${r.title}: $next", r.property)
                                 }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Next status", color = SE.Blue, fontSize = 10.sp) }
-                                if (r.source == "Server" && ownerMode && category in setOf("enquiries", "reservations") && serverStatusOptions(category, r.status).isNotEmpty()) {
+                                if (r.source == "Server" && ownerMode && category in setOf("enquiries", "reservations", "visits") && serverStatusOptions(category, r.status).isNotEmpty()) {
                                     TextButton(onClick = { showServerStatusId = r.id }, enabled = !updatingServerStatus,
                                         contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
                                         Text(if (updatingServerStatus) "Updating…" else "Update status", color = SE.Blue, fontSize = 10.sp)
@@ -550,6 +564,11 @@ private fun serverStatusOptions(category: String, current: String): List<String>
     "reservations" -> when (current.trim().lowercase(Locale.ROOT)) {
         "pending" -> listOf("Confirmed", "Cancelled", "Expired")
         "confirmed" -> listOf("Checked in", "Cancelled", "Expired")
+        else -> emptyList()
+    }
+    "visits" -> when (current.trim().lowercase(Locale.ROOT)) {
+        "requested" -> listOf("Confirmed", "Cancelled")
+        "confirmed" -> listOf("Completed", "Cancelled", "No-show")
         else -> emptyList()
     }
     else -> emptyList()
