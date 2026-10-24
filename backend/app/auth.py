@@ -145,22 +145,35 @@ def register_account(body: AccountRegister, db: Session = Depends(get_db)):
     return {"message": "Verification code sent. Verify your email before signing in.", "email": email}
 
 
+
 @router.post("/verify-email")
 def verify_account_email(body: EmailCodeRequest, db: Session = Depends(get_db)):
     email = _email(body.email)
     user = db.scalar(select(m.User).where(func.lower(m.User.email) == email))
     credential = db.get(m.UserCredential, user.id) if user else None
     now = datetime.now(timezone.utc)
-    if (user is None or credential is None or credential.email_verified_at is not None or
-            credential.verification_expires_at is None or _utc(credential.verification_expires_at) <= now or
-            not hmac.compare_digest(
-                credential.verification_code_hash or "",
-                hash_one_time_code(user.id, body.code, "email-verification")
-            )):
+    if user is None or credential is None or credential.email_verified_at is not None:
+        raise HTTPException(status_code=400, detail="Verification code is invalid or expired")
+    if credential.verification_attempts >= 5:
+        raise HTTPException(status_code=400, detail="Verification code is invalid or expired")
+    expires = _utc(credential.verification_expires_at)
+    if expires is None or expires <= now:
+        credential.verification_code_hash = None
+        credential.verification_expires_at = None
+        db.commit()
+        raise HTTPException(status_code=400, detail="Verification code is invalid or expired")
+    expected = hash_one_time_code(user.id, body.code, "email-verification")
+    if not hmac.compare_digest(credential.verification_code_hash or "", expected):
+        credential.verification_attempts += 1
+        if credential.verification_attempts >= 5:
+            credential.verification_code_hash = None
+            credential.verification_expires_at = None
+        db.commit()
         raise HTTPException(status_code=400, detail="Verification code is invalid or expired")
     credential.email_verified_at = now
     credential.verification_code_hash = None
     credential.verification_expires_at = None
+    credential.verification_attempts = 0
     db.commit()
     return {"message": "Email verified. You can now sign in."}
 
@@ -176,6 +189,7 @@ def resend_verification(body: AccountLogin, db: Session = Depends(get_db)):
         code = f"{secrets.randbelow(1_000_000):06d}"
         credential.verification_code_hash = hash_one_time_code(user.id, code, "email-verification")
         credential.verification_expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+        credential.verification_attempts = 0
         send_security_code(email, "Verify your StayEasy account", code,
                            f"Your StayEasy verification code is {code}. It expires in 15 minutes.")
         db.commit()
@@ -244,10 +258,12 @@ def forgot_password(body: EmailRequest, db: Session = Depends(get_db)):
         code = f"{secrets.randbelow(1_000_000):06d}"
         credential.reset_code_hash = hash_one_time_code(user.id, code, "password-reset")
         credential.reset_expires_at = datetime.now(timezone.utc) + timedelta(minutes=15)
+        credential.reset_attempts = 0
         send_security_code(email, "Reset your StayEasy password", code,
                            f"Your StayEasy password reset code is {code}. It expires in 15 minutes. If you did not request this, ignore this email.")
         db.commit()
     return {"message": "If a verified account exists for that email, a reset code has been sent."}
+
 
 
 @router.post("/reset-password")
@@ -256,18 +272,32 @@ def reset_password(body: PasswordResetConfirm, db: Session = Depends(get_db)):
     user = db.scalar(select(m.User).where(func.lower(m.User.email) == email))
     credential = db.get(m.UserCredential, user.id) if user else None
     now = datetime.now(timezone.utc)
-    if (user is None or credential is None or credential.email_verified_at is None or
-            credential.reset_expires_at is None or _utc(credential.reset_expires_at) <= now or
-            not hmac.compare_digest(
-                credential.reset_code_hash or "",
-                hash_one_time_code(user.id, body.code, "password-reset")
-            )):
+    if user is None or credential is None or credential.email_verified_at is None:
+        raise HTTPException(status_code=400, detail="Password reset code is invalid or expired")
+    if credential.reset_attempts >= 5:
+        raise HTTPException(status_code=400, detail="Password reset code is invalid or expired")
+    expires = _utc(credential.reset_expires_at)
+    if expires is None or expires <= now:
+        credential.reset_code_hash = None
+        credential.reset_expires_at = None
+        db.commit()
+        raise HTTPException(status_code=400, detail="Password reset code is invalid or expired")
+    expected = hash_one_time_code(user.id, body.code, "password-reset")
+    if not hmac.compare_digest(credential.reset_code_hash or "", expected):
+        credential.reset_attempts += 1
+        if credential.reset_attempts >= 5:
+            credential.reset_code_hash = None
+            credential.reset_expires_at = None
+        db.commit()
         raise HTTPException(status_code=400, detail="Password reset code is invalid or expired")
     credential.password_hash = hash_password(body.new_password)
     credential.reset_code_hash = None
     credential.reset_expires_at = None
+    credential.reset_attempts = 0
     credential.failed_login_attempts = 0
     credential.locked_until = None
     credential.auth_version += 1
     db.commit()
     return {"message": "Password changed. Sign in again with your new password."}
+
+
