@@ -369,6 +369,7 @@ def test_tenant_moveout_request_is_property_scoped_and_owner_approval_does_not_r
     assert customer_requests.json()[0]["status"] == "approved"
     assert customer_requests.json()[0]["owner_note"].startswith("Approved.")
 
+    set_actor("owner-1", "owner")
     stays = client.get("/owner/stays", params={"property_id": prop["id"]})
     assert stays.status_code == 200, stays.text
     assert stays.json()[0]["status"] == "notice_given"
