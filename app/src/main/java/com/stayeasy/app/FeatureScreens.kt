@@ -257,7 +257,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                     }
                 }
                 val rawStatus = response.optString("status", nextStatus.lowercase(Locale.ROOT).replace(' ', '_'))
-                val displayStatus = rawStatus.replace('_', ' ').replaceFirstChar { it.uppercase(Locale.ROOT) }
+                val displayStatus = rawStatus.replace('_', ' ').replaceFirstChar { it.uppercase() }
                 StayRecordStore.update(context, category, record.copy(status = displayStatus, updatedAt = System.currentTimeMillis()))
                 refresh()
                 StayRecordStore.notify(context, "$title updated on server", "${record.title}: $displayStatus", record.property)
@@ -341,7 +341,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                             Spacer(Modifier.height(8.dp)); Divider(color = SE.Border.copy(alpha = .65f))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("${r.source} · ${StayRecordStore.dateLabel(r.updatedAt)}", color = SE.Muted, fontSize = 8.sp, modifier = Modifier.weight(1f), maxLines = 2)
-                                                if (r.source != "Server") TextButton(onClick = { openEdit(r) }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Edit", color = SE.Blue, fontSize = 10.sp) }
+                                if (r.source != "Server") TextButton(onClick = { openEdit(r) }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Edit", color = SE.Blue, fontSize = 10.sp) }
                                 if (r.source != "Server") TextButton(onClick = {
                                     val next = cycleStatus(category, r.status)
                                     val updated = r.copy(status = next, updatedAt = System.currentTimeMillis())
