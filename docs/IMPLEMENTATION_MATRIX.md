@@ -7,7 +7,7 @@ This matrix maps the full requested checklist to the current deliverable. “Loc
 - **Android:** native Kotlin/Jetpack Compose screens, local sample discovery, filters, favourites, details, owner listing wizard, local draft record, theme settings, persisted generic operational records, bed state board, customer booking request flow, and comparison up to three properties.
 - **Backend:** FastAPI/SQLAlchemy/PostgreSQL service foundation, role/permission checks, property review queue, inventory, enquiry/visit/reservation/stay lifecycle, ledger, maintenance, notices, saved searches, staff, meal plans, housekeeping, visitor log, reviews, notifications and audit/report endpoints.
 - **Admin:** browser-based listing review console for admins with decision actions, platform counts and audit log.
-- **Not yet integrated:** Android ↔ API account/login/sync, actual Google Maps SDK/Places API, media object storage, push provider, payment gateway/reconciliation, full web owner portal, iOS and production account deletion. These need credentials, provider decisions and security/legal review.
+- **Not yet integrated:** email/phone verification, password recovery, rate limiting/abuse controls, MFA/OIDC and session revocation; full account-data deletion; actual Google Maps SDK/Places API, media object storage, push provider, payment gateway/reconciliation, full web owner portal, iOS and complete Android↔API sync for all workflows. These need integration and security/legal review.
 
 ## 1. Customer app — finding a PG
 
