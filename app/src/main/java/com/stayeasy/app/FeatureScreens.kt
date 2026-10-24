@@ -183,8 +183,66 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
     val sessionToken = StayApiClient.currentSessionToken(apiPreferences.apiBaseUrl)
     val remoteScope = rememberCoroutineScope()
     var remoteSyncMessage by remember(category) { mutableStateOf("") }
-    LaunchedEffect(category, apiPreferences.apiBaseUrl, sessionToken) {
-        if (category in setOf("enquiries", "reservations", "visits", "issues") && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()) {
+    val financeCategories = setOf("payments", "charges", "deposits", "expenses", "food")
+    val isFinanceCategory = category in financeCategories
+    val serverFinanceMode = ownerMode && isFinanceCategory && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()
+    var showBillingDialog by remember(category) { mutableStateOf(false) }
+    var billingPropertyIdText by remember(category) { mutableStateOf("") }
+    var billingPeriodText by remember(category) { mutableStateOf(java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM"))) }
+    var billingDueDateText by remember(category) { mutableStateOf(java.time.LocalDate.now().plusDays(7).toString()) }
+    var generatingBilling by remember(category) { mutableStateOf(false) }
+    var billingError by remember(category) { mutableStateOf("") }
+    var savingServerRecord by remember(category) { mutableStateOf(false) }
+
+    fun mapLedgerRows(rows: List<org.json.JSONObject>): List<StayRecord> = rows.mapNotNull { row ->
+        val ledgerCategory = row.optString("category")
+        val matches = when (category) {
+            "payments" -> ledgerCategory == "payment"
+            "charges" -> ledgerCategory in setOf("rent_charge", "food", "utility", "late_fee")
+            "deposits" -> ledgerCategory in setOf("deposit", "refund", "deduction")
+            "expenses" -> ownerMode && ledgerCategory == "expense"
+            "food" -> ownerMode && ledgerCategory == "food"
+            else -> false
+        }
+        if (!matches) return@mapNotNull null
+        val propertyName = row.optString("property_name", "Property #${row.optLong("property_id")}")
+        val providerStatus = row.optString("provider_status", "manual_record")
+        val description = row.optString("description")
+        val period = row.optString("billing_period")
+        val dueDate = row.optString("due_date")
+        val reference = row.optString("payment_reference")
+        val typeLabel = when (ledgerCategory) {
+            "rent_charge" -> "Rent charge"; "payment" -> "Payment record"; "deposit" -> "Security deposit"
+            "refund" -> "Deposit refund"; "deduction" -> "Deposit deduction"; "expense" -> "Operating expense"
+            "food" -> "Food charge"; "utility" -> "Utility charge"; "late_fee" -> "Late fee"
+            else -> ledgerCategory.replace('_', ' ').replaceFirstChar { it.uppercase() }
+        }
+        val detailParts = mutableListOf<String>()
+        if (period.isNotBlank()) detailParts += "Billing period: $period"
+        if (dueDate.isNotBlank()) detailParts += "Due: $dueDate"
+        if (reference.isNotBlank()) detailParts += "Reference: $reference"
+        if (description.isNotBlank()) detailParts += description
+        detailParts += if (providerStatus == "manual_record") "Manually recorded · not verified by a payment provider" else "Provider status: $providerStatus"
+        val rawStatus = row.optString("status", "open").replace('_', ' ')
+        val displayStatus = if (ledgerCategory == "payment" && providerStatus == "manual_record") "Recorded manually"
+            else rawStatus.replaceFirstChar { it.uppercase() }
+        val residentId = row.optString("resident_id")
+        StayRecord(
+            id = "server-ledger-${row.optLong("id")}",
+            category = category,
+            title = "$typeLabel · $propertyName",
+            details = detailParts.joinToString("\\n"),
+            status = displayStatus,
+            amount = row.optInt("amount"),
+            person = if (ownerMode && residentId.isNotBlank()) "Resident account · ${residentId.take(8)}" else "",
+            property = propertyName,
+            unit = row.optString("unit_code"),
+            date = dueDate.ifBlank { row.optString("billing_period") },
+            source = "Server"
+        )
+    }
+    LaunchedEffect(category, apiPreferences.apiBaseUrl, sessionToken, ownerMode) {
+        if ((category in setOf("enquiries", "reservations", "visits", "issues") || isFinanceCategory) && apiPreferences.apiBaseUrl.isNotBlank() && !sessionToken.isNullOrBlank()) {
             try {
                 val pulled = withContext(Dispatchers.IO) {
                     when (category) {
@@ -229,6 +287,13 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                                 source = "Server"
                             )
                         }
+                        "payments", "charges", "deposits", "expenses", "food" -> {
+                            val ledgerRows = withContext(Dispatchers.IO) {
+                                if (ownerMode) StayApiClient.ownerLedger(apiPreferences.apiBaseUrl, sessionToken)
+                                else StayApiClient.myLedger(apiPreferences.apiBaseUrl, sessionToken)
+                            }
+                            mapLedgerRows(ledgerRows)
+                        }
                         else -> StayApiClient.visits(apiPreferences.apiBaseUrl, sessionToken).map { row ->
                             val id = row.optLong("id")
                             val property = row.optString("property_name", "Property #${row.optLong("property_id")}")
@@ -242,7 +307,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                         }
                     }
                 }
-                StayRecordStore.replaceServerRecords(context, category, pulled)
+                StayRecordStore.replaceServerRecords(context, category, pulled, preserveLocal = category !in financeCategories)
                 records.clear(); records.addAll(StayRecordStore.load(context, category))
                 remoteSyncMessage = "Synced ${pulled.size} server record(s)"
             } catch (e: Exception) {
