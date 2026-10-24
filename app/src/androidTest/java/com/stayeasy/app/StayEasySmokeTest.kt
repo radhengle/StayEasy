@@ -1,5 +1,6 @@
 package com.stayeasy.app
 
+import android.graphics.Bitmap
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
@@ -8,6 +9,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
+import java.io.File
+import java.io.FileOutputStream
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -28,11 +32,27 @@ class StayEasySmokeTest {
         composeRule.onNode(hasText(label, substring = true) and hasClickAction()).performScrollTo().performClick()
     }
 
+    /** Keeps lightweight, credential-free emulator screenshots available as a CI artifact. */
+    private fun captureScreenshot(name: String) {
+        composeRule.waitForIdle()
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val bitmap = instrumentation.uiAutomation.takeScreenshot()
+        val directory = File(instrumentation.targetContext.filesDir, "stayeasy-screenshots")
+        assertTrue("Unable to create screenshot directory", directory.mkdirs() || directory.isDirectory)
+        val destination = File(directory, "$name.png")
+        FileOutputStream(destination).use { output ->
+            assertTrue("Unable to encode screenshot $name", bitmap.compress(Bitmap.CompressFormat.PNG, 100, output))
+        }
+        bitmap.recycle()
+        assertTrue("Screenshot was not written: $destination", destination.exists() && destination.length() > 0)
+    }
+
     @Test
     fun launchesCustomerHome() {
         composeRule.onNodeWithText("StayEasy").assertIsDisplayed()
         composeRule.onNodeWithText("Find a place that").assertIsDisplayed()
         composeRule.onNodeWithText("Explore").assertIsDisplayed()
+        captureScreenshot("customer-home")
     }
 
     @Test
@@ -51,6 +71,7 @@ class StayEasySmokeTest {
         composeRule.onNodeWithText("Filters").assertIsDisplayed()
         composeRule.onNodeWithText("Map").assertIsDisplayed()
         composeRule.onNode(hasText("Monthly rent", substring = true)).assertIsDisplayed()
+        captureScreenshot("explore-search")
     }
 
     @Test
@@ -75,6 +96,7 @@ class StayEasySmokeTest {
         composeRule.onNodeWithText("Continue as Owner").performClick()
         composeRule.onNodeWithText("Your business, at a glance").assertIsDisplayed()
         composeRule.onNodeWithText("Your properties", useUnmergedTree = true).assertIsDisplayed()
+        captureScreenshot("owner-workspace-preview")
     }
 
     @Test
