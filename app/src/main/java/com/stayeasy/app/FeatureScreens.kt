@@ -204,7 +204,7 @@ private fun candidateRecordForLedger(
     }
     val parts = mutableListOf<String>()
     if (billingPeriod.isNotBlank()) parts += "Billing period: $billingPeriod"
-    if (dueDate.isNotBlank()) parts += "Due date: $dueDate"
+    if (dueDate.isNotBlank()) parts += if (entryType == "payment") "Payment date recorded: $dueDate" else "Due date: $dueDate"
     if (residentStayId != null) parts += "Resident stay ID: $residentStayId"
     if (reference.isNotBlank()) parts += "Reference: $reference"
     if (description.isNotBlank()) parts += description
@@ -267,6 +267,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
         val description = row.optString("description")
         val period = row.optString("billing_period")
         val dueDate = row.optString("due_date")
+        val paidAt = row.optString("paid_at").take(10)
         val reference = row.optString("payment_reference")
         val typeLabel = when (ledgerCategory) {
             "rent_charge" -> "Rent charge"; "payment" -> "Payment record"; "deposit" -> "Security deposit"
@@ -276,7 +277,8 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
         }
         val detailParts = mutableListOf<String>()
         if (period.isNotBlank()) detailParts += "Billing period: $period"
-        if (dueDate.isNotBlank()) detailParts += "Due: $dueDate"
+        if (ledgerCategory == "payment" && paidAt.isNotBlank()) detailParts += "Payment date recorded: $paidAt"
+        else if (dueDate.isNotBlank()) detailParts += "Due: $dueDate"
         if (reference.isNotBlank()) detailParts += "Reference: $reference"
         if (description.isNotBlank()) detailParts += description
         detailParts += if (providerStatus == "manual_record") "Manually recorded · not verified by a payment provider" else "Provider status: $providerStatus"
@@ -294,7 +296,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
             person = if (ownerMode && residentId.isNotBlank()) "Resident account · ${residentId.take(8)}" else "",
             property = propertyName,
             unit = row.optString("unit_code"),
-            date = dueDate.ifBlank { row.optString("billing_period") },
+            date = if (ledgerCategory == "payment") paidAt.ifBlank { dueDate.ifBlank { period } } else dueDate.ifBlank { period },
             source = "Server"
         )
     }
@@ -557,7 +559,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                 Column(Modifier.heightIn(max = 480.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     OutlinedTextField(titleText, { titleText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(when (category) { "beds" -> "Bed / unit identifier"; "reservations" -> "Property or booking title"; "saved_searches" -> "Search name"; else -> "Title / subject" }) }, singleLine = true)
                     OutlinedTextField(detailsText, { detailsText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(when (category) { "saved_searches" -> "Search filters / criteria"; "issues" -> "Issue details"; "reservations" -> "Agreed terms / expiry"; "charges" -> "Billing period and description"; else -> "Details / notes" }) }, minLines = 2)
-                    OutlinedTextField(personText, { personText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(when (category) { "staff" -> "Staff member and role"; "visitors" -> "Visitor name / purpose"; "saved_searches" -> "Optional alert recipient"; else -> "Person / resident / customer" }) }, singleLine = true)
+                    if (!serverFinanceMode) OutlinedTextField(personText, { personText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(when (category) { "staff" -> "Staff member and role"; "visitors" -> "Visitor name / purpose"; "saved_searches" -> "Optional alert recipient"; else -> "Person / resident / customer" }) }, singleLine = true)
                     OutlinedTextField(
                         propertyText,
                         { propertyText = if (serverFinanceMode) it.filter(Char::isDigit).take(12) else it },
@@ -609,7 +611,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                         }
                     }
                     if (StayRecordConfig.usesAmount(category)) OutlinedTextField(amountText, { amountText = it.filter(Char::isDigit).take(9) }, modifier = Modifier.fillMaxWidth(), label = { Text(StayRecordConfig.amountLabel(category)) }, singleLine = true)
-                    OutlinedTextField(dateText, { dateText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(when (category) { "visits" -> "Visit date & time"; "reservations" -> "Expiry / move-in date"; "payments" -> "Recorded / due date (optional)"; "charges" -> "Rent due date"; "stays" -> "Joining / move-out date"; else -> "Date / due date (optional)" }) }, singleLine = true, placeholder = { Text("e.g. 2026-11-05") })
+                    OutlinedTextField(dateText, { dateText = it }, modifier = Modifier.fillMaxWidth(), label = { Text(when (category) { "visits" -> "Visit date & time"; "reservations" -> "Expiry / move-in date"; "payments" -> "Payment date (optional)"; "charges" -> "Rent due date"; "stays" -> "Joining / move-out date"; else -> "Date / due date (optional)" }) }, singleLine = true, placeholder = { Text("e.g. 2026-11-05") })
                     Text("Priority", color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                     Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("Low", "Normal", "High", "Urgent").forEach { FilterChip(selected = priority == it, onClick = { priority = it }, label = { Text(it, fontSize = 10.sp) }) } }
                     if (category == "reservations") Text("A matching active reservation for the same property + unit is blocked on this device. Production must enforce this atomically on the server.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
