@@ -2,7 +2,7 @@
 
 StayEasy is a PG discovery, booking, and accommodation-operations product. This project expands the original Kotlin/Jetpack Compose Android codebase with customer and owner workflows, local persistence, a configurable theme system, a FastAPI/PostgreSQL backend foundation, and a small browser-based moderation console.
 
-**This is a comprehensive development foundation, not a claim that every external integration is production-live.** The Android UI and local workflows are implemented, several public discovery actions can call the API, and API foundations are covered by automated tests. Google Maps/Places, online payments, OTP delivery, push/email/SMS, object storage, production identity, and real multi-device synchronisation for all records still require credentials and integration work. See [`docs/IMPLEMENTATION_MATRIX.md`](docs/IMPLEMENTATION_MATRIX.md) for the feature-by-feature status and [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) for release gates.
+**This is a comprehensive development foundation, not a claim that every external integration is production-live.** StayEasy now supports Tenant/Owner email-and-password registration and sign-in through the API, salted PBKDF2 password hashes, JWT sessions, and role-protected API routes. Email/phone verification, password recovery, abuse throttling, MFA/OIDC, Google Maps/Places, online payments, push/email/SMS, object storage, and full multi-device synchronization still require integration and security work. See [`docs/IMPLEMENTATION_MATRIX.md`](docs/IMPLEMENTATION_MATRIX.md) for the feature-by-feature status and [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) for release gates.
 
 ## Project layout
 
