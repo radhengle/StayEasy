@@ -27,24 +27,24 @@ router = APIRouter(prefix="/auth", tags=["authentication"])
 
 
 class AccountRegister(BaseModel):
-    email: str = Field(min_length=5, max_length=255, pattern=r"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+    email: str = Field(min_length=5, max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     display_name: str = Field(min_length=2, max_length=180)
     password: str = Field(min_length=12, max_length=128)
     requested_workspace: str = Field(default="tenant", pattern="^(tenant|owner)$")
 
 
 class EmailCodeRequest(BaseModel):
-    email: str = Field(min_length=5, max_length=255, pattern=r"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
-    code: str = Field(pattern=r"^\\d{6}$")
+    email: str = Field(min_length=5, max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+    code: str = Field(pattern=r"^\d{6}$")
 
 
 class AccountLogin(BaseModel):
-    email: str = Field(min_length=5, max_length=255, pattern=r"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+    email: str = Field(min_length=5, max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
     password: str = Field(min_length=1, max_length=128)
 
 
 class EmailRequest(BaseModel):
-    email: str = Field(min_length=5, max_length=255, pattern=r"^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+    email: str = Field(min_length=5, max_length=255, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 class PasswordResetConfirm(EmailCodeRequest):
