@@ -513,6 +513,87 @@ def test_owner_property_inventory_is_scoped_and_contains_server_units():
     assert {row["id"] for row in admin_rows.json()} == {first_property["id"], second_property["id"]}
 
 
+def test_owner_inventory_tree_derives_floor_room_bed_state_from_reservation_and_stay_records():
+    prop, unit = setup_property(owner_id="owner-1")
+    set_actor("owner-1", "owner")
+    initial = client.get(f"/owner/properties/{prop['id']}/inventory-tree")
+    assert initial.status_code == 200, initial.text
+    tree = initial.json()
+    assert tree["inventory"] == {"total": 1, "available": 1, "reserved": 0, "occupied": 0, "unavailable": 0}
+    assert tree["floors"][0]["floor_label"] == "First"
+    assert tree["floors"][0]["rooms"][0]["room_code"] == "101"
+    assert tree["floors"][0]["rooms"][0]["beds"][0]["unit_code"] == "101-A"
+    assert tree["floors"][0]["rooms"][0]["beds"][0]["status"] == "available"
+
+    set_actor("customer-1", "customer")
+    reservation = client.post("/reservations", json={
+        "property_id": prop["id"], "unit_id": unit["id"],
+        "move_in_date": (date.today() + timedelta(days=7)).isoformat(),
+        "terms_snapshot": {"currency": "INR"}
+    })
+    assert reservation.status_code == 201, reservation.text
+
+    set_actor("owner-1", "owner")
+    reserved_tree = client.get(f"/owner/properties/{prop['id']}/inventory-tree").json()
+    reserved_bed = reserved_tree["floors"][0]["rooms"][0]["beds"][0]
+    assert reserved_bed["status"] == "reserved"
+    assert reserved_bed["reserved_for"]["user_id"] == "customer-1"
+    assert reserved_tree["inventory"]["available"] == 0
+    assert reserved_tree["inventory"]["reserved"] == 1
+
+    stay = create_test_stay({
+        "property_id": prop["id"], "unit_id": unit["id"], "resident_id": "customer-1",
+        "reservation_id": reservation.json()["id"], "joining_date": date.today().isoformat(),
+        "agreed_monthly_rent": 9000, "deposit_held": 18000,
+    })
+    assert stay.status_code == 201, stay.text
+    occupied_tree = client.get(f"/owner/properties/{prop['id']}/inventory-tree").json()
+    occupied_bed = occupied_tree["floors"][0]["rooms"][0]["beds"][0]
+    assert occupied_bed["status"] == "occupied"
+    assert occupied_bed["occupant"]["user_id"] == "customer-1"
+    assert occupied_bed["occupant"]["display_name"] == "customer-1"
+    assert occupied_tree["inventory"]["occupied"] == 1
+
+
+def test_owner_can_reassign_pending_reservation_and_old_bed_is_released():
+    prop, first_unit = setup_property(owner_id="owner-1")
+    set_actor("owner-1", "owner")
+    second = client.post(f"/owner/properties/{prop['id']}/units", json={
+        "floor_label": "Second", "room_code": "202", "unit_code": "202-B",
+        "rentable_type": "bed", "sharing_capacity": 3, "monthly_rent": 10500, "deposit": 21000,
+    })
+    assert second.status_code == 201, second.text
+
+    set_actor("customer-1", "customer")
+    reservation = client.post("/reservations", json={
+        "property_id": prop["id"], "unit_id": first_unit["id"],
+        "move_in_date": (date.today() + timedelta(days=7)).isoformat(),
+        "terms_snapshot": {"currency": "INR"}
+    })
+    assert reservation.status_code == 201, reservation.text
+
+    set_actor("owner-1", "owner")
+    moved = client.post(f"/owner/reservations/{reservation.json()['id']}/reassign", json={
+        "new_unit_id": second.json()["id"],
+        "reason": "The original room is temporarily unavailable; this bed has the same confirmed terms."
+    })
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["unit_id"] == second.json()["id"]
+    assert moved.json()["tenant_notified"] is True
+    reservations = client.get("/reservations")
+    assert reservations.status_code == 200
+    assert reservations.json()[0]["unit_id"] == second.json()["id"]
+
+    units = client.get("/owner/units", params={"property_id": prop["id"]})
+    assert units.status_code == 200, units.text
+    by_id = {row["id"]: row for row in units.json()}
+    assert by_id[first_unit["id"]]["status"] == "available"
+    assert by_id[second.json()["id"]]["status"] == "reserved"
+    notifications = client.get("/notifications")
+    assert notifications.status_code == 200
+    assert any(row["title"] == "Proposed bed changed" for row in notifications.json())
+
+
 def test_owner_inventory_status_update_is_server_confirmed_and_property_scoped():
     prop, unit = setup_property(owner_id="owner-1")
     set_actor("owner-1", "owner")
