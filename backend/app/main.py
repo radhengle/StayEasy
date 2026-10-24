@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -617,7 +617,7 @@ def create_reservation(body: ReservationCreate, actor: dict = Depends(require_ro
         if unit.status != "available": raise HTTPException(409, f"Unit is currently {unit.status}")
         expire_pending_reservations_for_unit(db, unit.id, actor)
         now = datetime.now(timezone.utc)
-        active_pending = and_(m.Reservation.status == "pending", m.Reservation.expires_at > now)
+        active_pending = and_(m.Reservation.status == "pending", or_(m.Reservation.expires_at.is_(None), m.Reservation.expires_at > now))
         active_status = m.Reservation.status.in_(["confirmed", "checked_in"])
         conflict = db.scalar(select(m.Reservation.id).where(
             m.Reservation.unit_id == unit.id,
