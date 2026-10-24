@@ -1248,7 +1248,7 @@ private fun ProfileScreen(
             if (account != null) StatusPill("SIGNED IN", SE.BlueSoft, SE.Blue) else Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = SE.Blue)
         }
         Spacer(Modifier.height(16.dp))
-        MenuRow(if (account == null) "Sign in / Create account" else "Account & security", if (account == null) "Verify your email and sync your account" else "View account, refresh session or sign out", "Verify your email and sync your account", Icons.Filled.Lock, onAccount)
+        MenuRow(if (account == null) "Sign in / Create account" else "Account & security", if (account == null) "Verify your email and sync your account" else "View account, refresh session or sign out", Icons.Filled.Lock, onAccount)
         MenuRow("Notifications", "Manage alerts and updates", Icons.Filled.Notifications, onNotifications)
         MenuRow("All tools & preferences", "Saved searches, compare, bookings, themes and privacy", Icons.Filled.Tune, onSettings)
         MenuRow("Privacy & security", "Controls and account data", Icons.Filled.Lock, onSettings)
