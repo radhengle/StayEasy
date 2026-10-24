@@ -2129,6 +2129,7 @@ private fun OwnerBedsScreen(
     var roomIndex by remember { mutableIntStateOf(0) }
     val listing = listings.getOrNull(propertyIndex) ?: demoListings.first()
     val serverUnits = listing.serverUnits
+    val isServerListing = listing.serverPropertyId != null
 
     fun displayRoom(code: String): String {
         val number = code.removePrefix("ROOM-").removePrefix("R").toIntOrNull() ?: code.toIntOrNull()
@@ -2141,17 +2142,17 @@ private fun OwnerBedsScreen(
         return "Bed ${suffix.ifBlank { (index + 1).toString() }}"
     }
 
-    val roomLabels = if (serverUnits.isNotEmpty()) {
+    val roomLabels = if (isServerListing) {
         serverUnits.map { displayRoom(it.roomCode) }.distinct()
     } else {
         (1..listing.totalRooms.coerceIn(1, 30)).map { "Room " + (100 + it) }
     }
     val roomCount = roomLabels.size.coerceAtLeast(1)
-    val declaredBedCount = if (serverUnits.isNotEmpty()) serverUnits.size else listing.totalBeds.coerceAtLeast(0)
+    val declaredBedCount = if (isServerListing) serverUnits.size else listing.totalBeds.coerceAtLeast(0)
     val currentRoomIndex = roomIndex.coerceIn(0, roomLabels.lastIndex.coerceAtLeast(0))
     val roomLabel = roomLabels.getOrElse(currentRoomIndex) { "Room 101" }
     val currentServerRoomCode = serverUnits.firstOrNull { displayRoom(it.roomCode) == roomLabel }?.roomCode
-    val bedsPerRoom = if (serverUnits.isNotEmpty()) {
+    val bedsPerRoom = if (isServerListing) {
         serverUnits.count { it.roomCode == currentServerRoomCode }
     } else {
         (declaredBedCount / roomCount + if (currentRoomIndex < declaredBedCount % roomCount) 1 else 0).coerceIn(0, 6)
@@ -2159,7 +2160,7 @@ private fun OwnerBedsScreen(
     val bedLetters = listOf("A", "B", "C", "D", "E", "F")
     val bedRecords = remember(listing.id, roomLabel, listing.serverUnits) {
         mutableStateListOf<StayRecord>().apply {
-            if (serverUnits.isNotEmpty()) {
+            if (isServerListing) {
                 serverUnits.filter { displayRoom(it.roomCode) == roomLabel }.forEachIndexed { index, unit ->
                     val status = unit.status.lowercase(Locale.ROOT).replaceFirstChar {
                         if (it.isLowerCase()) it.titlecase(Locale.ROOT) else it.toString()
@@ -2260,7 +2261,7 @@ private fun OwnerBedsScreen(
         Spacer(Modifier.height(13.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
             roomLabels.forEachIndexed { i, room ->
-                val count = if (serverUnits.isNotEmpty()) {
+                val count = if (isServerListing) {
                     serverUnits.count { displayRoom(it.roomCode) == room }
                 } else {
                     (declaredBedCount / roomCount + if (i < declaredBedCount % roomCount) 1 else 0).coerceIn(0, 6)
@@ -2270,8 +2271,10 @@ private fun OwnerBedsScreen(
         }
         Spacer(Modifier.height(7.dp))
         Text(
-            if (listing.serverPropertyId != null && serverUnits.isNotEmpty())
+            if (isServerListing && serverUnits.isNotEmpty())
                 "Inventory is loaded from the StayEasy server. Status changes appear only after server confirmation. Resident assignment requires a verified resident account and is not connected yet."
+            else if (isServerListing)
+                "This property exists on the server but has no room/bed units returned. Add inventory before attempting resident assignment."
             else
                 "This is local/sample inventory. Status changes are saved on this device and are not shared with other accounts.",
             color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp
