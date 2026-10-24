@@ -318,9 +318,9 @@ private fun RentBudgetSlider(value: Float, onValueChange: (Float) -> Unit) {
         Slider(value = rentSliderPosition(value.roundToInt()), onValueChange = { onValueChange(rentFromSlider(it)) }, valueRange = 0f..1f)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("₹100", color = SE.Muted, fontSize = 10.sp)
-            Text("₹30,000 · fine control", color = SE.Blue, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
             Text("₹1,00,000", color = SE.Muted, fontSize = 10.sp)
         }
+        Text("Fine control through ₹30,000; higher rents use less slider travel.", color = SE.Blue, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -1959,15 +1959,21 @@ private fun OwnerBedsScreen(listings: List<PgListing>, initialPropertyId: Long, 
         Spacer(Modifier.height(12.dp)); Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(7.dp)) { listings.forEachIndexed { index, p -> FilterChip(selected = propertyIndex == index, onClick = { propertyIndex = index; roomIndex = 0 }, label = { Text(p.name, maxLines = 1) }) } }
         Spacer(Modifier.height(13.dp)); Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(13.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(listing.name, color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp); Text(listing.area, color = SE.Muted, fontSize = 10.sp) }; Text("${listing.totalBeds} declared beds", color = SE.Blue, fontWeight = FontWeight.Bold) }
-                Spacer(Modifier.height(11.dp)); Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(listing.name, color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp); Text(listing.area, color = SE.Muted, fontSize = 10.sp) }; Text("${listing.totalRooms} rooms · ${listing.totalBeds} declared beds", color = SE.Blue, fontWeight = FontWeight.Bold, fontSize = 11.sp) }
+                Text("Selected room · ${bedRecords.size} beds", color = SE.Muted, fontSize = 10.sp)
+                Spacer(Modifier.height(7.dp)); Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                     StatusPill("${bedRecords.count { it.status == "Occupied" }} occupied", SE.BlueSoft, SE.Blue)
                     StatusPill("${bedRecords.count { it.status == "Available" }} available", SE.Mint, SE.MintText)
                     StatusPill("${bedRecords.count { it.status == "Reserved" }} reserved", SE.OrangeSoft, SE.Orange)
                 }
             }
         }
-        Spacer(Modifier.height(13.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { roomLabels.forEachIndexed { i, room -> FilterChip(selected = roomIndex == i, onClick = { roomIndex = i }, label = { Text(room) }) } }
+        Spacer(Modifier.height(13.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            roomLabels.forEachIndexed { i, room ->
+                val count = (declaredBedCount / roomCount + if (i < declaredBedCount % roomCount) 1 else 0).coerceIn(0, 6)
+                FilterChip(selected = roomIndex == i, onClick = { roomIndex = i }, label = { Text("$room · $count beds") })
+            }
+        }
         Spacer(Modifier.height(7.dp)); Text("Room and bed choices follow the counts entered for this property. Changes are stored locally in this prototype; a connected backend is needed to prevent double-bookings across devices.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
         Spacer(Modifier.height(9.dp)); LazyColumn(modifier = Modifier.weight(1f), contentPadding = PaddingValues(bottom = 12.dp)) {
             items(bedRecords, key = { it.id }) { record ->
