@@ -349,8 +349,10 @@ def resolve_unit_inventory(db: Session, unit: m.PropertyUnit) -> dict[str, Any]:
             )
         )
     ).order_by(m.Reservation.created_at.desc()).limit(1))
-    status = "occupied" if stay is not None else "reserved" if reservation is not None else (
-        unit.status if unit.status in {"maintenance", "inactive"} else "available"
+    # Safety blocks override the displayed availability state while retaining the
+    # occupant/reservation details below for authorized owner inspection.
+    status = unit.status if unit.status in {"maintenance", "inactive"} else (
+        "occupied" if stay is not None else "reserved" if reservation is not None else "available"
     )
     resident = db.get(m.User, stay.resident_id) if stay else None
     reserved_customer = db.get(m.User, reservation.customer_id) if reservation else None
