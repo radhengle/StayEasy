@@ -395,6 +395,61 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+private fun ThemeBackdrop(modifier: Modifier = Modifier) {
+    Canvas(modifier) {
+        val width = size.width
+        val height = size.height
+        val accent = SE.Blue.copy(alpha = if (SE.isDark) 0.105f else 0.055f)
+        val warm = SE.Orange.copy(alpha = if (SE.isDark) 0.09f else 0.045f)
+        val stroke = (1.15f).dp.toPx()
+        when (SE.DesignFamily) {
+            "Coastal" -> {
+                repeat(4) { i ->
+                    drawCircle(
+                        color = accent,
+                        radius = width * (0.23f + i * 0.055f),
+                        center = Offset(width * 0.98f, height * 0.04f),
+                        style = Stroke(width = stroke)
+                    )
+                }
+                drawCircle(color = warm, radius = width * 0.08f, center = Offset(width * 0.08f, height * 0.74f))
+            }
+            "Studio Editorial" -> {
+                drawRect(color = warm, topLeft = Offset(width * 0.72f, height * 0.035f), size = Size(width * 0.24f, height * 0.10f))
+                drawLine(accent, Offset(width * 0.06f, height * 0.17f), Offset(width * 0.91f, height * 0.17f), strokeWidth = stroke)
+                drawCircle(accent, radius = width * 0.045f, center = Offset(width * 0.92f, height * 0.17f))
+            }
+            "Industrial Grid" -> {
+                for (i in 0..10) {
+                    val x = width * i / 10f
+                    drawLine(accent, Offset(x, 0f), Offset(x, height), strokeWidth = 0.7f.dp.toPx())
+                }
+                for (i in 0..16) {
+                    val y = height * i / 16f
+                    drawLine(accent, Offset(0f, y), Offset(width, y), strokeWidth = 0.7f.dp.toPx())
+                }
+                drawRect(warm, topLeft = Offset(width * 0.78f, height * 0.04f), size = Size(width * 0.16f, height * 0.06f))
+            }
+            "Gallery Minimal" -> {
+                drawCircle(accent, radius = width * 0.25f, center = Offset(width * 1.03f, height * 0.055f), style = Stroke(width = stroke))
+                drawCircle(warm, radius = width * 0.16f, center = Offset(width * 0.02f, height * 0.46f), style = Stroke(width = stroke))
+            }
+            "Courtyard Heritage" -> {
+                drawCircle(warm, radius = width * 0.20f, center = Offset(width * 0.90f, height * 0.08f))
+                drawCircle(accent, radius = width * 0.20f, center = Offset(width * 0.90f, height * 0.08f), style = Stroke(width = stroke * 1.5f))
+                drawLine(accent, Offset(width * 0.05f, height * 0.26f), Offset(width * 0.49f, height * 0.26f), strokeWidth = stroke)
+                drawLine(warm, Offset(width * 0.05f, height * 0.275f), Offset(width * 0.34f, height * 0.275f), strokeWidth = stroke)
+            }
+            else -> {
+                drawRect(accent, topLeft = Offset(width * 0.72f, height * 0.025f), size = Size(width * 0.22f, height * 0.065f))
+                drawRect(warm, topLeft = Offset(width * 0.81f, height * 0.105f), size = Size(width * 0.13f, height * 0.07f))
+                drawCircle(accent, radius = width * 0.065f, center = Offset(width * 0.72f, height * 0.105f))
+            }
+        }
+    }
+}
+
+@Composable
 private fun StayEasyTheme(preferences: StayPreferences, content: @Composable () -> Unit) {
     val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
     val dark = if (preferences.mode == "System") systemDark else preferences.mode == "Dark"
@@ -1092,7 +1147,7 @@ private fun HomeScreen(
         Spacer(Modifier.height(8.dp))
         Text("Thoughtful stays for students, professionals, friends and couples.", color = SE.Muted, fontSize = 14.sp, lineHeight = 20.sp)
         Spacer(Modifier.height(18.dp))
-        Card(shape = RoundedCornerShape(24.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), elevation = CardDefaults.cardElevation(2.dp), modifier = Modifier.fillMaxWidth()) {
+        Card(shape = SE.cardShape(24.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), elevation = CardDefaults.cardElevation(2.dp), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(15.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.LocationOn, null, tint = SE.Blue)
@@ -1155,7 +1210,7 @@ private fun HomeScreen(
         }
         listings.take(3).forEach { ListingCard(it, favorites.contains(it.id), { onListing(it.id) }, { onFavorite(it.id) }, compact = false) }
         Spacer(Modifier.height(12.dp))
-        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth().clickable(onClick = onOwner)) {
+        Card(shape = SE.cardShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth().clickable(onClick = onOwner)) {
             Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(44.dp).clip(RoundedCornerShape(14.dp)).background(Color.White.copy(alpha = 0.12f)), contentAlignment = Alignment.Center) { Icon(Icons.Filled.Apartment, null, tint = Color.White) }
                 Spacer(Modifier.width(12.dp))
@@ -1291,7 +1346,7 @@ private fun MapSearchScreen(location: String, onLocation: (String) -> Unit, list
         }
         Spacer(Modifier.height(10.dp))
         val current = listings.getOrNull(selected) ?: demoListings.first()
-        Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().clickable { onSelect(current.id) }) {
+        Card(shape = SE.cardShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().clickable { onSelect(current.id) }) {
             Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                 PropertyCover(current.photoUri, selected, Modifier.size(94.dp, 96.dp))
                 Spacer(Modifier.width(12.dp))
@@ -1529,7 +1584,7 @@ private fun ListingDetailsScreen(p: PgListing, isFavorite: Boolean, onFavorite: 
                 Column(horizontalAlignment = Alignment.End) { Text("Security deposit", color = SE.Muted, fontSize = 11.sp); Text(p.deposit.takeIf { it > 0 }?.let { money(it) } ?: "Not specified", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp); Text("one-time · confirm terms", color = SE.Muted, fontSize = 9.sp) }
             }
             Spacer(Modifier.height(11.dp))
-            Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft), modifier = Modifier.fillMaxWidth()) {
+            Card(shape = SE.cardShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(12.dp)) {
                     Text("Move-in cost estimate", color = SE.Ink, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     Spacer(Modifier.height(6.dp)); CompareLine("First month rent", money(p.monthlyRent)); CompareLine("Deposit", money(p.deposit))
@@ -1542,7 +1597,7 @@ private fun ListingDetailsScreen(p: PgListing, isFavorite: Boolean, onFavorite: 
             }
             if (p.foodMonthly > 0) {
                 Spacer(Modifier.height(11.dp))
-                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft), modifier = Modifier.fillMaxWidth()) {
+                Card(shape = SE.cardShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft), modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) { Text("Rent", color = SE.Muted, fontSize = 11.sp); Spacer(Modifier.weight(1f)); Text(money(p.monthlyRent), color = SE.Text, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
                         Spacer(Modifier.height(4.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text("Listed food charge", color = SE.Muted, fontSize = 11.sp); Spacer(Modifier.weight(1f)); Text(money(p.foodMonthly), color = SE.Text, fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
@@ -1573,7 +1628,7 @@ private fun ListingDetailsScreen(p: PgListing, isFavorite: Boolean, onFavorite: 
             RoomOption(p.sharing, p.monthlyRent, p.availableBeds, true, onRequest)
             Text("Looking for a different room type? Ask the owner about options and exact availability.", color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp)
             Spacer(Modifier.height(18.dp))
-            Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Background)) {
+            Card(shape = SE.cardShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Background)) {
                 Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(42.dp).clip(CircleShape).background(SE.BlueSoft), contentAlignment = Alignment.Center) { Icon(Icons.Filled.VerifiedUser, null, tint = SE.Blue) }
                     Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text("Before you commit", fontWeight = FontWeight.Bold, color = SE.Ink, fontSize = 13.sp); Text("Confirm total charges, room rules, exact availability and refund terms with the owner.", fontSize = 11.sp, color = SE.Muted, lineHeight = 16.sp) }
@@ -1612,7 +1667,7 @@ private fun VisitRequestScreen(p: PgListing, onBack: () -> Unit, onSubmit: (move
         }
         Spacer(Modifier.height(11.dp)); FormLabel("MESSAGE TO OWNER")
         OutlinedTextField(note, { note = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp), shape = RoundedCornerShape(14.dp), colors = fieldColors())
-        Spacer(Modifier.height(14.dp)); Card(shape = RoundedCornerShape(15.dp), colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft)) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Filled.Lock, null, tint = SE.Orange); Spacer(Modifier.width(8.dp)); Text("This request does not reserve a bed. Wait for the owner to confirm availability, charges, visit time and reservation terms.", color = SE.Text, fontSize = 11.sp, lineHeight = 16.sp) } }
+        Spacer(Modifier.height(14.dp)); Card(shape = SE.cardShape(15.dp), colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft)) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Filled.Lock, null, tint = SE.Orange); Spacer(Modifier.width(8.dp)); Text("This request does not reserve a bed. Wait for the owner to confirm availability, charges, visit time and reservation terms.", color = SE.Text, fontSize = 11.sp, lineHeight = 16.sp) } }
         Spacer(Modifier.height(19.dp)); PrimaryButton("Send request", Icons.AutoMirrored.Filled.ArrowForward) { onSubmit(moveIn, roomChoice, visitChoice, note) }
         Spacer(Modifier.height(10.dp)); Text(if (p.serverPropertyId != null) "Request is sent to the owner through the shared server. No bed is reserved and no payment is taken." else "This is a local demo listing; the request stays on this device.", color = SE.Muted, fontSize = 10.sp)
     }
@@ -1636,7 +1691,7 @@ private fun EnquiriesScreen(onChat: () -> Unit, onDetails: () -> Unit, onExplore
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { StatusPill("2 active", SE.BlueSoft, SE.Blue); StatusPill("1 visit planned", SE.Mint, SE.MintText) }
         Spacer(Modifier.height(15.dp))
         listOf(Triple("The Courtyard Co-Living", "Owner replied · 10 min ago", "Visit options available"), Triple("CityNest Living", "Waiting for owner · 1 hr ago", "Availability enquiry"), Triple("Maple House", "Visit planned · Tomorrow", "11:00 AM · Wakad")).forEachIndexed { i, item ->
-            Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp).clickable { onChat() }) {
+            Card(shape = SE.cardShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().padding(bottom = 10.dp).clickable { onChat() }) {
                 Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
                     PropertyCover("", i, Modifier.size(72.dp, 78.dp)); Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1663,7 +1718,7 @@ private fun ChatScreen(p: PgListing, onBack: () -> Unit, onSend: () -> Unit) {
         ChatBubble("Hi! I'm interested in the room. Is the bed available for my move-in date?", false)
         ChatBubble("Hello! Thanks for reaching out. We can confirm the exact bed and charges before you visit.", true)
         ChatBubble("Could I visit tomorrow evening?", false)
-        Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.Mint), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Column(Modifier.padding(13.dp)) { Text("Suggested next step", color = SE.MintText, fontWeight = FontWeight.Bold, fontSize = 12.sp); Text("Arrange a visit and confirm the total move-in cost.", color = SE.Text, fontSize = 12.sp); Spacer(Modifier.height(8.dp)); OutlinedButton(onClick = onSend, shape = RoundedCornerShape(11.dp)) { Icon(Icons.Filled.CalendarToday, null); Spacer(Modifier.width(6.dp)); Text("Request a visit") } } }
+        Card(shape = SE.cardShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.Mint), modifier = Modifier.fillMaxWidth().padding(top = 8.dp)) { Column(Modifier.padding(13.dp)) { Text("Suggested next step", color = SE.MintText, fontWeight = FontWeight.Bold, fontSize = 12.sp); Text("Arrange a visit and confirm the total move-in cost.", color = SE.Text, fontSize = 12.sp); Spacer(Modifier.height(8.dp)); OutlinedButton(onClick = onSend, shape = RoundedCornerShape(11.dp)) { Icon(Icons.Filled.CalendarToday, null); Spacer(Modifier.width(6.dp)); Text("Request a visit") } } }
         Spacer(Modifier.weight(1f))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 9.dp)) {
             OutlinedTextField(value = message, onValueChange = { message = it }, modifier = Modifier.weight(1f), placeholder = { Text("Write a message…", fontSize = 12.sp) }, shape = RoundedCornerShape(17.dp), colors = fieldColors(), maxLines = 3)
@@ -1786,20 +1841,20 @@ private fun MyStayScreen(
         }
         if (error.isNotBlank()) {
             Spacer(Modifier.height(9.dp))
-            Card(shape = RoundedCornerShape(13.dp), colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft)) {
+            Card(shape = SE.cardShape(13.dp), colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft)) {
                 Text(error, color = SE.Orange, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(12.dp))
             }
         }
         if (moveOutMessage.isNotBlank()) {
             Spacer(Modifier.height(8.dp))
-            Card(shape = RoundedCornerShape(13.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) {
+            Card(shape = SE.cardShape(13.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) {
                 Text(moveOutMessage, color = SE.Blue, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(12.dp))
             }
         }
 
         if (account == null) {
             Spacer(Modifier.height(14.dp))
-            Card(shape = RoundedCornerShape(23.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth()) {
+            Card(shape = SE.cardShape(23.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(17.dp)) {
                     StatusPill("SAMPLE PREVIEW", Color.White.copy(alpha = 0.13f), Color.White)
                     Spacer(Modifier.height(13.dp))
@@ -1811,7 +1866,7 @@ private fun MyStayScreen(
             }
         } else if (accountRole == "customer" && !loading && error.isBlank() && currentStay == null) {
             Spacer(Modifier.height(14.dp))
-            Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+            Card(shape = SE.cardShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                     Icon(Icons.Filled.Apartment, null, tint = SE.Blue)
                     Text("No server-backed stay yet", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp)
@@ -1823,7 +1878,7 @@ private fun MyStayScreen(
             }
         } else if (currentStay != null) {
             Spacer(Modifier.height(14.dp))
-            Card(shape = RoundedCornerShape(23.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth()) {
+            Card(shape = SE.cardShape(23.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(17.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         StatusPill(status.uppercase(Locale.ROOT), Color.White.copy(alpha = 0.13f), Color.White)
@@ -1883,7 +1938,7 @@ private fun MyStayScreen(
 
             if (currentMoveOutRequest != null) {
                 Spacer(Modifier.height(16.dp))
-                Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+                Card(shape = SE.cardShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("Move-out request", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
@@ -1950,7 +2005,7 @@ private fun MyStayScreen(
             Text("Previous stays", fontSize = 17.sp, fontWeight = FontWeight.Bold, color = SE.Ink)
             stays.filter { currentStay == null || it.optLong("id") != currentStay.optLong("id") }.forEach { row ->
                 Spacer(Modifier.height(8.dp))
-                Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+                Card(shape = SE.cardShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp)) {
                         Text(row.optString("property_name", "Property"), color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                         Text(
@@ -2054,7 +2109,7 @@ private fun TenantPaymentsScreen(onBack: () -> Unit, onReceipt: () -> Unit) {
     Column(Modifier.fillMaxSize().padding(18.dp)) {
         ScreenHeader("Payments & receipts", "A clear record of every charge", onBack = onBack)
         Spacer(Modifier.height(14.dp))
-        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) { Text("TOTAL PAID · DEMO", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SE.Blue); Text("₹37,000", color = SE.Ink, fontSize = 27.sp, fontWeight = FontWeight.ExtraBold); Text("Rent and deposit shown separately", color = SE.Muted, fontSize = 11.sp) } }
+        Card(shape = SE.cardShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) { Text("TOTAL PAID · DEMO", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SE.Blue); Text("₹37,000", color = SE.Ink, fontSize = 27.sp, fontWeight = FontWeight.ExtraBold); Text("Rent and deposit shown separately", color = SE.Muted, fontSize = 11.sp) } }
         Spacer(Modifier.height(18.dp)); Text("RECENT TRANSACTIONS", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
         listOf(PaymentRowData("October rent", "1 Oct 2026 · UPI", 12500, "Paid"), PaymentRowData("Security deposit", "1 Oct 2026 · Bank transfer", 22000, "Recorded"), PaymentRowData("September rent", "5 Sep 2026 · UPI", 12500, "Paid")).forEach { payment ->
             Row(Modifier.fillMaxWidth().padding(vertical = 13.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -2079,7 +2134,7 @@ private fun IssueScreen(onBack: () -> Unit, onSubmit: (String, String, String) -
         Spacer(Modifier.height(17.dp)); Text("Priority", fontWeight = FontWeight.SemiBold, color = SE.Ink); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Low", "Normal", "Urgent").forEach { FilterChip(selected = urgency == it, onClick = { urgency = it }, label = { Text(it) }) } }
         Spacer(Modifier.height(14.dp)); Text("Describe the problem", fontWeight = FontWeight.SemiBold, color = SE.Ink)
         OutlinedTextField(value = description, onValueChange = { description = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 120.dp), placeholder = { Text("What happened? Where should the manager look?") }, shape = RoundedCornerShape(15.dp), colors = fieldColors())
-        Spacer(Modifier.height(12.dp)); Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().clickable { }) { Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.CameraAlt, null, tint = SE.Blue); Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text("Add photos", color = SE.Ink, fontWeight = FontWeight.SemiBold); Text("Attach evidence if it helps explain the problem", color = SE.Muted, fontSize = 10.sp) }; Icon(Icons.Filled.Add, null, tint = SE.Blue) } }
+        Spacer(Modifier.height(12.dp)); Card(shape = SE.cardShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().clickable { }) { Row(Modifier.padding(15.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.CameraAlt, null, tint = SE.Blue); Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text("Add photos", color = SE.Ink, fontWeight = FontWeight.SemiBold); Text("Attach evidence if it helps explain the problem", color = SE.Muted, fontSize = 10.sp) }; Icon(Icons.Filled.Add, null, tint = SE.Blue) } }
         Spacer(Modifier.height(22.dp)); PrimaryButton("Submit issue", Icons.AutoMirrored.Filled.ArrowForward) { if (description.isBlank()) { description = "Please add a description before submitting." } else onSubmit(category, description, urgency) }
         Spacer(Modifier.height(10.dp)); Text("A shared ticket requires a connected customer session and an active server-backed stay. Otherwise, this report remains on this device.", color = SE.Muted, fontSize = 10.sp, lineHeight = 15.sp)
     }
@@ -2095,8 +2150,7 @@ private fun AccountTypeScreen(onTenant: () -> Unit, onOwner: () -> Unit, onBack:
             color = SE.Muted, fontSize = 12.sp, lineHeight = 18.sp
         )
         Spacer(Modifier.height(18.dp))
-        Card(
-            shape = RoundedCornerShape(20.dp),
+        Card(shape = SE.cardShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = SE.Surface),
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -2121,8 +2175,7 @@ private fun AccountTypeScreen(onTenant: () -> Unit, onOwner: () -> Unit, onBack:
             }
         }
         Spacer(Modifier.height(12.dp))
-        Card(
-            shape = RoundedCornerShape(20.dp),
+        Card(shape = SE.cardShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = SE.Ink),
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -2156,8 +2209,7 @@ private fun AccountTypeScreen(onTenant: () -> Unit, onOwner: () -> Unit, onBack:
             }
         }
         Spacer(Modifier.height(16.dp))
-        Card(
-            shape = RoundedCornerShape(14.dp),
+        Card(shape = SE.cardShape(14.dp),
             colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft),
             modifier = Modifier.fillMaxWidth()
         ) {
@@ -2208,8 +2260,7 @@ private fun ProfileScreen(
         MenuRow("Help & support", "Get help with a stay", Icons.Filled.ReportProblem, onSettings)
         MenuRow("Share StayEasy", "Invite someone to explore", Icons.Filled.Share, onSettings)
         Spacer(Modifier.height(18.dp))
-        Card(
-            shape = RoundedCornerShape(20.dp),
+        Card(shape = SE.cardShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = SE.Ink),
             modifier = Modifier.fillMaxWidth().clickable(onClick = onOwner)
         ) {
@@ -2275,7 +2326,7 @@ private fun AccountAuthScreen(
         ScreenHeader("StayEasy account", "Secure access to your stay records", onBack = onBack)
         Spacer(Modifier.height(14.dp))
         if (account != null) {
-            Card(shape = RoundedCornerShape(22.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+            Card(shape = SE.cardShape(22.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.size(52.dp).clip(CircleShape).background(SE.BlueSoft), contentAlignment = Alignment.Center) {
@@ -2364,7 +2415,7 @@ private fun AccountAuthScreen(
                 }
             }
         } else if (baseUrl.isBlank()) {
-            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+            Card(shape = SE.cardShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(18.dp)) {
                     Icon(Icons.Filled.Lock, null, tint = SE.Blue, modifier = Modifier.size(32.dp))
                     Spacer(Modifier.height(9.dp))
@@ -2541,7 +2592,7 @@ private fun OwnerDashboardScreen(
         TaskCard("Resolve maintenance", "1 issue is marked urgent", Icons.Filled.ReportProblem, "1", SE.RedSoft, SE.Red, onIssues)
         TaskCard("Prepare arrivals", "2 move-ins are scheduled", Icons.Filled.CalendarToday, "2", SE.Lavender, SE.Ink, onResidents)
         Spacer(Modifier.height(18.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text("Occupancy pulse", color = SE.Ink, fontSize = 17.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.weight(1f)); TextButton(onClick = onAnalytics) { Text("Insights", color = SE.Blue) } }
-        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(15.dp)) { Row(verticalAlignment = Alignment.Bottom) { Text("${if(totalBeds > 0) (occupied * 100 / totalBeds) else 0}%", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = SE.Ink); Spacer(Modifier.width(8.dp)); Text("estimated occupancy", color = SE.Muted, fontSize = 11.sp, modifier = Modifier.padding(bottom = 5.dp)); Spacer(Modifier.weight(1f)); Icon(Icons.AutoMirrored.Filled.TrendingUp, null, tint = SE.MintText) }; Spacer(Modifier.height(10.dp)); Box(Modifier.fillMaxWidth().height(9.dp).clip(CircleShape).background(SE.Background)) { Box(Modifier.fillMaxWidth((if(totalBeds > 0) occupied.toFloat() / totalBeds else 0.65f).coerceIn(0f, 1f)).fillMaxHeight().clip(CircleShape).background(SE.Blue)) }; Spacer(Modifier.height(7.dp)); Text("Keep availability current to avoid disappointing customers.", color = SE.Muted, fontSize = 11.sp) } }
+        Card(shape = SE.cardShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(15.dp)) { Row(verticalAlignment = Alignment.Bottom) { Text("${if(totalBeds > 0) (occupied * 100 / totalBeds) else 0}%", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = SE.Ink); Spacer(Modifier.width(8.dp)); Text("estimated occupancy", color = SE.Muted, fontSize = 11.sp, modifier = Modifier.padding(bottom = 5.dp)); Spacer(Modifier.weight(1f)); Icon(Icons.AutoMirrored.Filled.TrendingUp, null, tint = SE.MintText) }; Spacer(Modifier.height(10.dp)); Box(Modifier.fillMaxWidth().height(9.dp).clip(CircleShape).background(SE.Background)) { Box(Modifier.fillMaxWidth((if(totalBeds > 0) occupied.toFloat() / totalBeds else 0.65f).coerceIn(0f, 1f)).fillMaxHeight().clip(CircleShape).background(SE.Blue)) }; Spacer(Modifier.height(7.dp)); Text("Keep availability current to avoid disappointing customers.", color = SE.Muted, fontSize = 11.sp) } }
         Spacer(Modifier.height(18.dp)); Text("Quick actions", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 17.sp); Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { QuickAction("Manage beds", Icons.Filled.Bed, SE.BlueSoft, SE.Blue, onBeds, Modifier.weight(1f)); QuickAction("Add property", Icons.Filled.Add, SE.OrangeSoft, SE.Orange, onProperties, Modifier.weight(1f)); QuickAction("Residents", Icons.Filled.Person, SE.Lavender, SE.Ink, onResidents, Modifier.weight(1f)) }
         Spacer(Modifier.height(16.dp)); Text("Numbers shown here are generated demo data.", color = SE.Muted, fontSize = 10.sp, modifier = Modifier.align(Alignment.CenterHorizontally)); Spacer(Modifier.height(12.dp))
@@ -2557,7 +2608,7 @@ private fun OwnerPropertiesScreen(listings: List<PgListing>, serverSynced: Boole
             StatusPill(if (serverSynced) "Server synced" else "Local / sample", if (serverSynced) SE.Mint else SE.OrangeSoft, if (serverSynced) SE.MintText else SE.Orange)
         }
         Spacer(Modifier.height(12.dp)); LazyColumn(verticalArrangement = Arrangement.spacedBy(11.dp), contentPadding = PaddingValues(bottom = 16.dp)) { items(listings, key = { it.id }) { p ->
-            Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().clickable { onListing(p.id) }) {
+            Card(shape = SE.cardShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().clickable { onListing(p.id) }) {
                 Column {
                     PropertyCover(p.photoUri, (p.id % 4).toInt(), Modifier.fillMaxWidth().height(145.dp))
                     Column(Modifier.padding(14.dp)) {
@@ -2625,7 +2676,7 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
                 Text("Tell residents about your property", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 20.sp)
                 Text("A few clear details help the right residents find you.", color = SE.Muted, fontSize = 12.sp)
                 Spacer(Modifier.height(16.dp))
-                Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().clickable { photoPicker.launch(arrayOf("image/*")) }) {
+                Card(shape = SE.cardShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().clickable { photoPicker.launch(arrayOf("image/*")) }) {
                     Box(Modifier.fillMaxWidth().height(155.dp)) {
                         if (photoUri.isNotBlank()) AsyncImage(model = photoUri, contentDescription = "Selected property photo", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop) else PropertyArt(0, Modifier.fillMaxSize())
                         Box(Modifier.align(Alignment.BottomEnd).padding(11.dp).clip(RoundedCornerShape(12.dp)).background(SE.Ink).padding(horizontal = 12.dp, vertical = 9.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.CameraAlt, null, tint = Color.White, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(6.dp)); Text(if (photoUri.isBlank()) "Add cover photo" else "Change cover", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 11.sp) } }
@@ -2652,7 +2703,7 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
                 }
                 HorizontalDivider(color = SE.Border); Spacer(Modifier.height(10.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Couples welcome", color = SE.Ink, fontWeight = FontWeight.Bold); Text("Allow couples in the accommodation types you specify.", color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp) }; Switch(checked = couples, onCheckedChange = { enabled -> couples = enabled; if (enabled) policy = "Mixed" }) }
-                Spacer(Modifier.height(12.dp)); Card(shape = RoundedCornerShape(15.dp), colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Filled.VerifiedUser, null, tint = SE.Orange); Spacer(Modifier.width(9.dp)); Text("Mixed accommodation and couple-friendly rooms are explicit listing attributes. Publishing them does not replace the owner's responsibility to follow applicable property rules and laws.", color = SE.Text, fontSize = 11.sp, lineHeight = 16.sp) } }
+                Spacer(Modifier.height(12.dp)); Card(shape = SE.cardShape(15.dp), colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft)) { Row(Modifier.padding(13.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Filled.VerifiedUser, null, tint = SE.Orange); Spacer(Modifier.width(9.dp)); Text("Mixed accommodation and couple-friendly rooms are explicit listing attributes. Publishing them does not replace the owner's responsibility to follow applicable property rules and laws.", color = SE.Text, fontSize = 11.sp, lineHeight = 16.sp) } }
                 Spacer(Modifier.height(15.dp)); Text("COOKING, VISITORS & CURFEW", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = .7.sp)
                 Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("Cooking permitted", color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp); Text("Only if the property rules allow it", color = SE.Muted, fontSize = 10.sp) }; Switch(checked = cookingAllowed, onCheckedChange = { cookingAllowed = it }) }
                 FormLabel("VISITOR POLICY"); FlowChips(listOf("Ask owner", "Visitors allowed", "Daytime only", "No visitors"), remember(visitorPolicy) { mutableStateListOf(visitorPolicy) }, singleSelection = true) { visitorPolicy = it }
@@ -2682,7 +2733,7 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
                 Text("Review how your listing will appear in discovery.", color = SE.Muted, fontSize = 12.sp)
                 Spacer(Modifier.height(14.dp))
                 val rent = rentText.toIntOrNull() ?: 0
-                Card(shape = RoundedCornerShape(21.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+                Card(shape = SE.cardShape(21.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
                     Column {
                         PropertyCover(photoUri, 1, Modifier.fillMaxWidth().height(165.dp))
                         Column(Modifier.padding(14.dp)) {
@@ -2871,7 +2922,7 @@ private fun OwnerBedsScreen(
             }
         }
         Spacer(Modifier.height(13.dp))
-        Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+        Card(shape = SE.cardShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.padding(13.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -3023,7 +3074,7 @@ private fun OwnerEnquiriesScreen(notify: (String) -> Unit) {
         Spacer(Modifier.height(11.dp)); Text("${max(0, 4 - handled)} need a response · demo enquiries", color = SE.Muted, fontSize = 11.sp)
         LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 15.dp)) {
             items(listOf(EnquiryData("Aman Verma", "2 sharing · from 15 Nov", "Is bed B still available?", "The Courtyard Co-Living"), EnquiryData("Priya Nair", "Private room · from 1 Dec", "Can I visit after work?", "Casa Duo"), EnquiryData("Rahul Patil", "3 sharing · immediate", "Does rent include meals?", "Maple House"), EnquiryData("Simran Kaur", "2 sharing · from 10 Nov", "Can you share room photos?", "CityNest Living"))) { enquiry ->
-                Card(shape = RoundedCornerShape(19.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+                Card(shape = SE.cardShape(19.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(13.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(42.dp).clip(CircleShape).background(SE.BlueSoft), contentAlignment = Alignment.Center) { Text(enquiry.name.split(" ").mapNotNull { it.firstOrNull() }.take(2).joinToString(""), color = SE.Blue, fontWeight = FontWeight.Bold) }; Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text(enquiry.name, color = SE.Ink, fontWeight = FontWeight.Bold); Text(enquiry.stay, color = SE.Muted, fontSize = 10.sp) }; StatusPill("NEW", SE.OrangeSoft, SE.Orange) }
                         Spacer(Modifier.height(9.dp)); Text(enquiry.property, color = SE.Blue, fontSize = 11.sp, fontWeight = FontWeight.SemiBold); Text("“${enquiry.message}”", color = SE.Text, fontSize = 12.sp)
@@ -3105,7 +3156,7 @@ private fun AddServerResidentScreen(
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         ScreenHeader("Assign a resident", "Create a server-backed stay at ${listing.name}", onBack = onCancel)
         Spacer(Modifier.height(12.dp))
-        Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) {
+        Card(shape = SE.cardShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) {
             Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.size(42.dp).clip(RoundedCornerShape(13.dp)).background(SE.Surface), contentAlignment = Alignment.Center) {
                     Icon(Icons.Filled.VerifiedUser, null, tint = SE.Blue, modifier = Modifier.size(23.dp))
@@ -3130,7 +3181,7 @@ private fun AddServerResidentScreen(
                 Text("Loading eligible accounts…", color = SE.Muted, fontSize = 12.sp)
             }
         } else if (candidates.isEmpty()) {
-            Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+            Card(shape = SE.cardShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
                 Column(Modifier.fillMaxWidth().padding(13.dp)) {
                     Text("No eligible residents yet", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                     Text("Only active customer accounts with verified email and an enquiry or reservation linked to this property can be assigned.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
@@ -3179,7 +3230,7 @@ private fun AddServerResidentScreen(
         Text("Only units currently marked available on the server can be selected.", color = SE.Muted, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
         if (availableUnits.isEmpty()) {
-            Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+            Card(shape = SE.cardShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
                 Text("No server units are available. Return to Rooms & beds and refresh or update the inventory before assigning a resident.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp, modifier = Modifier.padding(13.dp))
             }
         } else {
@@ -3279,7 +3330,7 @@ private fun AddResidentScreen(propertyName: String, bedOptions: List<String>, on
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
         ScreenHeader("Add a resident", "Adding a resident to $propertyName", onBack = onCancel)
         Spacer(Modifier.height(14.dp))
-        Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) {
+        Card(shape = SE.cardShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) {
             Row(Modifier.padding(13.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Filled.PersonAdd, null, tint = SE.Blue, modifier = Modifier.size(24.dp))
                 Spacer(Modifier.width(10.dp))
@@ -3290,7 +3341,7 @@ private fun AddResidentScreen(propertyName: String, bedOptions: List<String>, on
             }
         }
         Spacer(Modifier.height(13.dp))
-        Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+        Card(shape = SE.cardShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
             Column(Modifier.padding(14.dp)) {
                 Text("1. Contact information", color = SE.Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 Spacer(Modifier.height(9.dp))
@@ -3302,7 +3353,7 @@ private fun AddResidentScreen(propertyName: String, bedOptions: List<String>, on
             }
         }
         Spacer(Modifier.height(11.dp))
-        Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+        Card(shape = SE.cardShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
             Column(Modifier.padding(14.dp)) {
                 Text("2. Room assignment", color = SE.Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 Text(if (bedOptions.isEmpty()) "There are no beds currently marked available. Update a bed's status in Rooms & beds before assigning a resident." else "Choose an available bed in $propertyName.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
@@ -3315,7 +3366,7 @@ private fun AddResidentScreen(propertyName: String, bedOptions: List<String>, on
             }
         }
         Spacer(Modifier.height(11.dp))
-        Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
+        Card(shape = SE.cardShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
             Column(Modifier.padding(14.dp)) {
                 Text("3. Rent & move-in", color = SE.Ink, fontSize = 14.sp, fontWeight = FontWeight.Bold)
                 Text("Use the amount and date agreed with the resident.", color = SE.Muted, fontSize = 11.sp)
@@ -3360,7 +3411,7 @@ private fun OwnerPaymentsScreen(notify: (String) -> Unit) {
         Spacer(Modifier.height(13.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { StatMini("Expected", "₹40,500", SE.BlueSoft, SE.Blue, Modifier.weight(1f)); StatMini("Received", money(rows.filter { paid.contains(it.name) }.sumOf { it.amount }), SE.Mint, SE.MintText, Modifier.weight(1f)) }
         Spacer(Modifier.height(13.dp)); Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) { listOf("Pending", "Received", "All").forEach { FilterChip(selected = tab == it, onClick = { tab = it }, label = { Text(it) }) } }
         Spacer(Modifier.height(10.dp)); LazyColumn(verticalArrangement = Arrangement.spacedBy(9.dp), contentPadding = PaddingValues(bottom = 14.dp)) { items(visible) { row ->
-            Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(13.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(row.name, color = SE.Ink, fontWeight = FontWeight.Bold); Text(row.bed, color = SE.Muted, fontSize = 10.sp) }; Text(money(row.amount), color = SE.Ink, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp) }; Spacer(Modifier.height(9.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text(if(paid.contains(row.name)) "Received · receipt recorded" else "Due ${row.due} · sample ledger", color = if(paid.contains(row.name)) SE.MintText else SE.Orange, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); if(!paid.contains(row.name)) Button(onClick = { paid.add(row.name); notify("Payment recorded for ${row.name}; demo ledger only") }, shape = RoundedCornerShape(11.dp), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue), contentPadding = PaddingValues(horizontal = 11.dp, vertical = 7.dp)) { Icon(Icons.Filled.CheckCircle, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("Mark received", fontSize = 10.sp) } else TextButton(onClick = { notify("Receipt preview: demo only") }) { Text("Receipt", color = SE.Blue) } } } }
+            Card(shape = SE.cardShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(13.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(row.name, color = SE.Ink, fontWeight = FontWeight.Bold); Text(row.bed, color = SE.Muted, fontSize = 10.sp) }; Text(money(row.amount), color = SE.Ink, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp) }; Spacer(Modifier.height(9.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text(if(paid.contains(row.name)) "Received · receipt recorded" else "Due ${row.due} · sample ledger", color = if(paid.contains(row.name)) SE.MintText else SE.Orange, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); if(!paid.contains(row.name)) Button(onClick = { paid.add(row.name); notify("Payment recorded for ${row.name}; demo ledger only") }, shape = RoundedCornerShape(11.dp), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue), contentPadding = PaddingValues(horizontal = 11.dp, vertical = 7.dp)) { Icon(Icons.Filled.CheckCircle, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("Mark received", fontSize = 10.sp) } else TextButton(onClick = { notify("Receipt preview: demo only") }) { Text("Receipt", color = SE.Blue) } } } }
         } }
         Text("Manual payment entry is not bank verification. A production ledger must preserve corrections, references and audit history.", color = SE.Muted, fontSize = 10.sp, lineHeight = 15.sp)
     }
@@ -3375,7 +3426,7 @@ private fun OwnerIssuesScreen(notify: (String) -> Unit) {
         Spacer(Modifier.height(12.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { listOf("Open", "In progress", "Resolved").forEach { FilterChip(selected = tab == it, onClick = { tab = it }, label = { Text(it) }) } }
         Spacer(Modifier.height(11.dp)); val issues = listOf(Triple("Water pressure low", "Room 204 · reported 2 hrs ago", "Urgent"), Triple("Wi-Fi unstable", "Floor 2 · reported yesterday", "Normal"), Triple("Bathroom tap leaking", "Room 101 · reported yesterday", "Normal"))
         issues.forEach { issue ->
-            Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().padding(bottom = 9.dp)) { Column(Modifier.padding(13.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(if(issue.third == "Urgent") SE.RedSoft else SE.OrangeSoft), contentAlignment = Alignment.Center) { Icon(Icons.Filled.ReportProblem, null, tint = if(issue.third == "Urgent") SE.Red else SE.Orange) }; Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text(issue.first, color = SE.Ink, fontWeight = FontWeight.Bold); Text(issue.second, color = SE.Muted, fontSize = 10.sp) }; StatusPill(issue.third, if(issue.third == "Urgent") SE.RedSoft else SE.OrangeSoft, if(issue.third == "Urgent") SE.Red else SE.Orange) }; Spacer(Modifier.height(11.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick = { notify("Issue details opened in demo") }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(11.dp)) { Text("View details") }; Button(onClick = { notify(if(tab == "Resolved") "Issue reopened in demo" else "Issue moved to next status in demo") }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(11.dp), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) { Text(if(tab == "Resolved") "Reopen" else "Update status") } } } }
+            Card(shape = SE.cardShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth().padding(bottom = 9.dp)) { Column(Modifier.padding(13.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(if(issue.third == "Urgent") SE.RedSoft else SE.OrangeSoft), contentAlignment = Alignment.Center) { Icon(Icons.Filled.ReportProblem, null, tint = if(issue.third == "Urgent") SE.Red else SE.Orange) }; Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text(issue.first, color = SE.Ink, fontWeight = FontWeight.Bold); Text(issue.second, color = SE.Muted, fontSize = 10.sp) }; StatusPill(issue.third, if(issue.third == "Urgent") SE.RedSoft else SE.OrangeSoft, if(issue.third == "Urgent") SE.Red else SE.Orange) }; Spacer(Modifier.height(11.dp)); Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) { OutlinedButton(onClick = { notify("Issue details opened in demo") }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(11.dp)) { Text("View details") }; Button(onClick = { notify(if(tab == "Resolved") "Issue reopened in demo" else "Issue moved to next status in demo") }, modifier = Modifier.weight(1f), shape = RoundedCornerShape(11.dp), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) { Text(if(tab == "Resolved") "Reopen" else "Update status") } } } }
         }
         Spacer(Modifier.height(8.dp)); Text("Issue updates are local demo interactions only.", color = SE.Muted, fontSize = 10.sp)
     }
@@ -3386,7 +3437,7 @@ private fun OwnerAnalyticsScreen(onBack: () -> Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(17.dp)) {
         ScreenHeader("Business insights", "Understand occupancy and performance", onBack = onBack, trailing = { StatusPill("30 days", SE.BlueSoft, SE.Blue) })
         Spacer(Modifier.height(15.dp)); Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) { MetricCard("Occupancy", "82%", "+6% this month", SE.BlueSoft, SE.Blue, Modifier.weight(1f)); MetricCard("Rent recorded", "₹1.6L", "Demo total", SE.Mint, SE.MintText, Modifier.weight(1f)) }
-        Spacer(Modifier.height(13.dp)); Card(shape = RoundedCornerShape(19.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(15.dp)) { Text("Occupancy trend", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp); Text("Illustrative monthly data", color = SE.Muted, fontSize = 10.sp); Spacer(Modifier.height(15.dp)); MiniBarChart(Modifier.fillMaxWidth().height(150.dp)); Spacer(Modifier.height(10.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { listOf("Jun", "Jul", "Aug", "Sep", "Oct").forEach { Text(it, color = SE.Muted, fontSize = 10.sp) } } } }
+        Spacer(Modifier.height(13.dp)); Card(shape = SE.cardShape(19.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(15.dp)) { Text("Occupancy trend", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp); Text("Illustrative monthly data", color = SE.Muted, fontSize = 10.sp); Spacer(Modifier.height(15.dp)); MiniBarChart(Modifier.fillMaxWidth().height(150.dp)); Spacer(Modifier.height(10.dp)); Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) { listOf("Jun", "Jul", "Aug", "Sep", "Oct").forEach { Text(it, color = SE.Muted, fontSize = 10.sp) } } } }
         Spacer(Modifier.height(13.dp)); Text("What to look at next", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp); Spacer(Modifier.height(8.dp)); TaskCard("Keep listings fresh", "Properties with older confirmations may lose enquiries", Icons.Filled.Refresh, "", SE.BlueSoft, SE.Blue, {}); TaskCard("Follow up visit outcomes", "Record whether a visit led to a move-in", Icons.Filled.CalendarToday, "", SE.OrangeSoft, SE.Orange, {}); TaskCard("Review outstanding balances", "Use the payments ledger before sending reminders", Icons.Filled.Payments, "", SE.Mint, SE.MintText, {})
         Spacer(Modifier.height(15.dp)); Text("Analytics here are mock numbers. Production reports must be computed from persisted, reconciled records.", color = SE.Muted, fontSize = 10.sp)
     }
@@ -3411,7 +3462,7 @@ private fun OwnerMoreScreen(
         MenuRow("Maintenance", "Issue queue and resolution", Icons.Filled.ReportProblem, onIssues)
         MenuRow("Business insights", "Occupancy and collection trends", Icons.AutoMirrored.Filled.TrendingUp, onAnalytics)
         MenuRow("All owner workflows", "Rent, deposits, expenses, staff, food, reports and settings", Icons.Filled.Settings) { onProfile() }
-        Spacer(Modifier.height(14.dp)); Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth().clickable(onClick = onTenant)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.Home, null, tint = Color.White); Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text("Switch to tenant view", color = Color.White, fontWeight = FontWeight.Bold); Text("Preview the customer experience", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp) }; Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color.White) } }
+        Spacer(Modifier.height(14.dp)); Card(shape = SE.cardShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Ink), modifier = Modifier.fillMaxWidth().clickable(onClick = onTenant)) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Filled.Home, null, tint = Color.White); Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text("Switch to tenant view", color = Color.White, fontWeight = FontWeight.Bold); Text("Preview the customer experience", color = Color.White.copy(alpha = 0.7f), fontSize = 11.sp) }; Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Color.White) } }
     }
 }
 
@@ -3428,7 +3479,7 @@ private fun OwnerSettingsScreen(onBack: () -> Unit) {
             Row(Modifier.fillMaxWidth().padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(label, color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp); Text("Demo preference · no notification is sent", color = SE.Muted, fontSize = 10.sp) }; Switch(checked = current, onCheckedChange = { value -> when(label) { "Rent reminders" -> rentReminders = value; "New enquiry alerts" -> inquiryAlerts = value; else -> issueAlerts = value } }) }; HorizontalDivider(color = SE.Border)
         }
         Spacer(Modifier.height(17.dp)); Text("TEAM ACCESS", color = SE.Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-        Card(shape = RoundedCornerShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(SE.BlueSoft), contentAlignment = Alignment.Center) { Icon(Icons.Filled.PersonAdd, null, tint = SE.Blue) }; Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text("Invite a property manager", color = SE.Ink, fontWeight = FontWeight.Bold); Text("Assign selected buildings and tasks", color = SE.Muted, fontSize = 10.sp) }; Switch(checked = staffAccess, onCheckedChange = { staffAccess = it }) }; if (staffAccess) { Spacer(Modifier.height(10.dp)); Text("Manager role preview enabled. Real invitations and permissions require server-side identity and access control.", color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp) } } }
+        Card(shape = SE.cardShape(17.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(14.dp)) { Row(verticalAlignment = Alignment.CenterVertically) { Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(SE.BlueSoft), contentAlignment = Alignment.Center) { Icon(Icons.Filled.PersonAdd, null, tint = SE.Blue) }; Spacer(Modifier.width(10.dp)); Column(Modifier.weight(1f)) { Text("Invite a property manager", color = SE.Ink, fontWeight = FontWeight.Bold); Text("Assign selected buildings and tasks", color = SE.Muted, fontSize = 10.sp) }; Switch(checked = staffAccess, onCheckedChange = { staffAccess = it }) }; if (staffAccess) { Spacer(Modifier.height(10.dp)); Text("Manager role preview enabled. Real invitations and permissions require server-side identity and access control.", color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp) } } }
         Spacer(Modifier.height(18.dp)); Text("Other settings", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp); MenuRow("Privacy and security", "Permissions and data access", Icons.Filled.Lock) {}; MenuRow("Business profile", "Owner contact and business details", Icons.Filled.Apartment) {}
         Spacer(Modifier.height(15.dp)); Text("Changes are stored in this screen's demo state only.", color = SE.Muted, fontSize = 10.sp)
     }
@@ -3491,7 +3542,7 @@ private fun PropertyArt(variant: Int, modifier: Modifier = Modifier) {
 
 @Composable
 private fun ListingCard(p: PgListing, isFavorite: Boolean, onClick: () -> Unit, onFavorite: () -> Unit, compact: Boolean, favoriteAction: Boolean = false) {
-    Card(shape = RoundedCornerShape(19.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), elevation = CardDefaults.cardElevation(0.dp), modifier = Modifier.fillMaxWidth().padding(bottom = if(compact) 0.dp else 8.dp).clickable(onClick = onClick)) {
+    Card(shape = SE.cardShape(19.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), elevation = CardDefaults.cardElevation(0.dp), modifier = Modifier.fillMaxWidth().padding(bottom = if(compact) 0.dp else 8.dp).clickable(onClick = onClick)) {
         Row(Modifier.padding(9.dp), verticalAlignment = Alignment.CenterVertically) {
             Box {
                 PropertyCover(p.photoUri, (p.id % 4).toInt(), Modifier.size(if (compact) 118.dp else 126.dp, if (compact) 132.dp else 142.dp))
@@ -3610,7 +3661,7 @@ private fun StatusPill(text: String, background: Color, foreground: Color) {
 
 @Composable
 private fun MetricCard(title: String, value: String, caption: String, background: Color, tint: Color, modifier: Modifier = Modifier) {
-    Column(modifier.clip(RoundedCornerShape(17.dp)).background(SE.Surface).padding(13.dp)) { Box(Modifier.size(30.dp).clip(RoundedCornerShape(10.dp)).background(background), contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.TrendingUp, null, tint = tint, modifier = Modifier.size(17.dp)) }; Spacer(Modifier.height(10.dp)); Text(value, color = SE.Ink, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold); Text(title, color = SE.Text, fontWeight = FontWeight.SemiBold, fontSize = 11.sp); Text(caption, color = SE.Muted, fontSize = 9.sp) }
+    Column(modifier.clip(SE.cardShape(17.dp)).background(SE.Surface).padding(13.dp)) { Box(Modifier.size(30.dp).clip(RoundedCornerShape(10.dp)).background(background), contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.TrendingUp, null, tint = tint, modifier = Modifier.size(17.dp)) }; Spacer(Modifier.height(10.dp)); Text(value, color = SE.Ink, fontSize = 24.sp, fontWeight = FontWeight.ExtraBold); Text(title, color = SE.Text, fontWeight = FontWeight.SemiBold, fontSize = 11.sp); Text(caption, color = SE.Muted, fontSize = 9.sp) }
 }
 
 @Composable
