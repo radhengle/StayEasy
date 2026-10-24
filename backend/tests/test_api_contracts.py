@@ -133,6 +133,10 @@ def test_reservations_block_duplicate_active_unit():
     status_update = client.post(f"/owner/reservations/{first.json()['id']}/status", json={"status": "confirmed"})
     assert status_update.status_code == 200, status_update.text
     assert status_update.json()["status"] == "confirmed"
+    confirmed_rows = client.get("/reservations")
+    assert confirmed_rows.status_code == 200, confirmed_rows.text
+    assert confirmed_rows.json()[0]["status"] == "confirmed"
+    assert confirmed_rows.json()[0]["expires_at"] is None
 
 
 def test_expired_pending_reservation_releases_unit():
