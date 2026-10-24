@@ -13,10 +13,41 @@ import java.util.TimeZone
 /** Small dependency-free API client for public discovery and connection diagnostics. */
 internal object StayApiClient {
     @Volatile private var sessionToken: String? = null
+    @Volatile private var sessionTokenOrigin: String? = null
 
-    fun setSessionToken(token: String) { sessionToken = token.trim().ifBlank { null } }
-    fun clearSessionToken() { sessionToken = null }
-    fun currentSessionToken(): String? = sessionToken
+    private fun normalizedOrigin(baseUrl: String): String? = runCatching {
+        val parsed = java.net.URI(baseUrl.trim().trimEnd('/'))
+        val scheme = parsed.scheme?.lowercase(Locale.ROOT) ?: return@runCatching null
+        if (scheme !in setOf("http", "https")) return@runCatching null
+        val host = parsed.host?.lowercase(Locale.ROOT) ?: return@runCatching null
+        val port = when {
+            parsed.port >= 0 -> parsed.port
+            scheme == "https" -> 443
+            else -> 80
+        }
+        "$scheme://$host:$port"
+    }.getOrNull()
+
+    /** Returns a normalized origin for safe credential binding, excluding paths and queries. */
+    fun apiOrigin(baseUrl: String): String? = normalizedOrigin(baseUrl)
+
+    /** Session credentials are bound to one API origin and are never reused for another host. */
+    fun setSessionToken(token: String, baseUrl: String) {
+        val cleaned = token.trim().ifBlank { null }
+        sessionToken = cleaned
+        sessionTokenOrigin = if (cleaned == null) null else normalizedOrigin(baseUrl)
+    }
+
+    fun clearSessionToken() {
+        sessionToken = null
+        sessionTokenOrigin = null
+    }
+
+    fun currentSessionToken(baseUrl: String): String? {
+        val current = sessionToken ?: return null
+        val requestedOrigin = normalizedOrigin(baseUrl) ?: return null
+        return current.takeIf { sessionTokenOrigin == requestedOrigin }
+    }
 
     private fun request(
         baseUrl: String,
@@ -142,7 +173,7 @@ internal object StayApiClient {
     fun requestDevelopmentToken(baseUrl: String, subject: String, role: String, devPassword: String): String {
         val body = JSONObject().put("subject", subject.trim()).put("role", role).put("dev_password", devPassword)
         val response = JSONObject(request(baseUrl, "/auth/dev-token", method = "POST", body = body))
-        return response.getString("access_token").also(::setSessionToken)
+        return response.getString("access_token").also { setSessionToken(it, baseUrl) }
     }
 
     /** Creates listing metadata and room/bed inventory, then submits it for review. */
@@ -188,7 +219,11 @@ internal object StayApiClient {
 
     fun createEnquiry(baseUrl: String, token: String, propertyId: Long, roomType: String, message: String, moveInDate: String? = null): JSONObject {
         val body = JSONObject().put("property_id", propertyId).put("preferred_room_type", roomType).put("message", message)
-        normalizeDate(moveInDate)?.let { body.put("move_in_date", it) }
+        if (!moveInDate.isNullOrBlank()) {
+            val normalizedDate = normalizeDate(moveInDate)
+                ?: throw IllegalArgumentException("Enter a valid move-in date, for example 2026-11-15 or 15 Nov 2026.")
+            body.put("move_in_date", normalizedDate)
+        }
         return JSONObject(request(baseUrl, "/enquiries", token, "POST", body))
     }
 
@@ -249,9 +284,12 @@ internal object StayApiClient {
 
     private fun normalizeDate(value: String?): String? {
         if (value.isNullOrBlank()) return null
+        val trimmed = value.trim()
         for (format in listOf("yyyy-MM-dd", "d MMM yyyy", "dd MMM yyyy", "d MMMM yyyy", "dd MMMM yyyy")) {
             val parser = SimpleDateFormat(format, Locale.ENGLISH).apply { isLenient = false; timeZone = TimeZone.getTimeZone("UTC") }
-            val date = runCatching { parser.parse(value.trim()) }.getOrNull() ?: continue
+            val position = java.text.ParsePosition(0)
+            val date = runCatching { parser.parse(trimmed, position) }.getOrNull() ?: continue
+            if (position.index != trimmed.length) continue
             return SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(date)
         }
         return null
