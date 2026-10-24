@@ -160,6 +160,31 @@ class ResidentStay(Base):
     agreement_reference: Mapped[str] = mapped_column(String(300), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+class ResidentMoveOutRequest(Base):
+    __tablename__ = "resident_move_out_requests"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    resident_stay_id: Mapped[int] = mapped_column(ForeignKey("resident_stays.id", ondelete="CASCADE"), index=True)
+    property_id: Mapped[int] = mapped_column(ForeignKey("properties.id", ondelete="CASCADE"), index=True)
+    resident_id: Mapped[str] = mapped_column(String(36), index=True)
+    requested_move_out_date: Mapped[Date] = mapped_column(Date)
+    reason: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)  # pending/approved/rejected/cancelled
+    owner_note: Mapped[str] = mapped_column(String(1000), default="")
+    reviewed_by: Mapped[str] = mapped_column(String(36), default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+Index(
+    "uq_pending_moveout_request_per_stay",
+    ResidentMoveOutRequest.resident_stay_id,
+    unique=True,
+    postgresql_where=text("status = 'pending'"),
+    sqlite_where=text("status = 'pending'"),
+)
+
+
 class LedgerEntry(Base):
     __tablename__ = "ledger_entries"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
