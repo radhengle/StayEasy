@@ -166,6 +166,74 @@ def test_owner_stay_history_includes_resident_and_unit_labels_and_is_property_sc
     assert forbidden.status_code == 403
 
 
+def test_owner_stay_notice_and_moveout_dates_are_validated_and_unit_is_released():
+    prop, unit = setup_property(owner_id="owner-1")
+    set_actor("owner-1", "owner")
+    joining_date = date.today()
+    stay = create_test_stay({
+        "property_id": prop["id"], "unit_id": unit["id"], "resident_id": "lifecycle-resident",
+        "joining_date": joining_date.isoformat(), "agreed_monthly_rent": 9000, "deposit_held": 18000,
+    })
+    assert stay.status_code == 201, stay.text
+    stay_id = stay.json()["id"]
+
+    missing_notice_date = client.patch(f"/owner/stays/{stay_id}", json={"status": "notice_given"})
+    assert missing_notice_date.status_code == 422, missing_notice_date.text
+
+    notice_date = joining_date + timedelta(days=10)
+    notice = client.patch(f"/owner/stays/{stay_id}", json={
+        "status": "notice_given", "notice_date": notice_date.isoformat(),
+    })
+    assert notice.status_code == 200, notice.text
+    assert notice.json()["status"] == "notice_given"
+    assert notice.json()["notice_date"] == notice_date.isoformat()
+
+    missing_moveout_date = client.patch(f"/owner/stays/{stay_id}", json={"status": "completed"})
+    assert missing_moveout_date.status_code == 422, missing_moveout_date.text
+
+    invalid_moveout_date = client.patch(f"/owner/stays/{stay_id}", json={
+        "status": "completed", "move_out_date": (joining_date - timedelta(days=1)).isoformat(),
+    })
+    assert invalid_moveout_date.status_code == 422, invalid_moveout_date.text
+
+    move_out_date = notice_date + timedelta(days=30)
+    completed = client.patch(f"/owner/stays/{stay_id}", json={
+        "status": "completed", "move_out_date": move_out_date.isoformat(),
+    })
+    assert completed.status_code == 200, completed.text
+    assert completed.json()["status"] == "completed"
+    assert completed.json()["notice_date"] == notice_date.isoformat()
+    assert completed.json()["move_out_date"] == move_out_date.isoformat()
+
+    stays = client.get("/owner/stays", params={"property_id": prop["id"]})
+    assert stays.status_code == 200, stays.text
+    assert stays.json()[0]["notice_date"] == notice_date.isoformat()
+    assert stays.json()[0]["move_out_date"] == move_out_date.isoformat()
+    units = client.get("/owner/units", params={"property_id": prop["id"]})
+    assert units.status_code == 200, units.text
+    assert units.json()[0]["status"] == "available"
+
+    cannot_reactivate = client.patch(f"/owner/stays/{stay_id}", json={"status": "active"})
+    assert cannot_reactivate.status_code == 409, cannot_reactivate.text
+
+
+def test_owner_cancelling_an_active_stay_releases_its_unit():
+    prop, unit = setup_property(owner_id="owner-1")
+    set_actor("owner-1", "owner")
+    stay = create_test_stay({
+        "property_id": prop["id"], "unit_id": unit["id"], "resident_id": "cancelled-resident",
+        "joining_date": date.today().isoformat(), "agreed_monthly_rent": 9000, "deposit_held": 0,
+    })
+    assert stay.status_code == 201, stay.text
+
+    cancelled = client.patch(f"/owner/stays/{stay.json()['id']}", json={"status": "cancelled"})
+    assert cancelled.status_code == 200, cancelled.text
+    assert cancelled.json()["status"] == "cancelled"
+    units = client.get("/owner/units", params={"property_id": prop["id"]})
+    assert units.status_code == 200, units.text
+    assert units.json()[0]["status"] == "available"
+
+
 def test_owner_property_inventory_is_scoped_and_contains_server_units():
     first_property, first_unit = setup_property(owner_id="owner-1")
     second_property, _ = setup_property(owner_id="owner-2")

@@ -128,4 +128,37 @@ class StayEasySmokeTest {
         }.exceptionOrNull()
         assertTrue("A partial date parse must be rejected before network access", error is IllegalArgumentException)
     }
+
+    @Test
+    fun stayLifecycleRequiresNoticeAndMoveOutDatesBeforeNetworkAccess() {
+        val missingNotice = runCatching {
+            StayApiClient.updateOwnerStay(
+                "https://api.example.invalid", "test-token", 1L, "notice_given"
+            )
+        }.exceptionOrNull()
+        assertTrue("Notice status must require a notice date", missingNotice is IllegalArgumentException)
+
+        val missingMoveOut = runCatching {
+            StayApiClient.updateOwnerStay(
+                "https://api.example.invalid", "test-token", 1L, "completed"
+            )
+        }.exceptionOrNull()
+        assertTrue("Completed status must require a move-out date", missingMoveOut is IllegalArgumentException)
+
+        val malformedNotice = runCatching {
+            StayApiClient.updateOwnerStay(
+                "https://api.example.invalid", "test-token", 1L, "notice_given",
+                noticeDate = "1 Nov 2026 trailing text"
+            )
+        }.exceptionOrNull()
+        assertTrue("Partial notice-date parses must be rejected", malformedNotice is IllegalArgumentException)
+
+        val malformedMoveOut = runCatching {
+            StayApiClient.updateOwnerStay(
+                "https://api.example.invalid", "test-token", 1L, "completed",
+                moveOutDate = "2026-11-31"
+            )
+        }.exceptionOrNull()
+        assertTrue("Invalid calendar dates must be rejected", malformedMoveOut is IllegalArgumentException)
+    }
 }
