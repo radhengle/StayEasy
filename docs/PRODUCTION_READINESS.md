@@ -8,7 +8,7 @@
 - Registration always creates a `customer` role. Requesting the Owner workspace records intent only; it cannot confer owner permissions. An approved owner-onboarding/review route is still needed before owner accounts can be promoted.
 - Configure email through environment variables: `SMTP_HOST`, `SMTP_FROM_EMAIL`, `SMTP_PORT` (587 with STARTTLS, or 465 with TLS), and optional `SMTP_USERNAME` / `SMTP_PASSWORD`. Registration and recovery fail clearly when SMTP is unavailable; no email provider has been configured by this code change.
 - Alembic bootstrap is added. Run `python -m alembic -c backend/alembic.ini upgrade head`. The first revision uses the current SQLAlchemy metadata to create missing tables; before public production, freeze/review it as an explicit schema baseline and compare it against any existing database. Do not treat this bootstrap as a completed migration audit.
-- Android API-client wrappers are added, but no interactive sign-in/verification/recovery screen is wired yet, and the current client stores the token in memory only. Secure on-device storage, refresh-token rotation, device/session management, external rate limiting, MFA, and security review remain release gates.
+- Interactive Android screens are now wired for account creation, email verification, sign-in, password recovery, account status and logout. Account access tokens are encrypted with AES-GCM using an Android Keystore key and are bound to a single API origin; app startup restores the token and validates it against `/auth/me`. Refresh-token rotation, device/session management, external rate limiting, MFA, account deletion, owner approval, SMTP configuration and security review remain release gates.
 
 ## Must be completed before public launch
 
