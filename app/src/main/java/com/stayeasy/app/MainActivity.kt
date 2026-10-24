@@ -1188,7 +1188,7 @@ private fun ListingDetailsScreen(p: PgListing, isFavorite: Boolean, onFavorite: 
             Spacer(Modifier.height(16.dp))
             Row(verticalAlignment = Alignment.Bottom) {
                 Column(Modifier.weight(1f)) { Text("Monthly rent", color = SE.Muted, fontSize = 11.sp); Text(money(p.monthlyRent), color = SE.Ink, fontWeight = FontWeight.ExtraBold, fontSize = 26.sp); Text("per person / month", color = SE.Muted, fontSize = 11.sp) }
-                Column(horizontalAlignment = Alignment.End) { Text("Security deposit", color = SE.Muted, fontSize = 11.sp); Text(money(p.deposit), color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp); Text("one-time · confirm terms", color = SE.Muted, fontSize = 9.sp) }
+                Column(horizontalAlignment = Alignment.End) { Text("Security deposit", color = SE.Muted, fontSize = 11.sp); Text(p.deposit.takeIf { it > 0 }?.let { money(it) } ?: "Not specified", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 16.sp); Text("one-time · confirm terms", color = SE.Muted, fontSize = 9.sp) }
             }
             Spacer(Modifier.height(11.dp))
             Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft), modifier = Modifier.fillMaxWidth()) {
@@ -1783,7 +1783,7 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(17.dp)) {
         ScreenHeader(if (initial == null) "Add a property" else "Edit property", "Step ${step + 1} of ${steps.size} · optional details can be added later", onBack = if (step > 0) ({ step -= 1 }) else onCancel, trailing = { TextButton(onClick = {
             StayRecordStore.add(context, StayRecord(category = "quality", title = name.ifBlank { "Untitled PG draft" },
-                details = "Draft listing · Area: $area · Policy: $policy · Sharing: $sharing · Rent: ₹${rentText.ifBlank { "0" }} · Deposit: ₹${depositText.ifBlank { "0" }} · Amenities: ${amenities.joinToString()}",
+                details = "Draft listing · Area: $area · Policy: $policy · Sharing: $sharing · Rent: ₹${rentText.ifBlank { "0" }} · Deposit: ${depositText.takeIf { it.isNotBlank() }?.let { "₹$it" } ?: "not specified"} · Amenities: ${amenities.joinToString()}",
                 status = "Draft", property = area, amount = rentText.toDoubleOrNull()?.toInt() ?: 0))
             onCancel()
         }) { Text("Save draft later", fontSize = 10.sp, color = SE.Blue) } })
@@ -1893,7 +1893,7 @@ private fun AddPropertyWizard(onPublish: (PgListing) -> Unit, onCancel: () -> Un
                 add("Furnishing: ${if (furnished) "furnished" else "unfurnished"}")
                 add("Bathroom: $bathroomType")
                 if (amenities.isNotEmpty()) add("Facilities listed: ${amenities.joinToString(", ")}")
-                add("Monthly rent: ₹$rent; deposit: ₹$deposit")
+                add(if (deposit > 0) "Monthly rent: ₹$rent; security deposit: ₹$deposit" else "Monthly rent: ₹$rent; security deposit not specified")
                 if (foodPolicy != "Not offered" || food > 0) add("Food policy: $foodPolicy; listed food charge: ₹$food/month")
                 if (utility > 0) add("Indicative utilities: ₹$utility/month; confirm final billing")
                 add("Cooking: ${if (cookingAllowed) "permitted" else "not listed as permitted"}; visitors: $visitorPolicy; curfew: $curfewPolicy")
