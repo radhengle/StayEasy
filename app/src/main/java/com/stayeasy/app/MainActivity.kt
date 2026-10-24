@@ -354,6 +354,8 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     val customListings = remember { mutableStateListOf<PgListing>().apply { addAll(ListingStore.load(context)) } }
     val remoteListings = remember { mutableStateListOf<PgListing>() }
     val favorites = remember { mutableStateListOf<Long>().apply { addAll(StayUserDataStore.loadFavorites(context)) } }
+    var route by remember { mutableStateOf("home") }
+    var signedInAccount by remember { mutableStateOf<JSONObject?>(null) }
     LaunchedEffect(preferences.apiBaseUrl) {
         val baseUrl = preferences.apiBaseUrl.trim()
         if (baseUrl.isNotBlank()) {
@@ -370,8 +372,6 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             StayApiClient.clearSessionToken()
         }
     }
-    var route by remember { mutableStateOf("home") }
-    var signedInAccount by remember { mutableStateOf<JSONObject?>(null) }
     var ownerMode by remember { mutableStateOf(false) }
     var selectedId by remember { mutableLongStateOf(101L) }
     var comparisonIds by remember { mutableStateOf<List<Long>>(emptyList()) }
@@ -583,7 +583,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }
                     }
                 })
-                "profile" -> ProfileScreen({ ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "feature_hub" }, { route = "account_auth" })
+                "profile" -> ProfileScreen(signedInAccount, { ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "feature_hub" }, { route = "account_auth" })
                 "account_auth" -> AccountAuthScreen(
                     baseUrl = preferences.apiBaseUrl,
                     account = signedInAccount,
@@ -1223,6 +1223,7 @@ private fun IssueScreen(onBack: () -> Unit, onSubmit: (String, String, String) -
 
 @Composable
 private fun ProfileScreen(
+    account: JSONObject?,
     onOwner: () -> Unit,
     onNotifications: () -> Unit,
     onSettings: () -> Unit,
@@ -1241,13 +1242,13 @@ private fun ProfileScreen(
             }
             Spacer(Modifier.width(13.dp))
             Column(Modifier.weight(1f)) {
-                Text("Guest explorer", fontWeight = FontWeight.Bold, color = SE.Ink, fontSize = 17.sp)
-                Text("Sign in or create your StayEasy account", color = SE.Muted, fontSize = 11.sp)
+                Text(account?.optString("display_name", "Guest explorer") ?: "Guest explorer", fontWeight = FontWeight.Bold, color = SE.Ink, fontSize = 17.sp)
+                Text(account?.optString("email")?.takeIf { it.isNotBlank() } ?: "Sign in or create your StayEasy account", color = SE.Muted, fontSize = 11.sp)
             }
-            Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = SE.Blue)
+            if (account != null) StatusPill("SIGNED IN", SE.BlueSoft, SE.Blue) else Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = SE.Blue)
         }
         Spacer(Modifier.height(16.dp))
-        MenuRow("Sign in / Create account", "Verify your email and sync your account", Icons.Filled.Lock, onAccount)
+        MenuRow(if (account == null) "Sign in / Create account" else "Account & security", if (account == null) "Verify your email and sync your account" else "View account, refresh session or sign out", "Verify your email and sync your account", Icons.Filled.Lock, onAccount)
         MenuRow("Notifications", "Manage alerts and updates", Icons.Filled.Notifications, onNotifications)
         MenuRow("All tools & preferences", "Saved searches, compare, bookings, themes and privacy", Icons.Filled.Tune, onSettings)
         MenuRow("Privacy & security", "Controls and account data", Icons.Filled.Lock, onSettings)
