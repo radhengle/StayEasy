@@ -655,7 +655,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "api_connection" -> apiConnectionReturnRoute
             "theme_settings", "compare" -> "feature_hub"
             "owner_dashboard" -> { ownerMode = false; ownerReturnRoute }
-            "owner_properties", "owner_beds", "owner_enquiries", "owner_residents", "owner_payments", "owner_issues", "owner_analytics", "owner_more", "owner_settings" -> "owner_dashboard"
+            "owner_properties", "owner_beds", "owner_enquiries", "owner_residents", "owner_resident_roster", "owner_payments", "owner_issues", "owner_analytics", "owner_more", "owner_settings" -> "owner_dashboard"
             "add_pg", "edit_pg" -> "owner_properties"
             "add_resident" -> "owner_beds"
             else -> if (ownerMode) "owner_dashboard" else "home"
@@ -682,7 +682,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 )
                 NavigationBar(containerColor = SE.Surface, tonalElevation = 0.dp) {
                     navItems.forEach { item ->
-                        val selected = route == item.route || (item.route == "search" && route == "map") || (item.route == "owner_more" && (route in setOf("owner_properties", "owner_residents", "owner_issues", "owner_analytics") || route == "records:move_out_requests"))
+                        val selected = route == item.route || (item.route == "search" && route == "map") || (item.route == "owner_more" && (route in setOf("owner_properties", "owner_residents", "owner_resident_roster", "owner_issues", "owner_analytics") || route == "records:move_out_requests"))
                         NavigationBarItem(
                             selected = selected,
                             onClick = { route = item.route },
@@ -922,7 +922,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     { route = apiConnectionReturnRoute })
                 "compare" -> ComparePropertiesScreen(allListings, comparisonIds, { route = "feature_hub" })
                 "theme_settings" -> ThemeSettingsScreen(preferences, { updated -> onPreferencesChanged(updated); notify("Appearance preferences saved") }, { route = "feature_hub" })
-                "owner_dashboard" -> OwnerDashboardScreen(ownerListings, { route = "owner_properties" }, { route = "owner_beds" }, { route = "owner_enquiries" }, { route = "owner_payments" }, { route = "owner_issues" }, { ownerMode = false; route = "home" }, { route = "owner_analytics" }, { route = "owner_residents" })
+                "owner_dashboard" -> OwnerDashboardScreen(ownerListings, { route = "owner_properties" }, { route = "owner_beds" }, { route = "owner_enquiries" }, { route = "owner_payments" }, { route = "owner_issues" }, { ownerMode = false; route = "home" }, { route = "owner_analytics" }, { route = "owner_residents" }, { route = "owner_resident_roster" })
                 "owner_properties" -> OwnerPropertiesScreen(ownerListings, ownerInventoryLoaded, { route = "add_pg" }, { selectedId = it; route = "owner_beds" }, { selectedId = it; route = "edit_pg" })
                 "add_pg" -> AddPropertyWizard(onPublish = { listing ->
                     val baseUrl = preferences.apiBaseUrl
@@ -1016,8 +1016,9 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }
                     }
                 }, { notify(it) }, { route = "owner_properties" })
-                "owner_enquiries" -> FeatureRecordsScreen("enquiries", ownerMode = true) { route = "feature_hub" }
-                "owner_residents" -> FeatureRecordsScreen("residents", ownerMode = true) { route = "feature_hub" }
+                "owner_enquiries" -> OwnerEnquiriesInboxScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), { route = "owner_dashboard" }, notify)
+                "owner_residents" -> OwnerMoveInArrivalsScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), "Arrivals", { route = "owner_dashboard" }, notify)
+                "owner_resident_roster" -> OwnerMoveInArrivalsScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), "Residents", { route = "owner_dashboard" }, notify)
                 "add_resident" -> {
                     val activeListing = residentListing
                     if (activeListing?.serverPropertyId != null) {
@@ -1142,8 +1143,8 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }, { route = "owner_beds" })
                     }
                 }
-                "owner_payments" -> FeatureRecordsScreen("payments", ownerMode = true) { route = "feature_hub" }
-                "owner_issues" -> FeatureRecordsScreen("issues", ownerMode = true) { route = "feature_hub" }
+                "owner_payments" -> OwnerRentDueScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), { route = "owner_dashboard" }, notify)
+                "owner_issues" -> OwnerMaintenancePriorityScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), { route = "owner_dashboard" }, notify)
                 "owner_analytics" -> FeatureRecordsScreen("reports", ownerMode = true) { route = "feature_hub" }
                 "owner_settings" -> ThemeSettingsScreen(preferences, { updated -> onPreferencesChanged(updated) }, { route = "feature_hub" })
                 else -> if (route.startsWith("records:")) {
@@ -2620,7 +2621,8 @@ private fun NotificationsScreen(onBack: () -> Unit) {
 @Composable
 private fun OwnerDashboardScreen(
     listings: List<PgListing>, onProperties: () -> Unit, onBeds: () -> Unit, onEnquiries: () -> Unit,
-    onPayments: () -> Unit, onIssues: () -> Unit, onTenantView: () -> Unit, onAnalytics: () -> Unit, onResidents: () -> Unit
+    onPayments: () -> Unit, onIssues: () -> Unit, onTenantView: () -> Unit, onAnalytics: () -> Unit,
+    onArrivals: () -> Unit, onResidents: () -> Unit
 ) {
     val serverListings = listings.filter { it.serverPropertyId != null }
     val liveServerUnits = serverListings.flatMap { it.serverUnits }
@@ -2650,7 +2652,7 @@ private fun OwnerDashboardScreen(
         TaskCard("Reply to new enquiries", "4 people are waiting for a response", Icons.Filled.ChatBubbleOutline, "4", SE.BlueSoft, SE.Blue, onEnquiries)
         TaskCard("Review rent due", "3 sample balances need attention", Icons.Filled.Payments, "3", SE.OrangeSoft, SE.Orange, onPayments)
         TaskCard("Resolve maintenance", "1 issue is marked urgent", Icons.Filled.ReportProblem, "1", SE.RedSoft, SE.Red, onIssues)
-        TaskCard("Prepare arrivals", "2 move-ins are scheduled", Icons.Filled.CalendarToday, "2", SE.Lavender, SE.Ink, onResidents)
+        TaskCard("Prepare arrivals", "Review submitted registrations and expected move-ins", Icons.Filled.CalendarToday, "Arrivals", SE.Lavender, SE.Ink, onArrivals)
         Spacer(Modifier.height(18.dp)); Row(verticalAlignment = Alignment.CenterVertically) { Text("Occupancy pulse", color = SE.Ink, fontSize = 17.sp, fontWeight = FontWeight.Bold); Spacer(Modifier.weight(1f)); TextButton(onClick = onAnalytics) { Text("Insights", color = SE.Blue) } }
         Card(shape = SE.cardShape(20.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) { Column(Modifier.padding(15.dp)) { Row(verticalAlignment = Alignment.Bottom) { Text("${if(totalBeds > 0) (occupied * 100 / totalBeds) else 0}%", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = SE.Ink); Spacer(Modifier.width(8.dp)); Text("estimated occupancy", color = SE.Muted, fontSize = 11.sp, modifier = Modifier.padding(bottom = 5.dp)); Spacer(Modifier.weight(1f)); Icon(Icons.AutoMirrored.Filled.TrendingUp, null, tint = SE.MintText) }; Spacer(Modifier.height(10.dp)); Box(Modifier.fillMaxWidth().height(9.dp).clip(CircleShape).background(SE.Background)) { Box(Modifier.fillMaxWidth((if(totalBeds > 0) occupied.toFloat() / totalBeds else 0.65f).coerceIn(0f, 1f)).fillMaxHeight().clip(CircleShape).background(SE.Blue)) }; Spacer(Modifier.height(7.dp)); Text("Keep availability current to avoid disappointing customers.", color = SE.Muted, fontSize = 11.sp) } }
         Spacer(Modifier.height(18.dp)); Text("Quick actions", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 17.sp); Spacer(Modifier.height(10.dp))
