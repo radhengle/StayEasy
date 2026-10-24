@@ -144,6 +144,34 @@ Index("uq_active_reservation_per_unit", Reservation.unit_id, unique=True,
       postgresql_where=text("unit_id IS NOT NULL AND status IN ('pending','confirmed','checked_in')"),
       sqlite_where=text("unit_id IS NOT NULL AND status IN ('pending','confirmed','checked_in')"))
 
+class PropertyInvitation(Base):
+    __tablename__ = "property_invitations"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    property_id: Mapped[int] = mapped_column(ForeignKey("properties.id", ondelete="CASCADE"), index=True)
+    unit_id: Mapped[int] = mapped_column(ForeignKey("property_units.id"), index=True)
+    enquiry_id: Mapped[int | None] = mapped_column(ForeignKey("enquiries.id"), nullable=True, index=True)
+    invited_by: Mapped[str] = mapped_column(String(36), index=True)
+    recipient_user_id: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    recipient_email: Mapped[str] = mapped_column(String(255), index=True)
+    recipient_name: Mapped[str] = mapped_column(String(180), default="")
+    recipient_phone: Mapped[str] = mapped_column(String(40), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    move_in_date: Mapped[Date] = mapped_column(Date)
+    rent_snapshot: Mapped[int] = mapped_column(Integer, default=0)
+    deposit_snapshot: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    accepted_by: Mapped[str | None] = mapped_column(String(36), nullable=True, index=True)
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reservation_id: Mapped[int | None] = mapped_column(ForeignKey("reservations.id"), nullable=True, index=True)
+    reassignment_reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+Index("ix_property_invitations_pending_expiry", PropertyInvitation.status, PropertyInvitation.expires_at)
+
+
+
 class ResidentStay(Base):
     __tablename__ = "resident_stays"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -190,8 +218,10 @@ class LedgerEntry(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     property_id: Mapped[int] = mapped_column(ForeignKey("properties.id"), index=True)
     resident_stay_id: Mapped[int | None] = mapped_column(ForeignKey("resident_stays.id"), nullable=True, index=True)
+    reservation_id: Mapped[int | None] = mapped_column(ForeignKey("reservations.id"), nullable=True, index=True)
     category: Mapped[str] = mapped_column(String(30), index=True)  # rent_charge/payment/deposit/refund/deduction/expense/food/utility
-    amount: Mapped[int] = mapped_column(Integer)
+    amount: Mapped[int] = mapped_column(Integer)  # Backward-compatible rounded rupee display amount
+    amount_paise: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Exact minor-unit amount where available
     currency: Mapped[str] = mapped_column(String(3), default="INR")
     billing_period: Mapped[str] = mapped_column(String(30), default="")
     due_date: Mapped[Date | None] = mapped_column(Date, nullable=True)
