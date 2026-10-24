@@ -255,6 +255,11 @@ internal object StayApiClient {
         return JSONObject(request(baseUrl, "/owner/enquiries/$enquiryId/status", token, "POST", JSONObject().put("status", normalized)))
     }
 
+    fun updateVisit(baseUrl: String, token: String, visitId: Long, status: String): JSONObject {
+        val normalized = status.lowercase(Locale.ROOT).replace(' ', '_').replace('-', '_')
+        return JSONObject(request(baseUrl, "/owner/visits/$visitId/status", token, "POST", JSONObject().put("status", normalized)))
+    }
+
     fun enquiries(baseUrl: String, token: String): List<JSONObject> {
         val result = JSONArray(request(baseUrl, "/enquiries", token))
         return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
@@ -262,6 +267,11 @@ internal object StayApiClient {
 
     fun reservations(baseUrl: String, token: String): List<JSONObject> {
         val result = JSONArray(request(baseUrl, "/reservations", token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun visits(baseUrl: String, token: String): List<JSONObject> {
+        val result = JSONArray(request(baseUrl, "/visits", token))
         return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
     }
 
