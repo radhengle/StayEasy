@@ -121,6 +121,10 @@ class ReservationStatus(BaseModel):
     expires_at: datetime | None = None
     cancellation_reason: str = ""
 
+class ReservationReassignRequest(BaseModel):
+    new_unit_id: int = Field(gt=0)
+    reason: str = Field(min_length=3, max_length=1000)
+
 class StayCreate(BaseModel):
     property_id: int
     unit_id: int
@@ -328,8 +332,68 @@ def visible_property_ids(db: Session, actor: dict[str, Any], resource: str) -> l
     ))
     return sorted({assignment.property_id for assignment in assignments if allowed.intersection(assignment.permissions or [])})
 
+def resolve_unit_inventory(db: Session, unit: m.PropertyUnit) -> dict[str, Any]:
+    """Resolve current status from stays and live reservations, not from a stale status label."""
+    now = datetime.now(timezone.utc)
+    stay = db.scalar(select(m.ResidentStay).where(
+        m.ResidentStay.unit_id == unit.id,
+        m.ResidentStay.status.in_(["active", "notice_given"]),
+    ).order_by(m.ResidentStay.id.desc()).limit(1))
+    reservation = db.scalar(select(m.Reservation).where(
+        m.Reservation.unit_id == unit.id,
+        or_(
+            m.Reservation.status.in_(["confirmed", "checked_in"]),
+            and_(
+                m.Reservation.status == "pending",
+                or_(m.Reservation.expires_at.is_(None), m.Reservation.expires_at > now)
+            )
+        )
+    ).order_by(m.Reservation.created_at.desc()).limit(1))
+    status = "occupied" if stay is not None else "reserved" if reservation is not None else (
+        unit.status if unit.status in {"maintenance", "inactive"} else "available"
+    )
+    resident = db.get(m.User, stay.resident_id) if stay else None
+    reserved_customer = db.get(m.User, reservation.customer_id) if reservation else None
+    return {
+        "status": status,
+        "resident_stay": stay,
+        "resident_name": resident.display_name if resident and resident.display_name else (stay.resident_id if stay else ""),
+        "reservation": reservation,
+        "reserved_for": reserved_customer.display_name if reserved_customer and reserved_customer.display_name else (reservation.customer_id if reservation else ""),
+    }
+
+
+def unit_inventory_dict(db: Session, unit: m.PropertyUnit, include_private: bool = False) -> dict[str, Any]:
+    state = resolve_unit_inventory(db, unit)
+    out = {
+        "id": unit.id,
+        "property_id": unit.property_id,
+        "floor_label": unit.floor_label,
+        "room_code": unit.room_code,
+        "unit_code": unit.unit_code,
+        "rentable_type": unit.rentable_type,
+        "sharing_capacity": unit.sharing_capacity,
+        "monthly_rent": unit.monthly_rent,
+        "deposit": unit.deposit,
+        "status": state["status"],
+        "expected_vacancy": unit.expected_vacancy.isoformat() if unit.expected_vacancy else None,
+        "reservation_id": state["reservation"].id if state["reservation"] else None,
+        "resident_stay_id": state["resident_stay"].id if state["resident_stay"] else None,
+    }
+    if include_private:
+        out["occupant"] = {
+            "user_id": state["resident_stay"].resident_id if state["resident_stay"] else None,
+            "display_name": state["resident_name"],
+        } if state["resident_stay"] else None
+        out["reserved_for"] = {
+            "user_id": state["reservation"].customer_id,
+            "display_name": state["reserved_for"],
+        } if state["reservation"] else None
+    return out
+
+
 def expire_pending_reservations_for_unit(db: Session, unit_id: int, actor: dict[str, Any]) -> int:
-    """Expire timed-out pending holds before checking the active-reservation unique index."""
+    """Expire timed-out pending holds and repair a stale reserved label before availability checks."""
     now = datetime.now(timezone.utc)
     expired = list(db.scalars(select(m.Reservation).where(
         m.Reservation.unit_id == unit_id,
@@ -342,8 +406,15 @@ def expire_pending_reservations_for_unit(db: Session, unit_id: int, actor: dict[
         reservation.status = "expired"
         audit(db, actor, "reservation", reservation.id, "expired_due_to_timeout", old=old, new={"status": "expired"})
     if expired:
+        db.flush()
+        unit = db.get(m.PropertyUnit, unit_id)
+        if unit:
+            state = resolve_unit_inventory(db, unit)
+            if state["status"] in {"available", "reserved", "occupied"}:
+                unit.status = state["status"]
         db.commit()
     return len(expired)
+
 
 def property_dict(p: m.Property, db: Session | None = None) -> dict:
     out = {"id": p.id, "owner_id": p.owner_id, "name": p.name, "description": p.description, "address": p.address,
@@ -357,13 +428,18 @@ def property_dict(p: m.Property, db: Session | None = None) -> dict:
            "availability_confirmed_at": p.availability_confirmed_at.isoformat() if p.availability_confirmed_at else None,
            "created_at": p.created_at.isoformat(), "updated_at": p.updated_at.isoformat()}
     if db is not None:
-        units = list(db.scalars(select(m.PropertyUnit).where(m.PropertyUnit.property_id == p.id)))
-        out["inventory"] = {"total": len(units), "available": sum(u.status == "available" for u in units),
-                             "reserved": sum(u.status == "reserved" for u in units), "occupied": sum(u.status == "occupied" for u in units),
-                             "maintenance": sum(u.status == "maintenance" for u in units)}
-        out["units"] = [{"id": u.id, "room_code": u.room_code, "unit_code": u.unit_code, "rentable_type": u.rentable_type,
-                         "sharing_capacity": u.sharing_capacity, "monthly_rent": u.monthly_rent, "deposit": u.deposit, "status": u.status,
-                         "expected_vacancy": u.expected_vacancy.isoformat() if u.expected_vacancy else None} for u in units]
+        units = list(db.scalars(select(m.PropertyUnit).where(m.PropertyUnit.property_id == p.id)
+                                .order_by(m.PropertyUnit.floor_label, m.PropertyUnit.room_code, m.PropertyUnit.unit_code)))
+        public_units = [unit_inventory_dict(db, unit, include_private=False) for unit in units]
+        out["inventory"] = {
+            "total": len(public_units),
+            "available": sum(u["status"] == "available" for u in public_units),
+            "reserved": sum(u["status"] == "reserved" for u in public_units),
+            "occupied": sum(u["status"] == "occupied" for u in public_units),
+            "maintenance": sum(u["status"] == "maintenance" for u in public_units),
+            "inactive": sum(u["status"] == "inactive" for u in public_units),
+        }
+        out["units"] = public_units
         amenity_rows = list(db.scalars(select(m.PropertyAmenity).where(m.PropertyAmenity.property_id == p.id)))
         amenity_values = []
         for link in amenity_rows:
@@ -459,30 +535,74 @@ def create_unit(property_id: int, body: UnitCreate, actor: dict = Depends(requir
         db.flush(); audit(db, actor, "unit", unit.id, "created", new={"unit_code": unit.unit_code, "status": unit.status}); db.commit(); db.refresh(unit)
     except IntegrityError as exc:
         db.rollback(); raise HTTPException(409, "This room / unit code already exists for the property") from exc
-    return {"id": unit.id, "property_id": unit.property_id, "room_code": unit.room_code, "unit_code": unit.unit_code, "status": unit.status,
-            "monthly_rent": unit.monthly_rent, "deposit": unit.deposit, "expected_vacancy": unit.expected_vacancy.isoformat() if unit.expected_vacancy else None}
+    return unit_inventory_dict(db, unit, include_private=False)
 
 @app.patch("/owner/units/{unit_id}/status")
 def update_unit_status(unit_id: int, body: StatusPatch, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
     unit = db.get(m.PropertyUnit, unit_id)
     if not unit: raise HTTPException(404, "Unit not found")
     require_property_manager(db, actor, unit.property_id, "inventory.manage")
-    allowed = {"available", "reserved", "occupied", "maintenance", "inactive"}
-    if body.status not in allowed: raise HTTPException(422, "Invalid unit status")
-    if body.status == "available" and db.scalar(select(m.ResidentStay.id).where(m.ResidentStay.unit_id == unit.id, m.ResidentStay.status.in_(["active", "notice_given"]))):
-        raise HTTPException(409, "An active stay still uses this unit. Complete move-out and settlement first.")
-    old = unit.status; unit.status = body.status
-    audit(db, actor, "unit", unit.id, "status_changed", old={"status": old}, new={"status": body.status}); db.commit(); db.refresh(unit)
-    return {"id": unit.id, "status": unit.status}
+    allowed = {"available", "maintenance", "inactive"}
+    if body.status not in allowed:
+        raise HTTPException(422, "Set only availability or maintenance blocks manually; reservation and stay records control reserved/occupied state.")
+    current = resolve_unit_inventory(db, unit)
+    if body.status == "available" and current["status"] in {"reserved", "occupied"}:
+        raise HTTPException(409, "An active reservation or resident stay controls this unit. Close that workflow before releasing it.")
+    old = unit.status
+    unit.status = body.status
+    audit(db, actor, "unit", unit.id, "status_changed", old={"status": old}, new={"status": body.status})
+    db.commit(); db.refresh(unit)
+    return {"id": unit.id, "status": resolve_unit_inventory(db, unit)["status"]}
 
 @app.get("/owner/units")
 def list_units(property_id: int, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
     require_property_manager(db, actor, property_id, "inventory.view")
     units = list(db.scalars(select(m.PropertyUnit).where(m.PropertyUnit.property_id == property_id).order_by(m.PropertyUnit.floor_label, m.PropertyUnit.room_code, m.PropertyUnit.unit_code)))
-    return [{"id": u.id, "floor_label": u.floor_label, "room_code": u.room_code, "unit_code": u.unit_code, "rentable_type": u.rentable_type,
-             "sharing_capacity": u.sharing_capacity, "eligibility_override": u.eligibility_override, "couples_override": u.couples_override,
-             "monthly_rent": u.monthly_rent, "deposit": u.deposit, "status": u.status,
-             "expected_vacancy": u.expected_vacancy.isoformat() if u.expected_vacancy else None} for u in units]
+    return [{**unit_inventory_dict(db, u, include_private=True),
+             "eligibility_override": u.eligibility_override, "couples_override": u.couples_override} for u in units]
+
+
+@app.get("/owner/properties/{property_id}/inventory-tree")
+def get_owner_inventory_tree(property_id: int, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
+    """Authoritative property → floor → room → rentable-unit tree with scoped occupant/reservation labels."""
+    prop = property_or_404(db, property_id)
+    require_property_manager(db, actor, prop.id, "inventory.view")
+    units = list(db.scalars(
+        select(m.PropertyUnit).where(m.PropertyUnit.property_id == prop.id)
+        .order_by(m.PropertyUnit.floor_label, m.PropertyUnit.room_code, m.PropertyUnit.unit_code)
+    ))
+    floors: dict[str, dict[str, Any]] = {}
+    for unit in units:
+        bed = unit_inventory_dict(db, unit, include_private=True)
+        floor_label = unit.floor_label.strip() or "Unassigned floor"
+        floor = floors.setdefault(floor_label, {"floor_label": floor_label, "rooms": {}})
+        room = floor["rooms"].setdefault(unit.room_code, {"room_code": unit.room_code, "rentable_type": unit.rentable_type, "sharing_capacity": unit.sharing_capacity, "beds": []})
+        room["beds"].append(bed)
+    floor_rows = []
+    for floor in floors.values():
+        room_rows = []
+        for room in floor["rooms"].values():
+            room_rows.append({**room, "beds": room["beds"], "inventory": {
+                "total": len(room["beds"]),
+                "available": sum(b["status"] == "available" for b in room["beds"]),
+                "reserved": sum(b["status"] == "reserved" for b in room["beds"]),
+                "occupied": sum(b["status"] == "occupied" for b in room["beds"]),
+                "unavailable": sum(b["status"] in {"maintenance", "inactive"} for b in room["beds"]),
+            }})
+        floor_rows.append({"floor_label": floor["floor_label"], "rooms": room_rows})
+    all_beds = [unit_inventory_dict(db, unit, include_private=True) for unit in units]
+    return {
+        "property_id": prop.id, "property_name": prop.name,
+        "inventory": {
+            "total": len(all_beds),
+            "available": sum(b["status"] == "available" for b in all_beds),
+            "reserved": sum(b["status"] == "reserved" for b in all_beds),
+            "occupied": sum(b["status"] == "occupied" for b in all_beds),
+            "unavailable": sum(b["status"] in {"maintenance", "inactive"} for b in all_beds),
+        },
+        "floors": floor_rows,
+    }
+
 
 @app.get("/owner/resident-candidates")
 def list_owner_resident_candidates(property_id: int, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
@@ -1006,8 +1126,11 @@ def create_reservation(body: ReservationCreate, actor: dict = Depends(require_ro
     if body.unit_id is not None:
         unit = db.scalar(select(m.PropertyUnit).where(m.PropertyUnit.id == body.unit_id).with_for_update())
         if not unit or unit.property_id != prop.id: raise HTTPException(404, "Unit not found for this property")
-        if unit.status != "available": raise HTTPException(409, f"Unit is currently {unit.status}")
         expire_pending_reservations_for_unit(db, unit.id, actor)
+        current_state = resolve_unit_inventory(db, unit)
+        if current_state["status"] != "available":
+            raise HTTPException(409, f"Unit is currently {current_state['status']}")
+        unit.status = "available"
         now = datetime.now(timezone.utc)
         active_pending = and_(m.Reservation.status == "pending", or_(m.Reservation.expires_at.is_(None), m.Reservation.expires_at > now))
         active_status = m.Reservation.status.in_(["confirmed", "checked_in"])
@@ -1022,6 +1145,8 @@ def create_reservation(body: ReservationCreate, actor: dict = Depends(require_ro
                          move_in_date=body.move_in_date, rent_snapshot=rent, deposit_snapshot=deposit, terms_snapshot=body.terms_snapshot,
                          expires_at=datetime.now(timezone.utc) + timedelta(hours=24))
     db.add(item)
+    if unit is not None:
+        unit.status = "reserved"
     try:
         db.flush(); add_notification(db, prop.owner_id, "Reservation request", f"A customer requested a reservation for {prop.name}."); audit(db, actor, "reservation", item.id, "requested", new={"property_id": prop.id, "unit_id": body.unit_id, "expires_at": item.expires_at.isoformat()}); db.commit(); db.refresh(item)
     except IntegrityError as exc:
@@ -1048,7 +1173,7 @@ def list_reservations(property_id: int | None = None, actor: dict = Depends(get_
 
 @app.patch("/owner/reservations/{reservation_id}")
 def update_reservation(reservation_id: int, body: ReservationStatus, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
-    item = db.get(m.Reservation, reservation_id)
+    item = db.scalar(select(m.Reservation).where(m.Reservation.id == reservation_id).with_for_update())
     if not item: raise HTTPException(404, "Reservation not found")
     require_property_manager(db, actor, item.property_id, "reservations.manage")
     if item.status == "pending" and item.expires_at is not None:
@@ -1076,11 +1201,52 @@ def update_reservation(reservation_id: int, body: ReservationStatus, actor: dict
     if item.unit_id:
         unit = db.get(m.PropertyUnit, item.unit_id)
         if unit:
-            if body.status == "confirmed": unit.status = "reserved"
-            elif body.status == "checked_in": unit.status = "occupied"
-            elif body.status in {"cancelled", "expired"} and unit.status == "reserved": unit.status = "available"
+            db.flush()
+            resolved = resolve_unit_inventory(db, unit)["status"]
+            if resolved in {"available", "reserved", "occupied"}:
+                unit.status = resolved
     audit(db, actor, "reservation", item.id, "status_changed", old=old, new={"status": item.status})
+    if item.unit_id:
+        tenant = db.get(m.User, item.customer_id)
+        add_notification(db, item.customer_id, "Reservation update", f"Your reservation for {item.move_in_date.isoformat()} is now {item.status}.")
     db.commit(); db.refresh(item); return {"id": item.id, "status": item.status}
+
+@app.post("/owner/reservations/{reservation_id}/reassign")
+def reassign_reservation(reservation_id: int, body: ReservationReassignRequest, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
+    item = db.scalar(select(m.Reservation).where(m.Reservation.id == reservation_id).with_for_update())
+    if not item:
+        raise HTTPException(404, "Reservation not found")
+    require_property_manager(db, actor, item.property_id, "reservations.manage")
+    if item.status not in {"pending", "confirmed"}:
+        raise HTTPException(409, "Only a pending or confirmed reservation can be reassigned")
+    old_unit = db.scalar(select(m.PropertyUnit).where(m.PropertyUnit.id == item.unit_id).with_for_update()) if item.unit_id else None
+    new_unit = db.scalar(select(m.PropertyUnit).where(m.PropertyUnit.id == body.new_unit_id).with_for_update())
+    if not new_unit or new_unit.property_id != item.property_id:
+        raise HTTPException(404, "Replacement bed must belong to the same property")
+    if old_unit and old_unit.id == new_unit.id:
+        raise HTTPException(422, "Choose a different bed to reassign")
+    expire_pending_reservations_for_unit(db, new_unit.id, actor)
+    target_state = resolve_unit_inventory(db, new_unit)
+    if target_state["status"] != "available":
+        raise HTTPException(409, f"Replacement bed is currently {target_state['status']}")
+    old_assignment = {"unit_id": item.unit_id, "room_code": old_unit.room_code if old_unit else None, "unit_code": old_unit.unit_code if old_unit else None}
+    item.unit_id = new_unit.id
+    item.rent_snapshot = new_unit.monthly_rent or item.rent_snapshot
+    item.deposit_snapshot = new_unit.deposit or item.deposit_snapshot
+    new_unit.status = "reserved"
+    db.flush()
+    if old_unit:
+        old_state = resolve_unit_inventory(db, old_unit)["status"]
+        if old_state in {"available", "reserved", "occupied"}:
+            old_unit.status = old_state
+    add_notification(db, item.customer_id, "Proposed bed changed", f"The owner changed your proposed bed to Room {new_unit.room_code}, {new_unit.unit_code}. Reason: {body.reason}. Review and confirm the updated assignment before move-in.")
+    audit(db, actor, "reservation", item.id, "bed_reassigned", old=old_assignment, new={"unit_id": new_unit.id, "room_code": new_unit.room_code, "unit_code": new_unit.unit_code, "reason": body.reason})
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "status": item.status, "unit_id": new_unit.id, "room_code": new_unit.room_code,
+            "unit_code": new_unit.unit_code, "monthly_rent": item.rent_snapshot, "deposit": item.deposit_snapshot,
+            "reason": body.reason, "tenant_notified": True}
+
 
 @app.post("/owner/reservations/{reservation_id}/status")
 def update_reservation_status_action(reservation_id: int, body: ReservationStatus, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
