@@ -1600,6 +1600,7 @@ def accept_tenant_invitation(body: TenantInvitationAccept,
     invitation.status = "accepted"
     invitation.accepted_by = user.id
     invitation.accepted_at = now
+    invitation.recipient_user_id = user.id
     try:
         db.flush()
         invitation.reservation_id = reservation.id
