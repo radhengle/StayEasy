@@ -180,7 +180,7 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
     val title = StayRecordConfig.titles[category] ?: category.replaceFirstChar { if (it.isLowerCase()) it.titlecase(Locale.getDefault()) else it.toString() }
     val records = remember(category) { mutableStateListOf<StayRecord>().apply { addAll(StayRecordStore.load(context, category)) } }
     val apiPreferences = remember { StayPreferenceStore.load(context) }
-    val sessionToken = StayApiClient.currentSessionToken()
+    val sessionToken = StayApiClient.currentSessionToken(apiPreferences.apiBaseUrl)
     val remoteScope = rememberCoroutineScope()
     var remoteSyncMessage by remember(category) { mutableStateOf("") }
     LaunchedEffect(category, apiPreferences.apiBaseUrl, sessionToken) {
@@ -233,8 +233,43 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
     var priority by remember(category) { mutableStateOf("Normal") }
     var formError by remember(category) { mutableStateOf("") }
     var showDeleteId by remember(category) { mutableStateOf<String?>(null) }
+    var showServerStatusId by remember(category) { mutableStateOf<String?>(null) }
+    var updatingServerStatus by remember(category) { mutableStateOf(false) }
 
     fun refresh() { records.clear(); records.addAll(StayRecordStore.load(context, category)) }
+    fun updateServerStatus(record: StayRecord, nextStatus: String) {
+        val token = StayApiClient.currentSessionToken(apiPreferences.apiBaseUrl)
+        val serverId = record.id.substringAfterLast('-').toLongOrNull()
+        if (token == null || serverId == null || apiPreferences.apiBaseUrl.isBlank()) {
+            remoteSyncMessage = "Connect a valid owner API session before changing server records."
+            showServerStatusId = null
+            return
+        }
+        if (updatingServerStatus) return
+        updatingServerStatus = true
+        remoteScope.launch {
+            try {
+                val response = withContext(Dispatchers.IO) {
+                    if (category == "reservations") {
+                        StayApiClient.updateReservation(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
+                    } else {
+                        StayApiClient.updateEnquiry(apiPreferences.apiBaseUrl, token, serverId, nextStatus)
+                    }
+                }
+                val rawStatus = response.optString("status", nextStatus.lowercase(Locale.ROOT).replace(' ', '_'))
+                val displayStatus = rawStatus.replace('_', ' ').replaceFirstChar { it.uppercase(Locale.ROOT) }
+                StayRecordStore.update(context, category, record.copy(status = displayStatus, updatedAt = System.currentTimeMillis()))
+                refresh()
+                StayRecordStore.notify(context, "$title updated on server", "${record.title}: $displayStatus", record.property)
+                remoteSyncMessage = "Server confirmed status: $displayStatus"
+            } catch (e: Exception) {
+                remoteSyncMessage = "Server update failed: ${e.message ?: "check owner permission"}"
+            } finally {
+                updatingServerStatus = false
+                showServerStatusId = null
+            }
+        }
+    }
     fun clearForm() {
         editingId = null; titleText = ""; detailsText = ""; personText = ""; propertyText = ""; unitText = ""; amountText = ""; dateText = ""; priority = "Normal"; formError = ""
     }
@@ -306,32 +341,19 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
                             Spacer(Modifier.height(8.dp)); Divider(color = SE.Border.copy(alpha = .65f))
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text("${r.source} · ${StayRecordStore.dateLabel(r.updatedAt)}", color = SE.Muted, fontSize = 8.sp, modifier = Modifier.weight(1f), maxLines = 2)
-                                TextButton(onClick = { openEdit(r) }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Edit", color = SE.Blue, fontSize = 10.sp) }
-                                if (r.source != "Server") TextButton(onClick = { openEdit(r) }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Edit", color = SE.Blue, fontSize = 10.sp) }
-                                if (r.source != "Server" || (ownerMode && category in setOf("enquiries", "reservations"))) TextButton(onClick = {
+                                                if (r.source != "Server") TextButton(onClick = { openEdit(r) }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Edit", color = SE.Blue, fontSize = 10.sp) }
+                                if (r.source != "Server") TextButton(onClick = {
                                     val next = cycleStatus(category, r.status)
-                                    if (r.source == "Server" && category in setOf("enquiries", "reservations")) {
-                                        val token = StayApiClient.currentSessionToken()
-                                        val serverId = r.id.substringAfterLast('-').toLongOrNull()
-                                        if (token == null || serverId == null || apiPreferences.apiBaseUrl.isBlank()) {
-                                            remoteSyncMessage = "Connect a valid owner API session before changing server records."
-                                        } else remoteScope.launch {
-                                            try {
-                                                withContext(Dispatchers.IO) {
-                                                    if (category == "reservations") StayApiClient.updateReservation(apiPreferences.apiBaseUrl, token, serverId, next)
-                                                    else StayApiClient.updateEnquiry(apiPreferences.apiBaseUrl, token, serverId, next)
-                                                }
-                                                StayRecordStore.update(context, category, r.copy(status = next, updatedAt = System.currentTimeMillis()))
-                                                refresh(); StayRecordStore.notify(context, "$title updated on server", "${r.title}: $next", r.property)
-                                                remoteSyncMessage = "Server confirmed status: $next"
-                                            } catch (e: Exception) { remoteSyncMessage = "Server update failed: ${e.message ?: "check owner permission"}" }
-                                        }
-                                    } else {
-                                        val updated = r.copy(status = next, updatedAt = System.currentTimeMillis())
-                                        StayRecordStore.update(context, category, updated); refresh()
-                                        StayRecordStore.notify(context, "$title updated", "${r.title}: $next", r.property)
-                                    }
+                                    val updated = r.copy(status = next, updatedAt = System.currentTimeMillis())
+                                    StayRecordStore.update(context, category, updated); refresh()
+                                    StayRecordStore.notify(context, "$title updated", "${r.title}: $next", r.property)
                                 }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Next status", color = SE.Blue, fontSize = 10.sp) }
+                                if (r.source == "Server" && ownerMode && category in setOf("enquiries", "reservations") && serverStatusOptions(category, r.status).isNotEmpty()) {
+                                    TextButton(onClick = { showServerStatusId = r.id }, enabled = !updatingServerStatus,
+                                        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) {
+                                        Text(if (updatingServerStatus) "Updating…" else "Update status", color = SE.Blue, fontSize = 10.sp)
+                                    }
+                                }
                                 if (r.source != "Server" && category in setOf("saved_searches", "tasks", "notices", "messages", "profile", "privacy", "documents", "quality", "admin", "housekeeping", "food", "visits", "enquiries", "reservations")) TextButton(onClick = { showDeleteId = r.id }, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)) { Text("Remove", color = SE.Red, fontSize = 10.sp) }
                             }
                         }
@@ -390,6 +412,30 @@ internal fun FeatureRecordsScreen(category: String, ownerMode: Boolean, onBack: 
         AlertDialog(onDismissRequest = { showDeleteId = null }, title = { Text("Remove this record?", color = SE.Ink) }, text = { Text("This only removes the local prototype record from this device.", color = SE.Muted) },
             confirmButton = { TextButton(onClick = { showDeleteId?.let { StayRecordStore.remove(context, category, it) }; refresh(); showDeleteId = null }) { Text("Remove", color = SE.Red) } },
             dismissButton = { TextButton(onClick = { showDeleteId = null }) { Text("Cancel") } }, containerColor = SE.Surface)
+    }
+    val selectedServerStatusRecord = showServerStatusId?.let { id -> records.firstOrNull { it.id == id && it.source == "Server" } }
+    if (selectedServerStatusRecord != null) {
+        val options = serverStatusOptions(category, selectedServerStatusRecord.status)
+        AlertDialog(
+            onDismissRequest = { if (!updatingServerStatus) showServerStatusId = null },
+            title = { Text("Update server status", color = SE.Ink, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(selectedServerStatusRecord.title, color = SE.Text, fontWeight = FontWeight.SemiBold)
+                    Text("Choose an allowed action. StayEasy will save the change only after the server confirms it.", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
+                    options.forEach { target ->
+                        Button(
+                            onClick = { updateServerStatus(selectedServerStatusRecord, target) },
+                            enabled = !updatingServerStatus,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)
+                        ) { Text(if (updatingServerStatus) "Updating…" else target) }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { if (!updatingServerStatus) showServerStatusId = null }) { Text("Cancel") } },
+            containerColor = SE.Surface
+        )
     }
 }
 
@@ -493,6 +539,22 @@ private fun cycleStatus(category: String, current: String): String {
     return statuses[(index + 1).let { if (it < 0 || it >= statuses.size) 0 else it }]
 }
 
+private fun serverStatusOptions(category: String, current: String): List<String> = when (category) {
+    "enquiries" -> when (current.trim().lowercase(Locale.ROOT)) {
+        "new" -> listOf("Contacted", "Visit scheduled", "Closed")
+        "contacted" -> listOf("Visit scheduled", "Converted", "Closed")
+        "visit scheduled" -> listOf("Contacted", "Converted", "Closed")
+        "converted" -> listOf("Closed")
+        else -> emptyList()
+    }
+    "reservations" -> when (current.trim().lowercase(Locale.ROOT)) {
+        "pending" -> listOf("Confirmed", "Cancelled", "Expired")
+        "confirmed" -> listOf("Checked in", "Cancelled", "Expired")
+        else -> emptyList()
+    }
+    else -> emptyList()
+}
+
 @Composable
 private fun SmallInfoPill(text: String, bg: Color, fg: Color) {
     Box(Modifier.clip(CircleShape).background(bg).padding(horizontal = 9.dp, vertical = 5.dp)) { Text(text, color = fg, fontSize = 9.sp, fontWeight = FontWeight.SemiBold, maxLines = 1) }
@@ -549,7 +611,7 @@ internal fun ApiConnectionScreen(
             try {
                 val result = withContext(Dispatchers.IO) {
                     val health = StayApiClient.health(baseUrl)
-                    if (token.isNotBlank()) StayApiClient.setSessionToken(token)
+                    if (token.isNotBlank()) StayApiClient.setSessionToken(token, baseUrl)
                     val rows = if (loadListings) StayApiClient.publishedProperties(baseUrl) else emptyList()
                     val dashboard = if (token.isNotBlank()) runCatching { StayApiClient.ownerDashboard(baseUrl, token) }.getOrNull() else null
                     Triple(health, rows, dashboard)
@@ -573,12 +635,27 @@ internal fun ApiConnectionScreen(
             Column(Modifier.padding(15.dp)) {
                 Text("API base URL", color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 Spacer(Modifier.height(6.dp))
-                OutlinedTextField(value = baseUrl, onValueChange = { baseUrl = it; onBaseUrlChanged(it) }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("https://api.your-domain.com") }, shape = RoundedCornerShape(12.dp))
+                OutlinedTextField(value = baseUrl, onValueChange = { nextBaseUrl ->
+                    val originChanged = StayApiClient.apiOrigin(baseUrl) != StayApiClient.apiOrigin(nextBaseUrl)
+                    if (originChanged && (token.isNotBlank() || StayApiClient.currentSessionToken(baseUrl) != null)) {
+                        token = ""
+                        StayApiClient.clearSessionToken()
+                        status = "API origin changed. Enter a token issued for the new server."
+                    }
+                    baseUrl = nextBaseUrl
+                    onBaseUrlChanged(nextBaseUrl)
+                }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("https://api.your-domain.com") }, shape = RoundedCornerShape(12.dp))
                 Text("Use HTTPS for remote services. For the API scaffold, see backend/README.md. Demo data remains available if no API is configured.", color = SE.Muted, fontSize = 10.sp, lineHeight = 15.sp)
                 Spacer(Modifier.height(12.dp)); Text("API session token", color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 OutlinedTextField(value = token, onValueChange = { token = it; if (it.isBlank()) StayApiClient.clearSessionToken() }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Paste a short-lived bearer token") }, shape = RoundedCornerShape(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Button(onClick = { StayApiClient.setSessionToken(token); status = if (token.isBlank()) "Enter a token first." else "Token enabled for this app session." }, enabled = !busy && token.isNotBlank(), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) { Text("Use token") }
+                    Button(onClick = {
+                        if (StayApiClient.apiOrigin(baseUrl) == null) status = "Enter a valid API URL before enabling the token."
+                        else {
+                            StayApiClient.setSessionToken(token, baseUrl)
+                            status = "Token enabled for this API server in this app session."
+                        }
+                    }, enabled = !busy && token.isNotBlank(), colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)) { Text("Use token") }
                     Text("Memory only; not saved to preferences.", color = SE.Muted, fontSize = 10.sp)
                 }
                 Spacer(Modifier.height(13.dp)); Text("Development token helper", color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
