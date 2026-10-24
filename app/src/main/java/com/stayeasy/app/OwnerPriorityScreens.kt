@@ -115,6 +115,8 @@ internal fun OwnerEnquiriesInboxScreen(baseUrl: String, token: String?, onBack: 
     var moveInDate by remember { mutableStateOf(LocalDate.now().plusDays(7).toString()) }
     var unitId by remember { mutableLongStateOf(0L) }
     var inviteLink by remember { mutableStateOf("") }
+    var requiredDocumentCategories by remember { mutableStateOf(setOf<String>()) }
+    var documentRequestReason by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
 
     LaunchedEffect(baseUrl, token, refresh) {
@@ -159,6 +161,8 @@ internal fun OwnerEnquiriesInboxScreen(baseUrl: String, token: String?, onBack: 
                         val prop = properties.firstOrNull { it.serverPropertyId == row.optLong("property_id") }
                         unitId = prop?.serverUnits?.firstOrNull { it.status.equals("available", true) }?.id ?: 0L
                         inviteLink = ""
+                        requiredDocumentCategories = emptySet()
+                        documentRequestReason = ""
                     }) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -211,6 +215,36 @@ internal fun OwnerEnquiriesInboxScreen(baseUrl: String, token: String?, onBack: 
                     else available.forEach { unit ->
                         FilterChip(selected = unitId == unit.id, onClick = { unitId = unit.id }, label = { Text("Room ${unit.roomCode} · ${unit.unitCode} · ${unit.sharingCapacity}-sharing · ${priorityRupees(unit.monthlyRent)}/mo") })
                     }
+                    Text("Optional documents for this property", color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                    Text("Select only documents needed for a disclosed, legitimate purpose. Aadhaar is not a default requirement.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
+                    listOf(
+                        "government_id" to "Government ID (only if necessary)",
+                        "address_proof" to "Address proof",
+                        "pan_optional" to "PAN (optional, where justified)",
+                        "employment_optional" to "Employment details (optional)",
+                        "other" to "Other (specify below)"
+                    ).forEach { (key, label) ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = key in requiredDocumentCategories,
+                                onCheckedChange = { checked ->
+                                    requiredDocumentCategories = if (checked) requiredDocumentCategories + key else requiredDocumentCategories - key
+                                }
+                            )
+                            Text(label, color = SE.Ink, fontSize = 11.sp)
+                        }
+                    }
+                    if (requiredDocumentCategories.isNotEmpty()) {
+                        OutlinedTextField(
+                            value = documentRequestReason,
+                            onValueChange = { documentRequestReason = it.take(1000) },
+                            label = { Text("Why are these documents needed?") },
+                            supportingText = { Text("At least 10 characters; shown to the tenant before consent.") },
+                            modifier = Modifier.fillMaxWidth(),
+                            minLines = 2,
+                            maxLines = 3
+                        )
+                    }
                     if (inviteLink.isNotBlank()) {
                         Text("Invitation link created once. Share it with this tenant:", color = SE.Blue, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                         Text(inviteLink, color = SE.Ink, fontSize = 10.sp, lineHeight = 14.sp)
@@ -235,14 +269,18 @@ internal fun OwnerEnquiriesInboxScreen(baseUrl: String, token: String?, onBack: 
                         }
                     }, modifier = Modifier.fillMaxWidth()) { Text("Save reply") }
                     Button(enabled = !busy && !token.isNullOrBlank() && customer?.email?.isNotBlank() == true &&
-                        (prop?.serverPropertyId ?: 0L) > 0L && unitId > 0L && available.any { it.id == unitId } && dateIsValid,
+                        (prop?.serverPropertyId ?: 0L) > 0L && unitId > 0L && available.any { it.id == unitId } && dateIsValid &&
+                        (requiredDocumentCategories.isEmpty() || documentRequestReason.trim().length >= 10),
                         onClick = {
                             busy = true
                             scope.launch {
                                 try {
                                     val invitation = withContext(Dispatchers.IO) {
-                                        StayApiClient.createTenantInvitation(baseUrl, token!!, prop!!.serverPropertyId!!, unitId,
-                                            enquiry.optLong("id"), customer!!.email, customer.displayName, "", moveInDate, 168)
+                                        StayApiClient.createTenantInvitation(
+                                            baseUrl, token!!, prop!!.serverPropertyId!!, unitId,
+                                            enquiry.optLong("id"), customer!!.email, customer.displayName, "", moveInDate, 168,
+                                            requiredDocumentCategories.toList(), documentRequestReason
+                                        )
                                     }
                                     inviteLink = invitation.pText("invitation_url")
                                     runCatching {
