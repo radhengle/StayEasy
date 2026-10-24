@@ -457,12 +457,69 @@ internal object StayApiClient {
         return JSONObject(request(baseUrl, "/owner/reservations/$reservationId/status", token, "POST", JSONObject().put("status", normalized)))
     }
 
-    fun updateEnquiry(baseUrl: String, token: String, enquiryId: Long, status: String): JSONObject {
+    fun updateEnquiry(
+        baseUrl: String,
+        token: String,
+        enquiryId: Long,
+        status: String,
+        ownerResponse: String? = null
+    ): JSONObject {
+        require(enquiryId > 0L) { "Select a valid enquiry." }
         val normalized = when (status.lowercase(Locale.ROOT)) {
             "visit scheduled" -> "visit_scheduled"
             else -> status.lowercase(Locale.ROOT).replace(' ', '_')
         }
-        return JSONObject(request(baseUrl, "/owner/enquiries/$enquiryId/status", token, "POST", JSONObject().put("status", normalized)))
+        val body = JSONObject().put("status", normalized)
+        ownerResponse?.let { body.put("owner_response", it.trim().take(4000)) }
+        return JSONObject(request(baseUrl, "/owner/enquiries/$enquiryId/status", token, "POST", body))
+    }
+
+    fun createTenantInvitation(
+        baseUrl: String,
+        token: String,
+        propertyId: Long,
+        unitId: Long,
+        enquiryId: Long?,
+        recipientEmail: String,
+        recipientName: String,
+        recipientPhone: String,
+        moveInDate: String,
+        expiresInHours: Int = 168
+    ): JSONObject {
+        require(propertyId > 0L && unitId > 0L) { "Select a property and available bed." }
+        require(recipientEmail.contains("@")) { "An invitation email is required." }
+        require(recipientName.trim().length >= 2) { "Enter the tenant's name." }
+        val normalizedDate = normalizeDate(moveInDate)
+            ?: throw IllegalArgumentException("Enter the proposed move-in date as YYYY-MM-DD.")
+        val body = JSONObject()
+            .put("property_id", propertyId)
+            .put("unit_id", unitId)
+            .put("recipient_email", recipientEmail.trim())
+            .put("recipient_name", recipientName.trim())
+            .put("recipient_phone", recipientPhone.trim())
+            .put("move_in_date", normalizedDate)
+            .put("expires_in_hours", expiresInHours)
+        enquiryId?.takeIf { it > 0L }?.let { body.put("enquiry_id", it) }
+        return JSONObject(request(baseUrl, "/owner/invitations", token, "POST", body))
+    }
+
+    fun ownerInvitations(baseUrl: String, token: String, propertyId: Long? = null): List<JSONObject> {
+        val path = propertyId?.let { "/owner/invitations?property_id=$it" } ?: "/owner/invitations"
+        val result = JSONArray(request(baseUrl, path, token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    fun reassignTenantInvitation(
+        baseUrl: String,
+        token: String,
+        invitationId: Long,
+        newUnitId: Long,
+        reason: String
+    ): JSONObject {
+        require(invitationId > 0L && newUnitId > 0L) { "Select an invitation and replacement bed." }
+        require(reason.trim().length >= 3) { "Explain why the proposed bed is changing." }
+        val body = JSONObject().put("new_unit_id", newUnitId).put("reason", reason.trim().take(1000))
+        return JSONObject(request(baseUrl, "/owner/invitations/$invitationId/reassign", token, "POST", body))
     }
 
     fun updateVisit(baseUrl: String, token: String, visitId: Long, status: String): JSONObject {
