@@ -1,18 +1,25 @@
 # Changelog
 
-User-facing and release-relevant changes are recorded here. Unreleased entries are merged functionality or work currently under review; an entry is not a release certification.
+User-facing and release-relevant changes are recorded here. Unreleased entries document merged functionality and current release checks; they do not certify production readiness.
 
 ## Unreleased
 
 ### Added
-- Android owner resident assignment for server-backed properties: select an eligible existing customer account with verified email, select an available server unit, provide joining date and agreed rent/deposit, and create the stay through the owner API.
-- On successful server stay creation, refresh server inventory so the unit occupancy comes from the backend rather than optimistic local state.
-- CI emulator screenshot capture is being added for Customer Home, Explore search and Owner workspace preview.
+- Server-backed owner resident assignment: select an existing verified customer, assign an available server room/bed, record rent, deposit and joining date, and refresh occupancy after API confirmation.
+- Owner Residents/Stays history reads from property-scoped server records, including resident, property, room/unit, rent, deposit, notice and move-out details.
+- Tenant **My Stay** reads current and previous stays from the authenticated customer endpoint, with loading, refresh, error and empty states.
+- Tenant move-out request workflow: submit a requested date that honours the property's notice period, track the server request and owner note, and retry after a rejection.
+- Owner move-out review queue: approve or reject a tenant request with a response note; approval records notice and the expected date without freeing the unit prematurely.
+- CI captures Customer Home, Explore search and Owner workspace preview as verified emulator PNGs under `stayeasy-android-screenshots`.
 
 ### Changed
-- README now documents the server-backed resident assignment boundary and the Android screenshot artifact download path.
-- Acceptance and release checklists distinguish passing builds from staging integration and production launch gates.
+- Owner access is granted through an admin-reviewed server workflow, not the Tenant/Owner choice screen. Admin decisions are audited and invalidate the applicant's existing customer session.
+- README and release checklist now distinguish automated build validation from authenticated staging acceptance and public-release requirements.
+- Android CI fails if expected screenshot PNGs are missing or invalid and avoids duplicate builds for successive commits on a single PR ref.
 
 ### Validation
-- PR #12 passed backend contract/project validation, Android emulator UI smoke tests, debug APK packaging and unsigned release APK packaging.
-- Authenticated Android-to-staging-API resident assignment and production signing remain open release checks.
+- PR #13 screenshot workflow passed backend/project validation, Android emulator UI tests, debug APK and unsigned release APK builds; all three genuine PNGs were verified in [workflow run #274](https://github.com/radhengle/StayEasy/actions/runs/40130310803).
+- PR #17 Owner access approval passed all three required jobs in [workflow run #266](https://github.com/radhengle/StayEasy/actions/runs/40129245337).
+- PR #18 customer My Stay sync passed all three required jobs in [workflow run #261](https://github.com/radhengle/StayEasy/actions/runs/40128947415).
+- PR #20 tenant move-out request and owner review passed backend contracts, clean-database migration validation, Android emulator UI tests, debug APK and unsigned release APK builds in [workflow run #276](https://github.com/radhengle/StayEasy/actions/runs/40130773832).
+- Authenticated staging acceptance, production SMTP, signed release artifacts, PostgreSQL operations and independent security review remain open release gates.
