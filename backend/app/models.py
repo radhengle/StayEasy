@@ -346,6 +346,12 @@ class UserCredential(Base):
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     requested_workspace: Mapped[str] = mapped_column(String(16), default="tenant")
+    owner_access_status: Mapped[str] = mapped_column(
+        String(24), default="not_requested", server_default=text("'not_requested'"), nullable=False
+    )
+    owner_access_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    owner_access_reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    owner_access_review_note: Mapped[str] = mapped_column(String(500), default="", server_default=text("''"), nullable=False)
     email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     verification_code_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     verification_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

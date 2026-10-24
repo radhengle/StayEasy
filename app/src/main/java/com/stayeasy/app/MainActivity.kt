@@ -518,7 +518,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     }.let { rows -> when (advancedFilters.sortBy) {
         "Price: low to high" -> rows.sortedBy { it.monthlyRent }; "Distance" -> rows.filter { it.distanceIsVerified }.sortedBy { it.distanceKm } + rows.filterNot { it.distanceIsVerified }; "Availability" -> rows.sortedByDescending { it.availableBeds }; "Rating" -> rows.sortedByDescending { it.rating }; else -> rows.sortedWith(compareByDescending<PgListing> { it.featuredListing }.thenByDescending { it.availableBeds })
     } }
-    val hideNav = route in setOf("add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account_auth", "account_type") || route.startsWith("records:")
+    val hideNav = route in setOf("add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account_auth", "account_type", "admin_owner_requests") || route.startsWith("records:")
 
     // Nested routes return to their parent instead of finishing the Activity.
     // The property wizard registers a more specific handler for its own steps.
@@ -547,6 +547,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "profile" -> "home"
             "account_type" -> workspaceReturnRoute
             "account_auth" -> "profile"
+            "admin_owner_requests" -> "account_auth"
             "feature_hub" -> if (ownerMode) "owner_more" else "profile"
             "api_connection", "theme_settings", "compare" -> "feature_hub"
             "owner_dashboard" -> { ownerMode = false; ownerReturnRoute }
@@ -727,7 +728,29 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "profile" -> ProfileScreen(signedInAccount, { workspaceReturnRoute = "profile"; route = "account_type" }, { notificationsReturnRoute = "profile"; route = "notifications" }, { route = "feature_hub" }, { route = "account_auth" })
                 "account_type" -> AccountTypeScreen(
                     onTenant = { ownerMode = false; route = "home" },
-                    onOwner = { ownerReturnRoute = workspaceReturnRoute; ownerMode = true; route = "owner_dashboard" },
+                    onOwner = {
+                        val accountRole = signedInAccount?.optString("role").orEmpty()
+                        if (accountRole in setOf("owner", "admin")) {
+                            ownerReturnRoute = workspaceReturnRoute
+                            ownerMode = true
+                            route = "owner_dashboard"
+                        } else if (signedInAccount != null) {
+                            ownerMode = false
+                            notify(
+                                if (signedInAccount?.optString("owner_access_status") == "pending_approval") {
+                                    "Owner access is still pending. You can continue in Tenant mode while an administrator reviews your request."
+                                } else {
+                                    "Request Owner access from your account first. Server-backed Owner actions stay locked until approval."
+                                }
+                            )
+                            route = "account_auth"
+                        } else {
+                            ownerReturnRoute = workspaceReturnRoute
+                            ownerMode = true
+                            route = "owner_dashboard"
+                            notify("Owner preview only. Sign in with an approved Owner/Admin account for server-backed actions.")
+                        }
+                    },
                     onBack = { route = workspaceReturnRoute }
                 )
                 "account_auth" -> AccountAuthScreen(
@@ -735,6 +758,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     account = signedInAccount,
                     onBack = { route = "profile" },
                     onOpenConnection = { route = "api_connection" },
+                    onOpenAdminOwnerRequests = { route = "admin_owner_requests" },
                     onSignedIn = { user ->
                         signedInAccount = user
                         notify("You're signed in to StayEasy.")
@@ -743,6 +767,11 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         signedInAccount = null
                         notify("You've signed out.")
                     }
+                )
+                "admin_owner_requests" -> AdminOwnerRequestsScreen(
+                    baseUrl = preferences.apiBaseUrl,
+                    onBack = { route = "account_auth" },
+                    notify = notify
                 )
                 "notifications" -> FeatureRecordsScreen("notifications", ownerMode) { route = if (ownerMode) "feature_hub" else "feature_hub" }
                 "feature_hub" -> FeatureHubScreen(ownerMode, { route = "records:$it" }, { comparisonIds = favorites.take(3); route = "compare" }, { route = "theme_settings" }, { route = "api_connection" }, { route = if (ownerMode) "owner_more" else "profile" })
@@ -1807,6 +1836,7 @@ private fun AccountAuthScreen(
     account: JSONObject?,
     onBack: () -> Unit,
     onOpenConnection: () -> Unit,
+    onOpenAdminOwnerRequests: () -> Unit,
     onSignedIn: (JSONObject) -> Unit,
     onSignedOut: () -> Unit
 ) {
@@ -1863,10 +1893,59 @@ private fun AccountAuthScreen(
                     Spacer(Modifier.height(18.dp))
                     Text("Account role", color = SE.Muted, fontSize = 12.sp)
                     Text(account.optString("role", "customer").replaceFirstChar { it.uppercase() }, color = SE.Ink, fontWeight = FontWeight.SemiBold)
-                    if (account.optString("owner_access_status") == "pending_approval") {
-                        Spacer(Modifier.height(12.dp))
-                        Text("Owner workspace requested", color = SE.Ink, fontWeight = FontWeight.Bold)
-                        Text("Your account stays in Tenant mode until the StayEasy team approves Owner access.", color = SE.Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                    val accountRole = account.optString("role", "customer")
+                    val ownerAccessStatus = account.optString("owner_access_status", "not_requested")
+                    when {
+                        accountRole == "admin" -> {
+                            Spacer(Modifier.height(12.dp))
+                            Text("Platform administration", color = SE.Ink, fontWeight = FontWeight.Bold)
+                            Text("Owner requests are reviewed on the server and every decision is audited.", color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = onOpenAdminOwnerRequests,
+                                modifier = Modifier.fillMaxWidth(),
+                                enabled = !busy,
+                                colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)
+                            ) { Text("Review Owner access requests") }
+                        }
+                        ownerAccessStatus == "pending_approval" -> {
+                            Spacer(Modifier.height(12.dp))
+                            Text("Owner workspace requested", color = SE.Ink, fontWeight = FontWeight.Bold)
+                            Text("Your account remains in Tenant mode until an administrator reviews your request.", color = SE.Muted, fontSize = 12.sp, lineHeight = 18.sp)
+                            val requestedAt = account.optString("owner_access_requested_at")
+                            if (requestedAt.isNotBlank()) Text("Requested: $requestedAt", color = SE.Muted, fontSize = 10.sp)
+                        }
+                        accountRole != "owner" && ownerAccessStatus in setOf("not_requested", "rejected") -> {
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                if (ownerAccessStatus == "rejected") "Owner access needs another review" else "Have a property to rent?",
+                                color = SE.Ink,
+                                fontWeight = FontWeight.Bold
+                            )
+                            if (ownerAccessStatus == "rejected" && account.optString("owner_access_review_note").isNotBlank()) {
+                                Text("Review note: ${account.optString("owner_access_review_note")}", color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp)
+                            }
+                            Text(
+                                "Request Owner access. Your role stays Tenant until an administrator approves the request.",
+                                color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp
+                            )
+                            Button(
+                                onClick = {
+                                    runRequest {
+                                        val token = StayApiClient.currentSessionToken(baseUrl)
+                                            ?: throw IllegalStateException("Sign in again to request Owner access.")
+                                        val fresh = withContext(Dispatchers.IO) {
+                                            StayApiClient.requestOwnerAccess(baseUrl, token)
+                                        }
+                                        onSignedIn(fresh)
+                                        showMessage("Owner access request submitted for administrator review.")
+                                    }
+                                },
+                                enabled = !busy,
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)
+                            ) { Text(if (ownerAccessStatus == "rejected") "Request again" else "Request Owner access") }
+                        }
                     }
                     Spacer(Modifier.height(18.dp))
                     OutlinedButton(onClick = {

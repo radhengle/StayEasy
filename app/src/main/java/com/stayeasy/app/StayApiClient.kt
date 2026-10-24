@@ -344,6 +344,32 @@ internal object StayApiClient {
         return JSONObject(request(baseUrl, "/auth/me", token = token))
     }
 
+    /** Requests Owner workspace access without changing the server-authorized role. */
+    fun requestOwnerAccess(baseUrl: String, token: String): JSONObject =
+        JSONObject(request(baseUrl, "/auth/owner-access-request", token, "POST", JSONObject()))
+
+    /** Admin-only Owner access queue; the backend enforces the administrator role. */
+    fun ownerAccessRequests(baseUrl: String, token: String, status: String = "pending_approval"): List<JSONObject> {
+        require(status in setOf("pending_approval", "approved", "rejected", "all")) { "Unsupported Owner request filter." }
+        val result = JSONArray(request(baseUrl, "/admin/owner-requests?status=$status", token))
+        return (0 until result.length()).mapNotNull { result.optJSONObject(it) }
+    }
+
+    /** Admin-only decision; role promotion remains server-side and invalidates prior customer tokens. */
+    fun decideOwnerAccessRequest(
+        baseUrl: String,
+        token: String,
+        userId: String,
+        decision: String,
+        note: String = ""
+    ): JSONObject {
+        require(userId.isNotBlank()) { "Select an Owner access request." }
+        require(decision in setOf("approve", "reject")) { "Unsupported Owner access decision." }
+        val encodedUserId = java.net.URLEncoder.encode(userId, "UTF-8")
+        val body = JSONObject().put("decision", decision).put("note", note.trim().take(500))
+        return JSONObject(request(baseUrl, "/admin/owner-requests/$encodedUserId/decision", token, "POST", body))
+    }
+
     fun logoutAccount(context: Context, baseUrl: String): JSONObject {
         val token = currentSessionToken(baseUrl) ?: throw IllegalStateException("No active account session")
         return try {
