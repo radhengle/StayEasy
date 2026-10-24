@@ -134,6 +134,15 @@ class StayPatch(BaseModel):
     notice_date: date | None = None
     move_out_date: date | None = None
 
+class MoveOutRequestCreate(BaseModel):
+    requested_move_out_date: date
+    reason: str = Field(default="", max_length=1200)
+
+
+class MoveOutRequestReview(BaseModel):
+    decision: str = Field(pattern="^(approve|reject)$")
+    owner_note: str = Field(default="", max_length=1000)
+
 class LedgerCreate(BaseModel):
     property_id: int
     resident_stay_id: int | None = None
@@ -568,6 +577,287 @@ def list_my_stays(actor: dict = Depends(require_roles("customer")), db: Session 
         "status": stay.status,
         "agreement_reference": stay.agreement_reference,
     } for stay, prop, unit in rows]
+
+def move_out_request_payload(
+    request: m.ResidentMoveOutRequest,
+    property_name: str = "",
+    resident_name: str = "",
+    resident_email: str = "",
+    room_code: str = "",
+    unit_code: str = "",
+    joining_date: date | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": request.id,
+        "resident_stay_id": request.resident_stay_id,
+        "property_id": request.property_id,
+        "property_name": property_name,
+        "resident_id": request.resident_id,
+        "resident_name": resident_name,
+        "resident_email": resident_email,
+        "room_code": room_code,
+        "unit_code": unit_code,
+        "joining_date": joining_date.isoformat() if joining_date else None,
+        "requested_move_out_date": request.requested_move_out_date.isoformat(),
+        "reason": request.reason,
+        "status": request.status,
+        "owner_note": request.owner_note,
+        "created_at": request.created_at.isoformat() if request.created_at else None,
+        "reviewed_at": request.reviewed_at.isoformat() if request.reviewed_at else None,
+    }
+
+
+@app.post("/stays/me/{stay_id}/move-out-requests", status_code=201)
+def create_my_move_out_request(
+    stay_id: int,
+    body: MoveOutRequestCreate,
+    actor: dict = Depends(require_roles("customer")),
+    db: Session = Depends(get_db),
+):
+    """Create a request for the authenticated resident; never releases the unit."""
+    if not actor.get("account_session"):
+        raise HTTPException(403, "Sign in with your verified tenant account before requesting move-out")
+
+    stay = db.scalar(
+        select(m.ResidentStay)
+        .where(m.ResidentStay.id == stay_id, m.ResidentStay.resident_id == actor_user_id(actor))
+        .with_for_update()
+    )
+    if stay is None:
+        raise HTTPException(404, "Active stay not found")
+    if stay.status != "active":
+        raise HTTPException(409, "A move-out request can only be submitted for an active stay")
+
+    existing = db.scalar(select(m.ResidentMoveOutRequest).where(
+        m.ResidentMoveOutRequest.resident_stay_id == stay.id,
+        m.ResidentMoveOutRequest.status == "pending",
+    ))
+    if existing:
+        raise HTTPException(409, "A move-out request is already awaiting the owner's response")
+
+    prop = property_or_404(db, stay.property_id)
+    earliest_date = max(date.today(), stay.joining_date) + timedelta(days=max(0, prop.notice_period_days))
+    if body.requested_move_out_date < earliest_date:
+        raise HTTPException(
+            422,
+            f"The requested date must honor this property's {prop.notice_period_days}-day notice period. "
+            f"Earliest allowed date: {earliest_date.isoformat()}",
+        )
+
+    request = m.ResidentMoveOutRequest(
+        resident_stay_id=stay.id,
+        property_id=stay.property_id,
+        resident_id=stay.resident_id,
+        requested_move_out_date=body.requested_move_out_date,
+        reason=body.reason.strip(),
+        status="pending",
+    )
+    try:
+        db.add(request)
+        db.flush()
+        resident = db.get(m.User, stay.resident_id)
+        resident_label = resident.display_name if resident else "A resident"
+        add_notification(
+            db,
+            prop.owner_id,
+            "Move-out request received",
+            f"{resident_label} requested move-out from {prop.name} on {body.requested_move_out_date.isoformat()}.",
+        )
+        audit(
+            db,
+            actor,
+            "resident_move_out_request",
+            request.id,
+            "submitted",
+            new={
+                "resident_stay_id": stay.id,
+                "property_id": stay.property_id,
+                "requested_move_out_date": body.requested_move_out_date.isoformat(),
+            },
+        )
+        db.commit()
+        db.refresh(request)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "A move-out request is already awaiting the owner's response") from exc
+    resident = db.get(m.User, stay.resident_id)
+    unit = db.get(m.PropertyUnit, stay.unit_id)
+    return move_out_request_payload(
+        request,
+        property_name=prop.name,
+        resident_name=resident.display_name if resident else "",
+        resident_email=resident.email if resident else "",
+        room_code=unit.room_code if unit else "",
+        unit_code=unit.unit_code if unit else "",
+        joining_date=stay.joining_date,
+    )
+
+
+@app.get("/stays/me/move-out-requests")
+def list_my_move_out_requests(
+    actor: dict = Depends(require_roles("customer")),
+    db: Session = Depends(get_db),
+):
+    if not actor.get("account_session"):
+        raise HTTPException(403, "Sign in with your verified tenant account to view move-out requests")
+    rows = db.execute(
+        select(m.ResidentMoveOutRequest, m.Property, m.ResidentStay, m.User, m.PropertyUnit)
+        .join(m.Property, m.Property.id == m.ResidentMoveOutRequest.property_id)
+        .join(m.ResidentStay, m.ResidentStay.id == m.ResidentMoveOutRequest.resident_stay_id)
+        .join(m.User, m.User.id == m.ResidentMoveOutRequest.resident_id)
+        .join(m.PropertyUnit, m.PropertyUnit.id == m.ResidentStay.unit_id)
+        .where(m.ResidentMoveOutRequest.resident_id == actor_user_id(actor))
+        .order_by(m.ResidentMoveOutRequest.created_at.desc())
+        .limit(250)
+    ).all()
+    return [
+        move_out_request_payload(
+            request,
+            property_name=prop.name,
+            resident_name=resident.display_name,
+            resident_email=resident.email,
+            room_code=unit.room_code,
+            unit_code=unit.unit_code,
+            joining_date=stay.joining_date,
+        )
+        for request, prop, stay, resident, unit in rows
+    ]
+
+
+@app.get("/owner/move-out-requests")
+def list_owner_move_out_requests(
+    property_id: int | None = None,
+    request_status: str = Query(default="pending", pattern="^(pending|approved|rejected|cancelled|all)$"),
+    actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")),
+    db: Session = Depends(get_db),
+):
+    visible_ids = visible_property_ids(db, actor, "residents")
+    stmt = (
+        select(m.ResidentMoveOutRequest, m.Property, m.ResidentStay, m.User, m.PropertyUnit)
+        .join(m.Property, m.Property.id == m.ResidentMoveOutRequest.property_id)
+        .join(m.ResidentStay, m.ResidentStay.id == m.ResidentMoveOutRequest.resident_stay_id)
+        .join(m.User, m.User.id == m.ResidentMoveOutRequest.resident_id)
+        .join(m.PropertyUnit, m.PropertyUnit.id == m.ResidentStay.unit_id)
+    )
+    if visible_ids is not None:
+        stmt = stmt.where(m.ResidentMoveOutRequest.property_id.in_(visible_ids))
+    if property_id is not None:
+        require_property_manager(db, actor, property_id, "residents.view")
+        stmt = stmt.where(m.ResidentMoveOutRequest.property_id == property_id)
+    if request_status != "all":
+        stmt = stmt.where(m.ResidentMoveOutRequest.status == request_status)
+    rows = db.execute(stmt.order_by(m.ResidentMoveOutRequest.created_at.desc()).limit(1000)).all()
+    return [
+        move_out_request_payload(
+            request,
+            property_name=prop.name,
+            resident_name=resident.display_name,
+            resident_email=resident.email,
+            room_code=unit.room_code,
+            unit_code=unit.unit_code,
+            joining_date=stay.joining_date,
+        )
+        for request, prop, stay, resident, unit in rows
+    ]
+
+
+@app.patch("/owner/move-out-requests/{request_id}")
+def review_owner_move_out_request(
+    request_id: int,
+    body: MoveOutRequestReview,
+    actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")),
+    db: Session = Depends(get_db),
+):
+    request = db.scalar(
+        select(m.ResidentMoveOutRequest)
+        .where(m.ResidentMoveOutRequest.id == request_id)
+        .with_for_update()
+    )
+    if request is None:
+        raise HTTPException(404, "Move-out request not found")
+    require_property_manager(db, actor, request.property_id, "residents.manage")
+    if request.status != "pending":
+        raise HTTPException(409, "This move-out request has already been reviewed")
+
+    stay = db.scalar(
+        select(m.ResidentStay)
+        .where(
+            m.ResidentStay.id == request.resident_stay_id,
+            m.ResidentStay.property_id == request.property_id,
+            m.ResidentStay.resident_id == request.resident_id,
+        )
+        .with_for_update()
+    )
+    if stay is None or stay.status != "active":
+        raise HTTPException(409, "The resident stay is no longer active")
+    now = datetime.now(timezone.utc)
+    old_request = {"status": request.status, "owner_note": request.owner_note}
+    old_stay = {
+        "status": stay.status,
+        "notice_date": stay.notice_date.isoformat() if stay.notice_date else None,
+        "move_out_date": stay.move_out_date.isoformat() if stay.move_out_date else None,
+    }
+
+    request.status = "approved" if body.decision == "approve" else "rejected"
+    request.owner_note = body.owner_note.strip()
+    request.reviewed_by = actor_user_id(actor)
+    request.reviewed_at = now
+    if body.decision == "approve":
+        if request.requested_move_out_date < date.today():
+            raise HTTPException(409, "The requested move-out date has passed; ask the resident to submit a new request")
+        stay.status = "notice_given"
+        stay.notice_date = date.today()
+        stay.move_out_date = request.requested_move_out_date
+        add_notification(
+            db,
+            request.resident_id,
+            "Move-out request approved",
+            f"Your move-out request for {request.requested_move_out_date.isoformat()} was approved. The stay remains active until move-out is completed.",
+        )
+        audit(
+            db, actor, "resident_stay", stay.id, "move_out_request_approved",
+            old=old_stay,
+            new={
+                "status": stay.status,
+                "notice_date": stay.notice_date.isoformat(),
+                "move_out_date": stay.move_out_date.isoformat(),
+            },
+        )
+    else:
+        add_notification(
+            db,
+            request.resident_id,
+            "Move-out request needs follow-up",
+            "Your owner reviewed the move-out request. Open My Stay to read their note and contact them to agree next steps.",
+        )
+    audit(
+        db,
+        actor,
+        "resident_move_out_request",
+        request.id,
+        "reviewed",
+        old=old_request,
+        new={
+            "status": request.status,
+            "owner_note": request.owner_note,
+            "reviewed_by": request.reviewed_by,
+        },
+    )
+    db.commit()
+    db.refresh(request)
+    prop = db.get(m.Property, request.property_id)
+    resident = db.get(m.User, request.resident_id)
+    unit = db.get(m.PropertyUnit, stay.unit_id)
+    return move_out_request_payload(
+        request,
+        property_name=prop.name if prop else "",
+        resident_name=resident.display_name if resident else "",
+        resident_email=resident.email if resident else "",
+        room_code=unit.room_code if unit else "",
+        unit_code=unit.unit_code if unit else "",
+        joining_date=stay.joining_date,
+    )
+
 
 @app.get("/properties/{property_id}/amenities")
 def list_property_amenities(property_id: int, db: Session = Depends(get_db)):
