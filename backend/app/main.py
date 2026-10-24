@@ -139,6 +139,8 @@ class TenantInvitationCreate(BaseModel):
     recipient_phone: str = Field(default="", max_length=40)
     move_in_date: date
     expires_in_hours: int = Field(default=168, ge=24, le=720)
+    required_document_categories: list[str] = Field(default_factory=list)
+    document_request_reason: str = Field(default="", max_length=1000)
 
 
 class TenantInvitationReassign(BaseModel):
@@ -149,6 +151,11 @@ class TenantInvitationReassign(BaseModel):
 class TenantInvitationAccept(BaseModel):
     invitation_id: int | None = Field(default=None, gt=0)
     token: str | None = Field(default=None, min_length=20, max_length=200)
+    phone: str = Field(default="", max_length=40)
+    emergency_contact_name: str = Field(default="", max_length=180)
+    emergency_contact_phone: str = Field(default="", max_length=40)
+    accommodation_preferences: dict[str, Any] = Field(default_factory=dict)
+    profile_completion_acknowledged: bool = False
     billable_start_date: date
     billable_terms_acknowledged: bool = False
 
@@ -1221,6 +1228,9 @@ def invitation_payload(db: Session, invitation: m.PropertyInvitation, include_pr
         "unit_status": state,
         "expires_at": invitation.expires_at.isoformat(),
         "reassignment_reason": invitation.reassignment_reason,
+        "required_document_categories": invitation.required_document_categories or [],
+        "document_request_reason": invitation.document_request_reason,
+        "registration_submitted_at": invitation.registration_submitted_at.isoformat() if invitation.registration_submitted_at else None,
         "can_accept": invitation.status == "pending" and expires_at > now and state == "available",
     }
     if include_private:
@@ -1229,6 +1239,7 @@ def invitation_payload(db: Session, invitation: m.PropertyInvitation, include_pr
             "recipient_name": invitation.recipient_name,
             "recipient_phone": invitation.recipient_phone,
             "recipient_user_id": invitation.recipient_user_id,
+            "registration_profile": invitation.registration_profile or {},
             "enquiry_id": invitation.enquiry_id,
             "reservation_id": invitation.reservation_id,
             "created_at": invitation.created_at.isoformat(),
@@ -1245,6 +1256,12 @@ def create_tenant_invitation(body: TenantInvitationCreate,
         raise HTTPException(409, "Publish and approve this property before inviting a tenant to a bed.")
     if body.move_in_date < date.today():
         raise HTTPException(422, "Move-in date cannot be in the past.")
+    allowed_documents = {"government_id", "address_proof", "pan_optional", "employment_optional", "other"}
+    requested_documents = list(dict.fromkeys(body.required_document_categories))
+    if any(category not in allowed_documents for category in requested_documents):
+        raise HTTPException(422, "Choose from the disclosed supported document categories. Aadhaar is not a default or mandatory category.")
+    if requested_documents and len(body.document_request_reason.strip()) < 10:
+        raise HTTPException(422, "Explain why the requested documents are needed for this property.")
 
     unit = db.scalar(select(m.PropertyUnit).where(
         m.PropertyUnit.id == body.unit_id,
@@ -1292,6 +1309,8 @@ def create_tenant_invitation(body: TenantInvitationCreate,
         move_in_date=body.move_in_date,
         rent_snapshot=unit.monthly_rent or prop.rent_from,
         deposit_snapshot=unit.deposit or prop.deposit_from,
+        required_document_categories=requested_documents,
+        document_request_reason=body.document_request_reason.strip(),
         status="pending",
         expires_at=now + timedelta(hours=body.expires_in_hours),
     )
@@ -1359,8 +1378,8 @@ def list_tenant_invitations(actor: dict = Depends(require_roles("customer")), db
         **invitation_payload(db, row, include_private=False),
         "billable_quote": make_proration_quote(row.rent_snapshot, date.today()),
         "requires_explicit_billable_terms_acknowledgement": True,
-        "required_document_categories": [],
-        "document_request_reason": "",
+        "required_document_categories": row.required_document_categories or [],
+        "document_request_reason": row.document_request_reason,
     } for row in rows]
 
 
@@ -1457,6 +1476,8 @@ def accept_tenant_invitation(body: TenantInvitationAccept,
                              db: Session = Depends(get_db)):
     if (body.invitation_id is None) == (body.token is None):
         raise HTTPException(422, "Provide either an invitation ID from your account list or the invitation token, not both.")
+    if not body.profile_completion_acknowledged:
+        raise HTTPException(422, "Review and confirm your tenant profile before submitting registration.")
     if not body.billable_terms_acknowledged:
         raise HTTPException(422, "Review and acknowledge the billable start date and first-period rent before submitting registration.")
     if body.billable_start_date != date.today():
@@ -1505,6 +1526,34 @@ def accept_tenant_invitation(body: TenantInvitationAccept,
     prop = db.get(m.Property, invitation.property_id)
     if not prop or prop.status != "published":
         raise HTTPException(409, "This property is no longer available for new reservations.")
+    phone = body.phone.strip() or (user.phone or "").strip() or invitation.recipient_phone.strip()
+    if len(phone) < 8:
+        raise HTTPException(422, "Enter a valid mobile number before completing registration.")
+    profile = db.get(m.TenantProfile, user.id)
+    if profile is None:
+        profile = m.TenantProfile(user_id=user.id)
+        db.add(profile)
+    profile.emergency_contact_name = body.emergency_contact_name.strip()
+    profile.emergency_contact_phone = body.emergency_contact_phone.strip()
+    profile.accommodation_preferences = dict(body.accommodation_preferences)
+    user.phone = phone
+    invitation.registration_profile = {
+        "display_name": user.display_name,
+        "email": user.email,
+        "phone": phone,
+        "emergency_contact_name": profile.emergency_contact_name,
+        "emergency_contact_phone": profile.emergency_contact_phone,
+        "accommodation_preferences": profile.accommodation_preferences,
+        "profile_completion_acknowledged": True,
+    }
+    invitation.registration_submitted_at = datetime.now(timezone.utc)
+    uploaded_docs = list(db.scalars(select(m.InvitationDocument).where(
+        m.InvitationDocument.invitation_id == invitation.id
+    )))
+    submitted_categories = {doc.category for doc in uploaded_docs if doc.status in {"submitted", "approved"}}
+    missing_docs = sorted(set(invitation.required_document_categories or []) - submitted_categories)
+    if missing_docs:
+        raise HTTPException(409, "Submit the requested documents before completing registration: " + ", ".join(missing_docs))
     quote = make_proration_quote(invitation.rent_snapshot, body.billable_start_date)
     terms_snapshot = {
         "currency": "INR",
