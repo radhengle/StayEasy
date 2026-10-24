@@ -135,6 +135,7 @@ class LedgerCreate(BaseModel):
     amount: int = Field(ge=0)
     billing_period: str = ""
     due_date: date | None = None
+    paid_at: datetime | None = None
     payment_method: str = "manual"
     payment_reference: str = ""
     provider_status: str = Field(default="manual_record", pattern="^(manual_record|provider_pending|provider_confirmed|reconciled|failed|refunded)$")
@@ -750,6 +751,8 @@ def create_ledger_entry(body: LedgerCreate, actor: dict = Depends(require_roles(
     if body.resident_stay_id:
         stay = db.get(m.ResidentStay, body.resident_stay_id)
         if not stay or stay.property_id != body.property_id: raise HTTPException(422, "Stay does not belong to this property")
+    if body.paid_at is not None and body.category != "payment":
+        raise HTTPException(422, "A payment date can only be attached to a payment ledger entry")
     if body.provider_status != "manual_record":
         raise HTTPException(422, "Payment-provider confirmation is unavailable. Record this entry manually until a provider is integrated.")
     entry = m.LedgerEntry(property_id=body.property_id, created_by=actor_user_id(actor), **body.model_dump(exclude={"property_id"}))
