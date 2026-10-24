@@ -675,10 +675,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     account = signedInAccount,
                     onPayments = { route = "records:payments" },
                     onIssue = { route = "issue" },
-                    onChat = { chatReturnRoute = "stay"; route = "chat" },
-                    onMoveOut = {
-                        notify("Move-out requests are not connected to the shared backend yet. Nothing was saved; please contact the owner directly.")
-                    }
+                    onChat = { chatReturnRoute = "stay"; route = "chat" }
                 )
                 "payments" -> FeatureRecordsScreen("payments", ownerMode = false) { route = "stay" }
                 "issue" -> IssueScreen({ route = "stay" }, { category, details, urgency ->
@@ -1608,19 +1605,27 @@ private fun MyStayScreen(
     account: JSONObject?,
     onPayments: () -> Unit,
     onIssue: () -> Unit,
-    onChat: () -> Unit,
-    onMoveOut: () -> Unit
+    onChat: () -> Unit
 ) {
     val accountRole = account?.optString("role").orEmpty()
     val accountId = account?.optString("id").orEmpty()
+    val scope = rememberCoroutineScope()
     var stays by remember(accountId) { mutableStateOf<List<JSONObject>>(emptyList()) }
+    var moveOutRequests by remember(accountId) { mutableStateOf<List<JSONObject>>(emptyList()) }
     var loading by remember(accountId) { mutableStateOf(false) }
     var error by remember(accountId) { mutableStateOf("") }
     var syncMessage by remember(accountId) { mutableStateOf("") }
+    var moveOutMessage by remember(accountId) { mutableStateOf("") }
     var refreshKey by remember(accountId) { mutableIntStateOf(0) }
+    var moveOutDialogVisible by remember(accountId) { mutableStateOf(false) }
+    var moveOutDateText by remember(accountId) { mutableStateOf("") }
+    var moveOutReasonText by remember(accountId) { mutableStateOf("") }
+    var moveOutError by remember(accountId) { mutableStateOf("") }
+    var moveOutSubmitting by remember(accountId) { mutableStateOf(false) }
 
     LaunchedEffect(baseUrl, accountRole, accountId, refreshKey) {
         stays = emptyList()
+        moveOutRequests = emptyList()
         error = ""
         syncMessage = ""
         if (accountRole != "customer") {
@@ -1646,9 +1651,10 @@ private fun MyStayScreen(
         loading = true
         try {
             stays = withContext(Dispatchers.IO) { StayApiClient.myStays(baseUrl, token) }
+            moveOutRequests = withContext(Dispatchers.IO) { StayApiClient.myMoveOutRequests(baseUrl, token) }
             syncMessage = "Synced from StayEasy · account-scoped"
         } catch (e: Exception) {
-            error = e.message ?: "Could not load your stay. Check the API connection and retry."
+            error = e.message ?: "Could not load your stay or move-out requests. Check the API connection and retry."
         } finally {
             loading = false
         }
@@ -1666,6 +1672,19 @@ private fun MyStayScreen(
     }.orEmpty()
     val locality = currentStay?.let {
         listOf(it.optString("locality"), it.optString("city")).filter(String::isNotBlank).joinToString(", ")
+    }.orEmpty()
+    val currentMoveOutRequest = currentStay?.let { stay ->
+        moveOutRequests.firstOrNull { it.optLong("resident_stay_id") == stay.optLong("id") }
+    }
+    val currentRequestStatus = currentMoveOutRequest?.optString("status").orEmpty().lowercase(Locale.ROOT)
+    val canRequestMoveOut = currentStay != null &&
+        currentStay.optString("status").equals("active", ignoreCase = true) &&
+        currentRequestStatus !in setOf("pending", "approved")
+    val earliestMoveOutDate = currentStay?.let { stay ->
+        val today = java.time.LocalDate.now()
+        val joining = runCatching { java.time.LocalDate.parse(stay.optString("joining_date")) }.getOrNull()
+        val startDate = if (joining != null && joining.isAfter(today)) joining else today
+        startDate.plusDays(stay.optInt("notice_period_days", 30).coerceIn(0, 365).toLong()).toString()
     }.orEmpty()
 
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
@@ -1685,7 +1704,7 @@ private fun MyStayScreen(
                 )
                 OutlinedButton(
                     onClick = { refreshKey++ },
-                    enabled = !loading,
+                    enabled = !loading && !moveOutSubmitting,
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 5.dp),
                     shape = RoundedCornerShape(10.dp)
                 ) { Text(if (loading) "Loading…" else "Refresh", fontSize = 10.sp) }
@@ -1695,6 +1714,12 @@ private fun MyStayScreen(
             Spacer(Modifier.height(9.dp))
             Card(shape = RoundedCornerShape(13.dp), colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft)) {
                 Text(error, color = SE.Orange, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(12.dp))
+            }
+        }
+        if (moveOutMessage.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Card(shape = RoundedCornerShape(13.dp), colors = CardDefaults.cardColors(containerColor = SE.BlueSoft)) {
+                Text(moveOutMessage, color = SE.Blue, fontSize = 11.sp, lineHeight = 16.sp, modifier = Modifier.padding(12.dp))
             }
         }
 
@@ -1781,19 +1806,69 @@ private fun MyStayScreen(
             if (noticeDate.isNotBlank()) DetailLine("Notice date", noticeDate, Icons.Filled.CalendarToday)
             val moveOutDate = currentStay.optString("move_out_date")
             if (moveOutDate.isNotBlank()) DetailLine("Move-out date", moveOutDate, Icons.Filled.CalendarToday)
+
+            if (currentMoveOutRequest != null) {
+                Spacer(Modifier.height(16.dp))
+                Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Move-out request", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            StatusPill(
+                                currentMoveOutRequest.optString("status", "pending").replace('_', ' ').uppercase(Locale.ROOT),
+                                if (currentRequestStatus == "pending") SE.OrangeSoft else SE.BlueSoft,
+                                if (currentRequestStatus == "pending") SE.Orange else SE.Blue
+                            )
+                        }
+                        Text("Requested date: ${currentMoveOutRequest.optString("requested_move_out_date")}", color = SE.Muted, fontSize = 11.sp)
+                        val reason = currentMoveOutRequest.optString("reason")
+                        if (reason.isNotBlank()) Text("Your reason: $reason", color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
+                        val ownerNote = currentMoveOutRequest.optString("owner_note")
+                        if (ownerNote.isNotBlank()) Text("Owner response: $ownerNote", color = SE.Text, fontSize = 11.sp, lineHeight = 15.sp)
+                        Text(
+                            when (currentRequestStatus) {
+                                "pending" -> "Waiting for the owner to review your request."
+                                "approved" -> "Approved. The stay remains occupied until the owner confirms the actual move-out."
+                                "rejected" -> "The owner requested a follow-up. Review the note above and submit a new request when you have agreed the details."
+                                "cancelled" -> "This request was cancelled."
+                                else -> "Request status is synced from StayEasy."
+                            },
+                            color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp
+                        )
+                    }
+                }
+            }
+
             Spacer(Modifier.height(17.dp))
             Text("Need to make a change?", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp)
             Text(
-                "Move-out requests are not yet connected to the shared backend. Contact the owner directly; this screen will not create a local-only request.",
+                "Submit a move-out request with your preferred date. The owner can approve or respond with a note; the room stays occupied until actual move-out is completed.",
                 color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp
             )
             Spacer(Modifier.height(9.dp))
             OutlinedButton(
-                onClick = onMoveOut,
-                enabled = currentStay.optString("status").lowercase(Locale.ROOT) in setOf("active", "notice_given"),
+                onClick = {
+                    moveOutDateText = earliestMoveOutDate
+                    moveOutReasonText = ""
+                    moveOutError = ""
+                    moveOutDialogVisible = true
+                },
+                enabled = canRequestMoveOut && !loading && !moveOutSubmitting,
                 modifier = Modifier.fillMaxWidth(),
                 shape = RoundedCornerShape(14.dp)
-            ) { Text("Check move-out options", color = SE.Ink) }
+            ) {
+                Text(
+                    when {
+                        currentRequestStatus == "pending" -> "Request pending"
+                        currentRequestStatus == "rejected" -> "Submit another move-out request"
+                        status.equals("Notice given", ignoreCase = true) || currentRequestStatus == "approved" -> "Move-out in progress"
+                        else -> "Request move-out"
+                    },
+                    color = SE.Ink
+                )
+            }
+            if (canRequestMoveOut) {
+                Text("Earliest permitted date: $earliestMoveOutDate · based on the property's notice period", color = SE.Muted, fontSize = 9.sp, lineHeight = 13.sp)
+            }
         }
 
         if (stays.size > 1) {
@@ -1813,6 +1888,90 @@ private fun MyStayScreen(
             }
         }
         Spacer(Modifier.height(18.dp))
+    }
+
+    if (moveOutDialogVisible && currentStay != null) {
+        AlertDialog(
+            onDismissRequest = { if (!moveOutSubmitting) moveOutDialogVisible = false },
+            title = { Text("Request move-out", color = SE.Ink, fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "The owner will review your requested date. The property notice period applies, and submitting this request does not release the room or bed.",
+                        color = SE.Muted, fontSize = 11.sp, lineHeight = 16.sp
+                    )
+                    OutlinedTextField(
+                        value = moveOutDateText,
+                        onValueChange = { moveOutDateText = it.trim().take(10); moveOutError = "" },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Requested move-out date (YYYY-MM-DD)") },
+                        placeholder = { Text("2026-12-15") },
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = moveOutReasonText,
+                        onValueChange = { moveOutReasonText = it.take(1200); moveOutError = "" },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Reason (optional)") },
+                        placeholder = { Text("e.g. relocating for work") },
+                        minLines = 2,
+                        maxLines = 4
+                    )
+                    if (moveOutError.isNotBlank()) Text(moveOutError, color = SE.Red, fontSize = 11.sp, lineHeight = 15.sp)
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        if (moveOutSubmitting) return@Button
+                        val requestedDate = runCatching { java.time.LocalDate.parse(moveOutDateText.trim()) }.getOrNull()
+                        val earliestDate = runCatching { java.time.LocalDate.parse(earliestMoveOutDate) }.getOrNull()
+                        when {
+                            requestedDate == null -> moveOutError = "Enter a real date in YYYY-MM-DD format."
+                            earliestDate != null && requestedDate.isBefore(earliestDate) ->
+                                moveOutError = "The property's notice period means the earliest allowed date is $earliestMoveOutDate."
+                            else -> {
+                                val token = StayApiClient.currentSessionToken(baseUrl)
+                                if (token == null) {
+                                    moveOutError = "Your tenant session expired. Sign in again and retry."
+                                } else {
+                                    moveOutSubmitting = true
+                                    moveOutError = ""
+                                    scope.launch {
+                                        try {
+                                            withContext(Dispatchers.IO) {
+                                                StayApiClient.requestMoveOut(
+                                                    baseUrl,
+                                                    token,
+                                                    currentStay.optLong("id"),
+                                                    requestedDate.toString(),
+                                                    moveOutReasonText
+                                                )
+                                            }
+                                            moveOutDialogVisible = false
+                                            moveOutMessage = "Move-out request sent to the owner. You can track their response here."
+                                            refreshKey++
+                                        } catch (e: Exception) {
+                                            moveOutError = e.message ?: "The request was not saved. Check the date and try again."
+                                        } finally {
+                                            moveOutSubmitting = false
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    enabled = !moveOutSubmitting,
+                    colors = ButtonDefaults.buttonColors(containerColor = SE.Blue)
+                ) { Text(if (moveOutSubmitting) "Submitting…" else "Submit request") }
+            },
+            dismissButton = {
+                TextButton(onClick = { if (!moveOutSubmitting) moveOutDialogVisible = false }, enabled = !moveOutSubmitting) {
+                    Text("Cancel", color = SE.Muted)
+                }
+            },
+            containerColor = SE.Surface
+        )
     }
 }
 
