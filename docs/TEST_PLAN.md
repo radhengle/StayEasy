@@ -11,7 +11,8 @@
 - [ ] Save/remove favourite updates the Saved screen.
 - [ ] Details show rent and deposit separately and clearly label demo listings.
 - [ ] Visit request screen shows room preference, move-in date, visit time and a no-reservation-yet explanation.
-- [ ] Chat entry, message entry and My Stay actions show clear demo feedback.
+- [ ] Chat entry and message entry clearly label the remaining demo-only messaging actions.
+- [ ] Signed-in tenant My Stay displays server property/unit, stay status, rent, deposit, joining date, notice/move-out dates and previous stays; refresh/error/empty states must never fabricate a current stay.
 - [ ] Empty state offers a clear recovery action.
 
 ## Owner onboarding and management
@@ -27,6 +28,9 @@
 - [ ] Enquiry, resident, payment, issue and analytics screens scroll and their main actions give feedback.
 - [ ] For a server-backed property, assign an eligible verified resident to an available room/bed and verify server stay creation, occupied-unit refresh, deposit ledger entry and duplicate/failure handling against an authorized staging API.
 - [ ] Confirm resident/stay history is restored from server data after reinstall or on a second device; local summaries alone do not satisfy cross-device acceptance.
+- [ ] Against an authorized staging API, submit a tenant move-out request for an active stay; reject dates earlier than the server-provided notice period and confirm duplicate pending requests are blocked.
+- [ ] Verify only that tenant can read their request; owners/staff must see only properties in their permission scope and cannot review an already-decided request twice.
+- [ ] Approve/reject with an owner note and verify tenant status/notification/audit history refreshes from the server. Approval records notice/target date but must not free the unit; only confirmed completion releases the room/bed.
 
 ## Reliability / security before production
 - [ ] Move availability and reservation-conflict rules to a transactional backend before accepting live reservations.
@@ -40,8 +44,8 @@
 
 ## Automated CI coverage and remaining acceptance
 
-The `Android APK` GitHub Actions workflow runs backend contract tests, validates a clean-database Alembic upgrade, runs project contract checks, executes Compose UI smoke tests on an Android API 35 emulator, and builds debug plus unsigned release APKs. PR #12's run passed all three jobs: [workflow run #187](https://github.com/radhengle/StayEasy/actions/runs/40124058013).
+The `Android APK` GitHub Actions workflow runs backend contract tests, validates a clean-database Alembic upgrade, runs project contract checks, executes Compose UI smoke tests on an Android API 35 emulator, captures screenshots, and builds debug plus unsigned release APKs. The move-out workflow passed all three required jobs in [PR #20 run #276](https://github.com/radhengle/StayEasy/actions/runs/40130773832); real PNG screenshots were verified in [PR #13 run #274](https://github.com/radhengle/StayEasy/actions/runs/40130310803).
 
-The baseline smoke suite covers customer home, Explore search controls, system Back behavior, owner workspace preview, theme controls, account entry, API-origin token binding and malformed date validation. It does **not** yet exercise authenticated server-backed resident assignment end-to-end against a real/staging API.
+The emulator smoke suite covers customer home, Explore search controls, system Back behavior, owner workspace preview, theme controls, account entry, API-origin token binding, and client-side date/input validation. Backend contract tests cover server-side resident assignment and move-out request validation, ownership/property isolation, approval/rejection and occupancy transitions. Real authenticated mobile-to-staging-API journeys are still required.
 
-This checklist is not production certification. Manual staging acceptance, accessibility checks, API authorization/tenant-isolation tests, offline/retry testing, database restore drills, real device regression and release signing remain required. CI screenshots are being added for Customer Home, Explore search and Owner workspace preview; confirm the screenshot artifact is present on the current PR run before considering that evidence complete.
+This checklist is not production certification. Manual staging acceptance, accessibility checks, API authorization/tenant-isolation tests, offline/retry testing, database restore drills, real-device regression and release signing remain required. CI screenshots for Customer Home, Explore search and Owner workspace preview are captured and validated as PNG artifacts on every current PR workflow run.
