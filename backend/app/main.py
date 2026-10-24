@@ -1,14 +1,19 @@
+import base64
 import calendar
 import hashlib
 import os
+import re
 import secrets
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import and_, func, or_, select
@@ -158,6 +163,11 @@ class TenantInvitationAccept(BaseModel):
     profile_completion_acknowledged: bool = False
     billable_start_date: date
     billable_terms_acknowledged: bool = False
+
+
+class InvitationDocumentReview(BaseModel):
+    status: str = Field(pattern="^(approved|rejected)$")
+    review_note: str = Field(default="", max_length=2000)
 
 
 class StayCreate(BaseModel):
