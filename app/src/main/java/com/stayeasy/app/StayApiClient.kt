@@ -179,6 +179,53 @@ internal object StayApiClient {
     fun ownerProperties(baseUrl: String, token: String): List<PgListing> =
         parsePropertyItems(JSONArray(request(baseUrl, "/owner/properties", token)))
 
+    /** Verified customer accounts already connected to this property through an enquiry or reservation. */
+    fun ownerResidentCandidates(baseUrl: String, token: String, propertyId: Long): List<RemoteResidentCandidate> {
+        require(propertyId > 0L) { "Select a valid server property." }
+        val rows = JSONArray(request(baseUrl, "/owner/resident-candidates?property_id=$propertyId", token))
+        return (0 until rows.length()).mapNotNull { index ->
+            val row = rows.optJSONObject(index) ?: return@mapNotNull null
+            val id = row.optString("id").trim()
+            val name = row.optString("display_name").trim()
+            val email = row.optString("email").trim()
+            if (id.isBlank() || name.isBlank() || email.isBlank()) null
+            else RemoteResidentCandidate(
+                id = id,
+                displayName = name,
+                email = email,
+                emailVerified = row.optBoolean("email_verified", false)
+            )
+        }.filter { it.emailVerified }
+    }
+
+    /** Creates an owner-authorized server stay; inventory is updated by the API only after validation. */
+    fun createOwnerStay(
+        baseUrl: String,
+        token: String,
+        propertyId: Long,
+        unitId: Long,
+        residentId: String,
+        joiningDate: String,
+        agreedMonthlyRent: Int,
+        depositHeld: Int
+    ): JSONObject {
+        require(propertyId > 0L) { "Select a valid server property." }
+        require(unitId > 0L) { "Select an available room or bed." }
+        require(residentId.isNotBlank()) { "Select a verified resident account." }
+        require(agreedMonthlyRent >= 0) { "Enter a valid monthly rent." }
+        require(depositHeld >= 0) { "Enter a valid deposit amount." }
+        val normalizedDate = normalizeDate(joiningDate)
+            ?: throw IllegalArgumentException("Enter a valid joining date, for example 2026-11-01.")
+        val body = JSONObject()
+            .put("property_id", propertyId)
+            .put("unit_id", unitId)
+            .put("resident_id", residentId)
+            .put("joining_date", normalizedDate)
+            .put("agreed_monthly_rent", agreedMonthlyRent)
+            .put("deposit_held", depositHeld)
+        return JSONObject(request(baseUrl, "/owner/stays", token, "POST", body))
+    }
+
     private fun parsePropertyItems(items: JSONArray): List<PgListing> {
         return (0 until items.length()).mapNotNull { index ->
             val p = items.optJSONObject(index) ?: return@mapNotNull null
