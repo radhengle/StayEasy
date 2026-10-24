@@ -5,7 +5,7 @@ SQLite verifies API contracts; PostgreSQL concurrency testing is still required 
 """
 import os
 import tempfile
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 DB_PATH = Path(tempfile.gettempdir()) / f"stayeasy_test_{os.getpid()}.db"
@@ -92,7 +92,25 @@ def test_enquiry_and_visit_creation_emit_owner_notifications():
     visit = client.post("/visits", json={"property_id": prop["id"], "enquiry_id": enquiry.json()["id"],
                                          "preferred_at": (date.today() + timedelta(days=2)).isoformat() + "T15:00:00"})
     assert visit.status_code == 201, visit.text
+    enquiry_rows = client.get("/enquiries")
+    assert enquiry_rows.status_code == 200, enquiry_rows.text
+    assert enquiry_rows.json()[0]["property_name"] == "Test House"
+    visit_rows = client.get("/visits")
+    assert visit_rows.status_code == 200, visit_rows.text
+    assert visit_rows.json()[0]["property_name"] == "Test House"
     set_actor("owner-1", "owner")
+    invalid_enquiry_transition = client.post(f"/owner/enquiries/{enquiry.json()['id']}/status", json={"status": "converted"})
+    assert invalid_enquiry_transition.status_code == 409
+    enquiry_status = client.post(f"/owner/enquiries/{enquiry.json()['id']}/status", json={"status": "contacted", "owner_response": "We can arrange a visit."})
+    assert enquiry_status.status_code == 200, enquiry_status.text
+    assert enquiry_status.json()["status"] == "contacted"
+    invalid_visit_transition = client.post(f"/owner/visits/{visit.json()['id']}/status", json={"status": "completed"})
+    assert invalid_visit_transition.status_code == 409
+    visit_status = client.post(f"/owner/visits/{visit.json()['id']}/status", json={"status": "confirmed", "outcome": "Confirmed for the requested time."})
+    assert visit_status.status_code == 200, visit_status.text
+    assert visit_status.json()["status"] == "confirmed"
+    invalid_visit_status = client.post(f"/owner/visits/{visit.json()['id']}/status", json={"status": "requested"})
+    assert invalid_visit_status.status_code == 422
     messages = client.get("/notifications")
     assert messages.status_code == 200
     assert len(messages.json()) >= 2
@@ -104,8 +122,90 @@ def test_reservations_block_duplicate_active_unit():
     payload = {"property_id": prop["id"], "unit_id": unit["id"], "move_in_date": (date.today() + timedelta(days=7)).isoformat(), "terms_snapshot": {"currency": "INR"}}
     first = client.post("/reservations", json=payload)
     assert first.status_code == 201, first.text
+    reservation_rows = client.get("/reservations")
+    assert reservation_rows.status_code == 200, reservation_rows.text
+    assert reservation_rows.json()[0]["property_name"] == "Test House"
     second = client.post("/reservations", json=payload)
     assert second.status_code == 409, second.text
+    set_actor("owner-1", "owner")
+    invalid_status_update = client.post(f"/owner/reservations/{first.json()['id']}/status", json={"status": "checked_in"})
+    assert invalid_status_update.status_code == 409
+    status_update = client.post(f"/owner/reservations/{first.json()['id']}/status", json={"status": "confirmed"})
+    assert status_update.status_code == 200, status_update.text
+    assert status_update.json()["status"] == "confirmed"
+    confirmed_rows = client.get("/reservations")
+    assert confirmed_rows.status_code == 200, confirmed_rows.text
+    assert confirmed_rows.json()[0]["status"] == "confirmed"
+    assert confirmed_rows.json()[0]["expires_at"] is None
+
+
+def test_expired_pending_reservation_releases_unit():
+    prop, unit = setup_property()
+    set_actor("customer-1", "customer")
+    payload = {
+        "property_id": prop["id"], "unit_id": unit["id"],
+        "move_in_date": (date.today() + timedelta(days=7)).isoformat(),
+        "terms_snapshot": {"currency": "INR"}
+    }
+    first = client.post("/reservations", json=payload)
+    assert first.status_code == 201, first.text
+
+    with SessionLocal() as db:
+        held = db.get(m.Reservation, first.json()["id"])
+        held.expires_at = datetime.now(timezone.utc) - timedelta(minutes=5)
+        db.commit()
+
+    set_actor("customer-2", "customer")
+    second = client.post("/reservations", json=payload)
+    assert second.status_code == 201, second.text
+    with SessionLocal() as db:
+        assert db.get(m.Reservation, first.json()["id"]).status == "expired"
+
+
+def test_assigned_manager_reads_only_scoped_marketplace_records():
+    property_a, unit_a = setup_property(owner_id="owner-a")
+    property_b, unit_b = setup_property(owner_id="owner-b")
+
+    def create_customer_records(customer_id, prop, unit):
+        set_actor(customer_id, "customer")
+        enquiry = client.post("/enquiries", json={
+            "property_id": prop["id"], "preferred_room_type": "2 sharing", "message": "Is a bed available?"
+        })
+        assert enquiry.status_code == 201, enquiry.text
+        visit = client.post("/visits", json={
+            "property_id": prop["id"], "enquiry_id": enquiry.json()["id"],
+            "preferred_at": (date.today() + timedelta(days=2)).isoformat() + "T15:00:00"
+        })
+        assert visit.status_code == 201, visit.text
+        reservation = client.post("/reservations", json={
+            "property_id": prop["id"], "unit_id": unit["id"],
+            "move_in_date": (date.today() + timedelta(days=7)).isoformat(),
+            "terms_snapshot": {"currency": "INR"}
+        })
+        assert reservation.status_code == 201, reservation.text
+        return enquiry.json(), visit.json(), reservation.json()
+
+    enquiry_a, visit_a, reservation_a = create_customer_records("customer-a", property_a, unit_a)
+    create_customer_records("customer-b", property_b, unit_b)
+
+    with SessionLocal() as db:
+        db.add(m.StaffAssignment(
+            owner_id="owner-a", staff_user_id="manager-1", property_id=property_a["id"],
+            role="manager", permissions=["enquiries.view", "visits.view", "reservations.view", "dashboard.view"], status="active"
+        ))
+        db.commit()
+
+    set_actor("manager-1", "manager")
+    assert client.get("/enquiries").json()[0]["property_id"] == property_a["id"]
+    assert client.get("/visits").json()[0]["property_id"] == property_a["id"]
+    assert client.get("/reservations").json()[0]["property_id"] == property_a["id"]
+    assert client.get("/owner/dashboard").json()["property_count"] == 1
+
+    denied_update = client.post(
+        f"/owner/enquiries/{enquiry_a['id']}/status",
+        json={"status": "contacted"}
+    )
+    assert denied_update.status_code == 403
 
 
 def test_ledger_notice_staff_and_amenity_contracts():

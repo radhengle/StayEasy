@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -96,6 +96,10 @@ class VisitCreate(BaseModel):
     property_id: int
     enquiry_id: int | None = None
     preferred_at: datetime
+
+class VisitStatus(BaseModel):
+    status: str = Field(pattern="^(confirmed|completed|cancelled|no_show)$")
+    outcome: str = Field(default="", max_length=4000)
 
 class ReservationCreate(BaseModel):
     property_id: int
@@ -285,6 +289,37 @@ def require_property_manager(db: Session, actor: dict[str, Any], property_id: in
     if not can_manage_property(db, actor, prop, permission):
         raise HTTPException(403, "You do not have access to this property for that operation")
     return prop
+
+def visible_property_ids(db: Session, actor: dict[str, Any], resource: str) -> list[int] | None:
+    """Return property scope for list endpoints; None means the actor is an admin."""
+    if actor["role"] == "admin":
+        return None
+    subject = actor_user_id(actor)
+    if actor["role"] == "owner":
+        return list(db.scalars(select(m.Property.id).where(m.Property.owner_id == subject)))
+    allowed = {f"{resource}.view", f"{resource}.manage", "*"}
+    assignments = db.scalars(select(m.StaffAssignment).where(
+        m.StaffAssignment.staff_user_id == subject,
+        m.StaffAssignment.status == "active"
+    ))
+    return sorted({assignment.property_id for assignment in assignments if allowed.intersection(assignment.permissions or [])})
+
+def expire_pending_reservations_for_unit(db: Session, unit_id: int, actor: dict[str, Any]) -> int:
+    """Expire timed-out pending holds before checking the active-reservation unique index."""
+    now = datetime.now(timezone.utc)
+    expired = list(db.scalars(select(m.Reservation).where(
+        m.Reservation.unit_id == unit_id,
+        m.Reservation.status == "pending",
+        m.Reservation.expires_at.is_not(None),
+        m.Reservation.expires_at <= now
+    ).with_for_update()))
+    for reservation in expired:
+        old = {"status": reservation.status}
+        reservation.status = "expired"
+        audit(db, actor, "reservation", reservation.id, "expired_due_to_timeout", old=old, new={"status": "expired"})
+    if expired:
+        db.commit()
+    return len(expired)
 
 def property_dict(p: m.Property, db: Session | None = None) -> dict:
     out = {"id": p.id, "owner_id": p.owner_id, "name": p.name, "description": p.description, "address": p.address,
@@ -483,13 +518,17 @@ def create_enquiry(body: EnquiryCreate, actor: dict = Depends(require_roles("cus
 @app.get("/enquiries")
 def list_enquiries(property_id: int | None = None, actor: dict = Depends(get_actor), db: Session = Depends(get_db)):
     stmt = select(m.Enquiry)
-    if actor["role"] == "customer": stmt = stmt.where(m.Enquiry.customer_id == actor_user_id(actor))
+    if actor["role"] == "customer":
+        stmt = stmt.where(m.Enquiry.customer_id == actor_user_id(actor))
     elif actor["role"] != "admin":
-        owned = select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))
-        stmt = stmt.where(m.Enquiry.property_id.in_(owned))
+        scoped_ids = visible_property_ids(db, actor, "enquiries") or []
+        stmt = stmt.where(m.Enquiry.property_id.in_(scoped_ids))
     if property_id: stmt = stmt.where(m.Enquiry.property_id == property_id)
     rows = list(db.scalars(stmt.order_by(m.Enquiry.created_at.desc()).limit(300)))
-    return [{"id": e.id, "property_id": e.property_id, "customer_id": e.customer_id, "message": e.message, "status": e.status,
+    property_ids = {e.property_id for e in rows}
+    property_names = {p.id: p.name for p in db.scalars(select(m.Property).where(m.Property.id.in_(property_ids)))} if property_ids else {}
+    return [{"id": e.id, "property_id": e.property_id, "property_name": property_names.get(e.property_id, f"Property #{e.property_id}"),
+             "customer_id": e.customer_id, "message": e.message, "status": e.status,
              "move_in_date": e.move_in_date.isoformat() if e.move_in_date else None, "preferred_room_type": e.preferred_room_type,
              "owner_response": e.owner_response, "created_at": e.created_at.isoformat()} for e in rows]
 
@@ -501,8 +540,22 @@ def update_enquiry(enquiry_id: int, body: dict, actor: dict = Depends(require_ro
     allowed_status = {"new", "contacted", "visit_scheduled", "converted", "closed"}
     status_value = body.get("status", item.status)
     if status_value not in allowed_status: raise HTTPException(422, "Invalid enquiry status")
+    allowed_transitions = {
+        "new": {"contacted", "visit_scheduled", "closed"},
+        "contacted": {"visit_scheduled", "converted", "closed"},
+        "visit_scheduled": {"contacted", "converted", "closed"},
+        "converted": {"closed"},
+        "closed": set(),
+    }
+    if status_value != item.status and status_value not in allowed_transitions.get(item.status, set()):
+        raise HTTPException(409, f"Cannot move enquiry from {item.status} to {status_value}")
     old = {"status": item.status}; item.status = status_value; item.owner_response = str(body.get("owner_response", item.owner_response))[:4000]
     audit(db, actor, "enquiry", item.id, "updated", old=old, new={"status": item.status}); db.commit(); return {"id": item.id, "status": item.status, "owner_response": item.owner_response}
+
+@app.post("/owner/enquiries/{enquiry_id}/status")
+def update_enquiry_status_action(enquiry_id: int, body: dict, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
+    """POST-compatible alias for clients whose HTTP stack does not support PATCH."""
+    return update_enquiry(enquiry_id, body, actor, db)
 
 @app.post("/visits", status_code=201)
 def create_visit(body: VisitCreate, actor: dict = Depends(require_roles("customer")), db: Session = Depends(get_db)):
@@ -520,9 +573,38 @@ def create_visit(body: VisitCreate, actor: dict = Depends(require_roles("custome
 @app.get("/visits")
 def list_visits(actor: dict = Depends(get_actor), db: Session = Depends(get_db)):
     stmt = select(m.Visit)
-    if actor["role"] == "customer": stmt = stmt.where(m.Visit.customer_id == actor_user_id(actor))
-    elif actor["role"] != "admin": stmt = stmt.where(m.Visit.property_id.in_(select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))))
-    return [{"id": v.id, "property_id": v.property_id, "customer_id": v.customer_id, "preferred_at": v.preferred_at.isoformat(), "status": v.status, "outcome": v.outcome} for v in db.scalars(stmt.order_by(m.Visit.preferred_at).limit(300))]
+    if actor["role"] == "customer":
+        stmt = stmt.where(m.Visit.customer_id == actor_user_id(actor))
+    elif actor["role"] != "admin":
+        scoped_ids = visible_property_ids(db, actor, "visits") or []
+        stmt = stmt.where(m.Visit.property_id.in_(scoped_ids))
+    rows = list(db.scalars(stmt.order_by(m.Visit.preferred_at).limit(300)))
+    property_ids = {v.property_id for v in rows}
+    property_names = {p.id: p.name for p in db.scalars(select(m.Property).where(m.Property.id.in_(property_ids)))} if property_ids else {}
+    return [{"id": v.id, "property_id": v.property_id, "property_name": property_names.get(v.property_id, f"Property #{v.property_id}"),
+             "customer_id": v.customer_id, "preferred_at": v.preferred_at.isoformat(), "status": v.status, "outcome": v.outcome} for v in rows]
+
+@app.post("/owner/visits/{visit_id}/status")
+def update_visit_status_action(visit_id: int, body: VisitStatus, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
+    item = db.get(m.Visit, visit_id)
+    if not item: raise HTTPException(404, "Visit not found")
+    require_property_manager(db, actor, item.property_id, "visits.manage")
+    allowed_transitions = {
+        "requested": {"confirmed", "cancelled"},
+        "confirmed": {"completed", "cancelled", "no_show"},
+        "completed": set(),
+        "cancelled": set(),
+        "no_show": set(),
+    }
+    if body.status != item.status and body.status not in allowed_transitions.get(item.status, set()):
+        raise HTTPException(409, f"Cannot move visit from {item.status} to {body.status}")
+    old = {"status": item.status, "outcome": item.outcome}
+    item.status = body.status
+    item.outcome = body.outcome
+    audit(db, actor, "visit", item.id, "status_changed", old=old, new={"status": item.status, "outcome": item.outcome})
+    db.commit()
+    db.refresh(item)
+    return {"id": item.id, "status": item.status, "outcome": item.outcome, "preferred_at": item.preferred_at.isoformat()}
 
 @app.post("/reservations", status_code=201)
 def create_reservation(body: ReservationCreate, actor: dict = Depends(require_roles("customer")), db: Session = Depends(get_db)):
@@ -533,7 +615,14 @@ def create_reservation(body: ReservationCreate, actor: dict = Depends(require_ro
         unit = db.scalar(select(m.PropertyUnit).where(m.PropertyUnit.id == body.unit_id).with_for_update())
         if not unit or unit.property_id != prop.id: raise HTTPException(404, "Unit not found for this property")
         if unit.status != "available": raise HTTPException(409, f"Unit is currently {unit.status}")
-        conflict = db.scalar(select(m.Reservation.id).where(m.Reservation.unit_id == unit.id, m.Reservation.status.in_(["pending", "confirmed", "checked_in"])))
+        expire_pending_reservations_for_unit(db, unit.id, actor)
+        now = datetime.now(timezone.utc)
+        active_pending = and_(m.Reservation.status == "pending", or_(m.Reservation.expires_at.is_(None), m.Reservation.expires_at > now))
+        active_status = m.Reservation.status.in_(["confirmed", "checked_in"])
+        conflict = db.scalar(select(m.Reservation.id).where(
+            m.Reservation.unit_id == unit.id,
+            or_(active_status, active_pending)
+        ))
         if conflict: raise HTTPException(409, "Unit already has an active reservation")
     rent = unit.monthly_rent if unit and unit.monthly_rent else prop.rent_from
     deposit = unit.deposit if unit and unit.deposit else prop.deposit_from
@@ -551,12 +640,18 @@ def create_reservation(body: ReservationCreate, actor: dict = Depends(require_ro
 @app.get("/reservations")
 def list_reservations(property_id: int | None = None, actor: dict = Depends(get_actor), db: Session = Depends(get_db)):
     stmt = select(m.Reservation)
-    if actor["role"] == "customer": stmt = stmt.where(m.Reservation.customer_id == actor_user_id(actor))
-    elif actor["role"] != "admin": stmt = stmt.where(m.Reservation.property_id.in_(select(m.Property.id).where(m.Property.owner_id == actor_user_id(actor))))
+    if actor["role"] == "customer":
+        stmt = stmt.where(m.Reservation.customer_id == actor_user_id(actor))
+    elif actor["role"] != "admin":
+        scoped_ids = visible_property_ids(db, actor, "reservations") or []
+        stmt = stmt.where(m.Reservation.property_id.in_(scoped_ids))
     if property_id: stmt = stmt.where(m.Reservation.property_id == property_id)
     rows = list(db.scalars(stmt.order_by(m.Reservation.created_at.desc()).limit(300)))
-    return [{"id": r.id, "property_id": r.property_id, "unit_id": r.unit_id, "customer_id": r.customer_id,
-             "preferred_room_type": r.preferred_room_type, "move_in_date": r.move_in_date.isoformat(), "status": r.status,
+    property_ids = {r.property_id for r in rows}
+    property_names = {p.id: p.name for p in db.scalars(select(m.Property).where(m.Property.id.in_(property_ids)))} if property_ids else {}
+    return [{"id": r.id, "property_id": r.property_id, "property_name": property_names.get(r.property_id, f"Property #{r.property_id}"),
+             "unit_id": r.unit_id, "customer_id": r.customer_id, "preferred_room_type": r.preferred_room_type,
+             "move_in_date": r.move_in_date.isoformat(), "status": r.status,
              "expires_at": r.expires_at.isoformat() if r.expires_at else None, "rent_snapshot": r.rent_snapshot, "deposit_snapshot": r.deposit_snapshot} for r in rows]
 
 @app.patch("/owner/reservations/{reservation_id}")
@@ -564,7 +659,28 @@ def update_reservation(reservation_id: int, body: ReservationStatus, actor: dict
     item = db.get(m.Reservation, reservation_id)
     if not item: raise HTTPException(404, "Reservation not found")
     require_property_manager(db, actor, item.property_id, "reservations.manage")
-    old = {"status": item.status}; item.status = body.status; item.expires_at = body.expires_at or item.expires_at; item.cancellation_reason = body.cancellation_reason
+    if item.status == "pending" and item.expires_at is not None:
+        expiry = item.expires_at if item.expires_at.tzinfo is not None else item.expires_at.replace(tzinfo=timezone.utc)
+        if expiry <= datetime.now(timezone.utc):
+            old = {"status": item.status}
+            item.status = "expired"
+            audit(db, actor, "reservation", item.id, "expired_due_to_timeout", old=old, new={"status": "expired"})
+            db.commit()
+            raise HTTPException(409, "Reservation request has expired; refresh availability before confirming.")
+    allowed_transitions = {
+        "pending": {"confirmed", "cancelled", "expired"},
+        "confirmed": {"checked_in", "cancelled", "expired"},
+        "checked_in": set(),
+        "cancelled": set(),
+        "expired": set(),
+    }
+    if body.status != item.status and body.status not in allowed_transitions.get(item.status, set()):
+        raise HTTPException(409, f"Cannot move reservation from {item.status} to {body.status}")
+    old = {"status": item.status, "expires_at": item.expires_at.isoformat() if item.expires_at else None}
+    item.status = body.status
+    # A confirmed or closed request is no longer a 24-hour pending hold.
+    item.expires_at = body.expires_at
+    item.cancellation_reason = body.cancellation_reason
     if item.unit_id:
         unit = db.get(m.PropertyUnit, item.unit_id)
         if unit:
@@ -573,6 +689,11 @@ def update_reservation(reservation_id: int, body: ReservationStatus, actor: dict
             elif body.status in {"cancelled", "expired"} and unit.status == "reserved": unit.status = "available"
     audit(db, actor, "reservation", item.id, "status_changed", old=old, new={"status": item.status})
     db.commit(); db.refresh(item); return {"id": item.id, "status": item.status}
+
+@app.post("/owner/reservations/{reservation_id}/status")
+def update_reservation_status_action(reservation_id: int, body: ReservationStatus, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
+    """POST-compatible alias for Android clients that cannot issue HTTP PATCH."""
+    return update_reservation(reservation_id, body, actor, db)
 
 @app.post("/owner/stays", status_code=201)
 def create_stay(body: StayCreate, actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
@@ -1030,9 +1151,7 @@ def list_saved_searches(actor: dict = Depends(require_roles("customer")), db: Se
 
 @app.get("/owner/dashboard")
 def owner_dashboard(actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")), db: Session = Depends(get_db)):
-    prop_stmt = select(m.Property.id)
-    if actor["role"] != "admin": prop_stmt = prop_stmt.where(m.Property.owner_id == actor_user_id(actor))
-    prop_ids = list(db.scalars(prop_stmt))
+    prop_ids = list(db.scalars(select(m.Property.id))) if actor["role"] == "admin" else (visible_property_ids(db, actor, "dashboard") or [])
     if not prop_ids: return {"property_count": 0, "units": {"total": 0, "available": 0, "reserved": 0, "occupied": 0, "maintenance": 0}, "enquiries_new": 0, "reservations_pending": 0, "issues_open": 0, "rent_due": 0}
     units = list(db.scalars(select(m.PropertyUnit).where(m.PropertyUnit.property_id.in_(prop_ids))))
     return {"property_count": len(prop_ids), "units": {"total": len(units), "available": sum(x.status == "available" for x in units), "reserved": sum(x.status == "reserved" for x in units), "occupied": sum(x.status == "occupied" for x in units), "maintenance": sum(x.status == "maintenance" for x in units)},

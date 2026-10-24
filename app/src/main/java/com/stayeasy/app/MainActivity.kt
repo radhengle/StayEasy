@@ -116,7 +116,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.core.content.edit
 import coil.compose.AsyncImage
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
@@ -175,6 +177,17 @@ internal object SE {
     }
 }
 
+internal data class RemoteUnit(
+    val id: Long,
+    val roomCode: String,
+    val unitCode: String,
+    val rentableType: String,
+    val sharingCapacity: Int,
+    val monthlyRent: Int,
+    val deposit: Int,
+    val status: String
+)
+
 internal data class PgListing(
     val id: Long,
     val name: String,
@@ -213,7 +226,9 @@ internal data class PgListing(
     val featuredListing: Boolean = false,
     val availabilityConfirmedAt: Long = System.currentTimeMillis(),
     val expectedVacancy: String = "Available now",
-    val nearbyPlaces: String = ""
+    val nearbyPlaces: String = "",
+    val serverPropertyId: Long? = null,
+    val serverUnits: List<RemoteUnit> = emptyList()
 )
 
 private val demoListings = listOf(
@@ -253,7 +268,8 @@ private object ListingStore {
                 foodPolicy = o.optString("foodPolicy", if (o.optInt("foodMonthly") > 0) "Optional" else "Not offered"), pinCode = o.optString("pinCode"),
                 latitude = o.optDouble("latitude", 0.0), longitude = o.optDouble("longitude", 0.0), hasCoordinates = o.optBoolean("hasCoordinates", false),
                 distanceIsVerified = o.optBoolean("distanceIsVerified", false), featuredListing = o.optBoolean("featuredListing", false), availabilityConfirmedAt = o.optLong("availabilityConfirmedAt", System.currentTimeMillis()),
-                expectedVacancy = o.optString("expectedVacancy", "Available now"), nearbyPlaces = o.optString("nearbyPlaces", "")
+                expectedVacancy = o.optString("expectedVacancy", "Available now"), nearbyPlaces = o.optString("nearbyPlaces", ""),
+                serverPropertyId = o.optLong("serverPropertyId").takeIf { it > 0L }
             )
         }
     }.getOrDefault(emptyList())
@@ -274,7 +290,8 @@ private object ListingStore {
             o.put("visitorPolicy", p.visitorPolicy); o.put("minimumStayMonths", p.minimumStayMonths); o.put("noticePeriodDays", p.noticePeriodDays)
             o.put("utilityMonthlyEstimate", p.utilityMonthlyEstimate); o.put("foodPolicy", p.foodPolicy); o.put("pinCode", p.pinCode)
             o.put("latitude", p.latitude); o.put("longitude", p.longitude); o.put("hasCoordinates", p.hasCoordinates); o.put("distanceIsVerified", p.distanceIsVerified)
-            o.put("featuredListing", p.featuredListing); o.put("availabilityConfirmedAt", p.availabilityConfirmedAt); o.put("expectedVacancy", p.expectedVacancy); o.put("nearbyPlaces", p.nearbyPlaces); array.put(o)
+            o.put("featuredListing", p.featuredListing); o.put("availabilityConfirmedAt", p.availabilityConfirmedAt); o.put("expectedVacancy", p.expectedVacancy); o.put("nearbyPlaces", p.nearbyPlaces)
+            p.serverPropertyId?.let { o.put("serverPropertyId", it) }; array.put(o)
         }
         context.getSharedPreferences(PREF, Context.MODE_PRIVATE).edit { putString(KEY, array.toString()) }
     }
@@ -352,7 +369,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val notify: (String) -> Unit = { message -> scope.launch { snackbar.showSnackbar(message) } }
-    val allListings = remoteListings.toList() + customListings.toList() + demoListings.filter { demo -> customListings.none { it.id == demo.id } && remoteListings.none { it.id == demo.id } }
+    val allListings = remoteListings.toList() + customListings.filter { local -> remoteListings.none { remote -> remote.id == local.id } } + demoListings.filter { demo -> customListings.none { it.id == demo.id } && remoteListings.none { it.id == demo.id } }
     val selectedListing = allListings.firstOrNull { it.id == selectedId } ?: allListings.firstOrNull() ?: demoListings.first()
     val ownerListings = customListings.toList() + demoListings.take(2).filter { demo -> customListings.none { it.id == demo.id } }
     val filteredListings = allListings.filter { p ->
@@ -426,27 +443,64 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "map" -> MapSearchScreen(location, { location = it }, filteredListings, { selectedId = it; route = "details" }, { route = "search" }, { route = "filters" })
                 "filters" -> FilterScreen(guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, chosenAmenities, advancedFilters, { advancedFilters = it }, { route = "search" }, { guestChoice = "Any"; maxBudget = 25000f; chosenAmenities.clear(); advancedFilters = DiscoveryFilters() })
                 "details" -> ListingDetailsScreen(selectedListing, favorites.contains(selectedListing.id), { toggleFavorite(selectedListing.id) }, { route = "chat" }, { route = "request_visit" }, { route = "search" }, { route = "request_booking" })
-                "request_visit" -> VisitRequestScreen(selectedListing, { route = "details" }, {
-                    val visit = StayRecord(category = "visits", title = "Visit · ${selectedListing.name}", details = "Visit requested from property details. Confirm exact time with the owner.", property = selectedListing.name, status = "Requested")
-                    StayRecordStore.add(context, visit)
-                    StayRecordStore.add(context, StayRecord(category = "enquiries", title = "Enquiry · ${selectedListing.name}", details = "Customer requested availability / a visit.", property = selectedListing.name, status = "New"))
-                    StayRecordStore.notify(context, "Visit request saved", "${selectedListing.name} · owner response pending", selectedListing.name)
-                    notify("Visit and enquiry saved on this device")
-                    route = "records:visits"
-                })
-                "request_booking" -> RequestBookingScreen(selectedListing, { route = "details" }) { roomType, moveInDate, unit, note ->
-                    val existingReservations = StayRecordStore.load(context, "reservations")
-                    val conflict = unit.isNotBlank() && existingReservations.any { it.property.equals(selectedListing.name, true) && it.unit.equals(unit, true) && it.status in listOf("Pending", "Confirmed", "Checked in") }
-                    if (conflict) {
-                        notify("That unit already has an active reservation. Choose another unit or ask the owner to confirm.")
-                        route = "records:reservations"
+                "request_visit" -> VisitRequestScreen(selectedListing, { route = "details" }) { moveIn, roomType, visitSlot, note ->
+                    val serverId = selectedListing.serverPropertyId
+                    val token = StayApiClient.currentSessionToken(preferences.apiBaseUrl)
+                    if (serverId != null && preferences.apiBaseUrl.isNotBlank()) {
+                        if (token == null) { notify("Connect StayEasy API and set a customer token before sending a server visit request."); route = "api_connection" }
+                        else scope.launch {
+                            try {
+                                val result = withContext(Dispatchers.IO) {
+                                    val enquiry = StayApiClient.createEnquiry(preferences.apiBaseUrl, token, serverId, roomType, note, moveIn)
+                                    val visit = StayApiClient.createVisit(preferences.apiBaseUrl, token, serverId, enquiry.optLong("id").takeIf { it > 0L }, StayApiClient.visitTimeFromLabel(visitSlot))
+                                    Pair(enquiry, visit)
+                                }
+                                StayRecordStore.add(context, StayRecord(id = "server-enquiry-${result.first.optLong("id")}", category = "enquiries", title = "Enquiry · ${selectedListing.name}", details = note, property = selectedListing.name, status = result.first.optString("status", "new").replaceFirstChar { it.uppercase() }, source = "Server"))
+                                StayRecordStore.add(context, StayRecord(id = "server-visit-${result.second.optLong("id")}", category = "visits", title = "Visit · ${selectedListing.name}", details = "Visit request sent to the property owner.", property = selectedListing.name, date = result.second.optString("preferred_at"), status = result.second.optString("status", "requested").replaceFirstChar { it.uppercase() }, source = "Server"))
+                                StayRecordStore.notify(context, "Visit request sent", "${selectedListing.name} · awaiting owner response", selectedListing.name)
+                                notify("Enquiry and visit request saved to StayEasy server."); route = "records:visits"
+                            } catch (e: Exception) { notify("Visit request was not sent: ${e.message ?: "Check customer token and API connection."}") }
+                        }
                     } else {
-                        val initialCost = selectedListing.monthlyRent + selectedListing.deposit + selectedListing.foodMonthly + selectedListing.utilityMonthlyEstimate
-                        StayRecordStore.add(context, StayRecord(category = "reservations", title = "Reservation · ${selectedListing.name}", details = "$roomType requested. $note", person = "Guest user", property = selectedListing.name, unit = unit, date = moveInDate, amount = initialCost, status = "Pending"))
-                        StayRecordStore.add(context, StayRecord(category = "enquiries", title = "Booking enquiry · ${selectedListing.name}", details = "Requested $roomType for $moveInDate; owner confirmation pending.", person = "Guest user", property = selectedListing.name, unit = unit, status = "New"))
-                        StayRecordStore.notify(context, "Reservation request saved", "${selectedListing.name} · owner confirmation pending", selectedListing.name)
-                        notify("Reservation request saved; no booking or payment is confirmed")
-                        route = "records:reservations"
+                        val visit = StayRecord(category = "visits", title = "Visit · ${selectedListing.name}", details = "$roomType requested. Visit preference: $visitSlot. $note", property = selectedListing.name, status = "Requested")
+                        StayRecordStore.add(context, visit)
+                        StayRecordStore.add(context, StayRecord(category = "enquiries", title = "Enquiry · ${selectedListing.name}", details = "Move-in: $moveIn. $note", property = selectedListing.name, status = "New"))
+                        StayRecordStore.notify(context, "Visit request saved", "${selectedListing.name} · owner response pending", selectedListing.name)
+                        notify("Visit and enquiry saved on this device only."); route = "records:visits"
+                    }
+                }
+                "request_booking" -> RequestBookingScreen(selectedListing, { route = "details" }) { roomType, moveInDate, unit, note ->
+                    val serverId = selectedListing.serverPropertyId
+                    val token = StayApiClient.currentSessionToken(preferences.apiBaseUrl)
+                    if (serverId != null && preferences.apiBaseUrl.isNotBlank()) {
+                        if (token == null) { notify("Connect StayEasy API and set a customer token before sending a server reservation."); route = "api_connection" }
+                        else {
+                            val chosenUnit = selectedListing.serverUnits.firstOrNull { it.status == "available" && (it.unitCode == unit || "${it.roomCode} · ${it.unitCode}" == unit) }
+                            if (selectedListing.serverUnits.any { it.status == "available" } && chosenUnit == null) {
+                                notify("Select one of the available server beds / rooms to reserve it safely.")
+                            } else scope.launch {
+                                try {
+                                    val result = withContext(Dispatchers.IO) { StayApiClient.createReservation(preferences.apiBaseUrl, token, serverId, chosenUnit?.id, roomType, moveInDate, note) }
+                                    StayRecordStore.add(context, StayRecord(id = "server-reservation-${result.optLong("id")}", category = "reservations", title = "Reservation · ${selectedListing.name}", details = "$roomType requested. $note · Server expiry: ${result.optString("expires_at", "to be confirmed")}", person = "Customer account", property = selectedListing.name, unit = chosenUnit?.let { "${it.roomCode} · ${it.unitCode}" } ?: unit, date = moveInDate, amount = result.optInt("rent_snapshot") + result.optInt("deposit_snapshot"), status = result.optString("status", "pending").replaceFirstChar { it.uppercase() }, source = "Server"))
+                                    StayRecordStore.notify(context, "Reservation request sent", "${selectedListing.name} · waiting for owner confirmation", selectedListing.name)
+                                    notify("Server reservation request created. No payment was taken."); route = "records:reservations"
+                                } catch (e: Exception) { notify("Reservation was not sent: ${e.message ?: "Check date, availability and customer token."}") }
+                            }
+                        }
+                    } else {
+                        val existingReservations = StayRecordStore.load(context, "reservations")
+                        val conflict = unit.isNotBlank() && existingReservations.any { it.property.equals(selectedListing.name, true) && it.unit.equals(unit, true) && it.status in listOf("Pending", "Confirmed", "Checked in") }
+                        if (conflict) {
+                            notify("That unit already has an active reservation. Choose another unit or ask the owner to confirm.")
+                            route = "records:reservations"
+                        } else {
+                            val initialCost = selectedListing.monthlyRent + selectedListing.deposit + selectedListing.foodMonthly + selectedListing.utilityMonthlyEstimate
+                            StayRecordStore.add(context, StayRecord(category = "reservations", title = "Reservation · ${selectedListing.name}", details = "$roomType requested. $note", person = "Guest user", property = selectedListing.name, unit = unit, date = moveInDate, amount = initialCost, status = "Pending", source = "Local demo"))
+                            StayRecordStore.add(context, StayRecord(category = "enquiries", title = "Booking enquiry · ${selectedListing.name}", details = "Requested $roomType for $moveInDate; owner confirmation pending.", person = "Guest user", property = selectedListing.name, unit = unit, status = "New", source = "Local demo"))
+                            StayRecordStore.notify(context, "Reservation request saved", "${selectedListing.name} · owner confirmation pending", selectedListing.name)
+                            notify("Reservation request saved on this device; no booking or payment is confirmed")
+                            route = "records:reservations"
+                        }
                     }
                 }
                 "saved" -> SavedScreen(allListings.filter { favorites.contains(it.id) }, { selectedId = it; route = "details" }, { id -> favorites.remove(id); StayUserDataStore.saveFavorites(context, favorites.toList()) }, { route = "search" })
@@ -480,11 +534,33 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "owner_dashboard" -> OwnerDashboardScreen(ownerListings, { route = "owner_properties" }, { route = "owner_beds" }, { route = "owner_enquiries" }, { route = "owner_payments" }, { route = "owner_issues" }, { ownerMode = false; route = "home" }, { route = "owner_analytics" }, { route = "owner_residents" })
                 "owner_properties" -> OwnerPropertiesScreen(ownerListings, { route = "add_pg" }, { selectedId = it; route = "owner_beds" }, { selectedId = it; route = "edit_pg" })
                 "add_pg" -> AddPropertyWizard(onPublish = { listing ->
-                    customListings.add(0, listing)
-                    ListingStore.save(context, customListings.toList())
-                    selectedId = listing.id
-                    notify("${listing.name} is now visible in demo search")
-                    route = "owner_properties"
+                    val baseUrl = preferences.apiBaseUrl
+                    val token = StayApiClient.currentSessionToken(preferences.apiBaseUrl)
+                    if (baseUrl.isNotBlank() && token != null) {
+                        route = "owner_properties"
+                        scope.launch {
+                            try {
+                                val saved = withContext(Dispatchers.IO) { StayApiClient.createOwnerListing(baseUrl, token, listing) }
+                                val serverId = saved.optLong("id").takeIf { it > 0L }
+                                val remoteDraft = listing.copy(id = -(serverId ?: listing.id), serverPropertyId = serverId, isPublished = false, serverUnits = emptyList())
+                                val previous = customListings.indexOfFirst { it.serverPropertyId != null && it.serverPropertyId == serverId }
+                                if (previous >= 0) customListings[previous] = remoteDraft else customListings.add(0, remoteDraft)
+                                ListingStore.save(context, customListings.toList())
+                                selectedId = remoteDraft.id
+                                notify("${listing.name} was saved to the server and submitted for listing review. It will appear in customer search after approval.")
+                            } catch (e: Exception) {
+                                val localDraft = listing.copy(isPublished = false)
+                                customListings.add(0, localDraft); ListingStore.save(context, customListings.toList()); selectedId = localDraft.id
+                                notify("Server save failed; a local draft was kept. ${e.message ?: "Check API connection and owner token."}")
+                            }
+                        }
+                    } else {
+                        customListings.add(0, listing.copy(isPublished = false))
+                        ListingStore.save(context, customListings.toList())
+                        selectedId = listing.id
+                        notify("Draft saved on this device. Configure an API URL and owner token to publish to the shared marketplace.")
+                        route = "owner_properties"
+                    }
                 }, onCancel = { route = "owner_properties" })
                 "edit_pg" -> AddPropertyWizard(onPublish = { listing ->
                     val index = customListings.indexOfFirst { it.id == listing.id }
@@ -927,8 +1003,8 @@ private fun ListingDetailsScreen(p: PgListing, isFavorite: Boolean, onFavorite: 
 }
 
 @Composable
-private fun VisitRequestScreen(p: PgListing, onBack: () -> Unit, onSubmit: () -> Unit) {
-    var moveIn by remember { mutableStateOf("15 Nov 2026") }
+private fun VisitRequestScreen(p: PgListing, onBack: () -> Unit, onSubmit: (moveInDate: String, roomType: String, visitSlot: String, note: String) -> Unit) {
+    var moveIn by remember { mutableStateOf(java.time.LocalDate.now().plusDays(7).format(java.time.format.DateTimeFormatter.ofPattern("d MMM yyyy"))) }
     var roomChoice by remember { mutableStateOf(p.sharing) }
     var visitChoice by remember { mutableStateOf("Tomorrow · 6:00 PM") }
     var note by remember { mutableStateOf("Hi, I am interested in this stay. Could I visit and confirm the total move-in cost?") }
@@ -949,8 +1025,8 @@ private fun VisitRequestScreen(p: PgListing, onBack: () -> Unit, onSubmit: () ->
         Spacer(Modifier.height(11.dp)); FormLabel("MESSAGE TO OWNER")
         OutlinedTextField(note, { note = it }, modifier = Modifier.fillMaxWidth().heightIn(min = 100.dp), shape = RoundedCornerShape(14.dp), colors = fieldColors())
         Spacer(Modifier.height(14.dp)); Card(shape = RoundedCornerShape(15.dp), colors = CardDefaults.cardColors(containerColor = SE.OrangeSoft)) { Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) { Icon(Icons.Filled.Lock, null, tint = SE.Orange); Spacer(Modifier.width(8.dp)); Text("This request does not reserve a bed. Wait for the owner to confirm availability, charges, visit time and reservation terms.", color = SE.Text, fontSize = 11.sp, lineHeight = 16.sp) } }
-        Spacer(Modifier.height(19.dp)); PrimaryButton("Send request", Icons.AutoMirrored.Filled.ArrowForward, onSubmit)
-        Spacer(Modifier.height(10.dp)); Text("Demo action only. The production app will notify the owner and create a tracked enquiry.", color = SE.Muted, fontSize = 10.sp)
+        Spacer(Modifier.height(19.dp)); PrimaryButton("Send request", Icons.AutoMirrored.Filled.ArrowForward) { onSubmit(moveIn, roomChoice, visitChoice, note) }
+        Spacer(Modifier.height(10.dp)); Text(if (p.serverPropertyId != null) "Request is sent to the owner through the shared server. No bed is reserved and no payment is taken." else "This is a local demo listing; the request stays on this device.", color = SE.Muted, fontSize = 10.sp)
     }
 }
 
