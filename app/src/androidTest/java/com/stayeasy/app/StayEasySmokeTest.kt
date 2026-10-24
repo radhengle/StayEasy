@@ -1,6 +1,9 @@
 package com.stayeasy.app
 
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.onNode
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -17,6 +20,10 @@ import org.junit.runner.RunWith
 class StayEasySmokeTest {
     @get:Rule
     val composeRule = createAndroidComposeRule<MainActivity>()
+
+    private fun clickControlContaining(label: String) {
+        composeRule.onNode(hasText(label, substring = true) and hasClickAction()).performClick()
+    }
 
     @Test
     fun launchesCustomerHome() {
@@ -37,7 +44,7 @@ class StayEasySmokeTest {
     fun customerCanOpenOwnerWorkspace() {
         composeRule.onNodeWithText("Profile").performClick()
         composeRule.onNodeWithText("Your profile").assertIsDisplayed()
-        composeRule.onNodeWithText("Are you a PG owner?", useUnmergedTree = true).performClick()
+        clickControlContaining("Are you a PG owner?")
         composeRule.onNodeWithText("Your business, at a glance").assertIsDisplayed()
         composeRule.onNodeWithText("Your properties", useUnmergedTree = true).assertIsDisplayed()
     }
@@ -46,13 +53,13 @@ class StayEasySmokeTest {
     fun customerCanChangePaletteAndRestoreDefault() {
         composeRule.onNodeWithText("Profile").performClick()
         composeRule.onNodeWithText("Your profile").assertIsDisplayed()
-        composeRule.onNodeWithText("All tools & preferences", useUnmergedTree = true).performClick()
+        clickControlContaining("All tools & preferences")
         composeRule.onNodeWithText("Your StayEasy").assertIsDisplayed()
-        composeRule.onNodeWithText("Appearance & themes", useUnmergedTree = true).performClick()
+        clickControlContaining("Appearance & themes")
         composeRule.onNodeWithText("Appearance & settings").assertIsDisplayed()
-        composeRule.onNodeWithText("Ocean", useUnmergedTree = true).performClick()
+        clickControlContaining("Ocean")
         composeRule.onNodeWithText("Appearance & settings").assertIsDisplayed()
-        composeRule.onNodeWithText("Midnight Cobalt", useUnmergedTree = true).performClick()
+        clickControlContaining("Midnight Cobalt")
         composeRule.onNodeWithText("Appearance & settings").assertIsDisplayed()
     }
 }
