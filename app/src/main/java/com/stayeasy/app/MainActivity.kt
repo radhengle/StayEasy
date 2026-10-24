@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -125,6 +126,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.Locale
 import kotlin.math.max
+import kotlin.math.pow
+import kotlin.math.roundToInt
 
 internal object SE {
     var Ink by mutableStateOf(Color(0xFF17263D)); private set
@@ -301,6 +304,26 @@ private object ListingStore {
 
 private fun money(amount: Int) = "₹" + String.format(Locale.getDefault(), "%,d", amount)
 
+// Nonlinear rent scale: most slider travel stays useful below ₹30,000.
+private fun rentSliderPosition(amount: Int): Float {
+    val normalized = (amount.coerceIn(100, 100000) - 100) / 99900f
+    return normalized.coerceIn(0f, 1f).pow(0.25f)
+}
+private fun rentFromSlider(position: Float): Float =
+    (100f + 99900f * position.coerceIn(0f, 1f).pow(4f)).roundToInt().toFloat()
+
+@Composable
+private fun RentBudgetSlider(value: Float, onValueChange: (Float) -> Unit) {
+    Column {
+        Slider(value = rentSliderPosition(value.roundToInt()), onValueChange = { onValueChange(rentFromSlider(it)) }, valueRange = 0f..1f)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("₹100", color = SE.Muted, fontSize = 10.sp)
+            Text("₹30,000 · fine control", color = SE.Blue, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            Text("₹1,00,000", color = SE.Muted, fontSize = 10.sp)
+        }
+    }
+}
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -355,6 +378,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     val remoteListings = remember { mutableStateListOf<PgListing>() }
     val favorites = remember { mutableStateListOf<Long>().apply { addAll(StayUserDataStore.loadFavorites(context)) } }
     var route by remember { mutableStateOf("home") }
+    var detailsReturnRoute by remember { mutableStateOf("search") }
     var signedInAccount by remember { mutableStateOf<JSONObject?>(null) }
     LaunchedEffect(preferences.apiBaseUrl) {
         val baseUrl = preferences.apiBaseUrl.trim()
@@ -378,7 +402,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     var location by remember { mutableStateOf("Pune, Maharashtra") }
     var searchQuery by remember { mutableStateOf("") }
     var guestChoice by remember { mutableStateOf("Any") }
-    var maxBudget by remember { mutableFloatStateOf(25000f) }
+    var maxBudget by remember { mutableFloatStateOf(30000f) }
     var advancedFilters by remember { mutableStateOf(DiscoveryFilters()) }
     val chosenAmenities = remember { mutableStateListOf<String>() }
     val toggleFavorite: (Long) -> Unit = { id ->
@@ -407,7 +431,10 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
         }
         val amenityMatch = chosenAmenities.all { p.amenities.contains(it) }
         val dateMatch = advancedFilters.moveInDate.isBlank() || advancedFilters.moveInDate.equals("Any date", true) || p.expectedVacancy.contains(advancedFilters.moveInDate, true) || advancedFilters.moveInDate.equals("Available now", true) && p.availableBeds > 0
-        textMatch && locationMatch && guestMatch && p.monthlyRent >= advancedFilters.minRent && p.monthlyRent <= maxBudget.toInt() && p.deposit in advancedFilters.minDeposit..advancedFilters.maxDeposit && (advancedFilters.maxDistanceKm >= 20f || (p.distanceIsVerified && p.distanceKm <= advancedFilters.maxDistanceKm)) && sharingMatch && amenityMatch &&
+        textMatch && locationMatch && guestMatch && p.monthlyRent >= advancedFilters.minRent && p.monthlyRent <= maxBudget.toInt() &&
+            (!advancedFilters.filterDeposit || p.deposit in advancedFilters.minDeposit..advancedFilters.maxDeposit) &&
+            (!advancedFilters.filterDistance || !p.distanceIsVerified || p.distanceKm <= advancedFilters.maxDistanceKm) &&
+            sharingMatch && amenityMatch &&
             (!advancedFilters.availableOnly || p.availableBeds > 0) && (!advancedFilters.foodIncluded || p.foodMonthly > 0) && (!advancedFilters.acRequired || p.amenities.any { it.equals("AC", true) }) &&
             (!advancedFilters.attachedBathroom || p.bathroomType.equals("Attached", true) || p.amenities.any { it.equals("Attached bath", true) }) && (!advancedFilters.furnishedOnly || p.isFurnished) &&
             (!advancedFilters.verifiedOnly || p.isVerified) && (!advancedFilters.cookingAllowed || p.cookingAllowed) && (advancedFilters.minStayMonths == 0 || p.minimumStayMonths <= advancedFilters.minStayMonths) && dateMatch && p.isPublished
@@ -415,6 +442,28 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
         "Price: low to high" -> rows.sortedBy { it.monthlyRent }; "Distance" -> rows.filter { it.distanceIsVerified }.sortedBy { it.distanceKm } + rows.filterNot { it.distanceIsVerified }; "Availability" -> rows.sortedByDescending { it.availableBeds }; "Rating" -> rows.sortedByDescending { it.rating }; else -> rows.sortedWith(compareByDescending<PgListing> { it.featuredListing }.thenByDescending { it.availableBeds })
     } }
     val hideNav = route in setOf("add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account_auth") || route.startsWith("records:")
+
+    // Nested routes return to their parent instead of finishing the Activity.
+    // The property wizard registers a more specific handler for its own steps.
+    BackHandler(enabled = route != "home") {
+        route = if (route.startsWith("records:")) "feature_hub" else when (route) {
+            "search" -> "home"
+            "filters", "map", "search_location" -> "search"
+            "details" -> detailsReturnRoute
+            "request_visit", "request_booking" -> "details"
+            "chat" -> "details"
+            "saved", "stay", "payments", "issue", "enquiries", "notifications" -> if (ownerMode) "owner_dashboard" else "home"
+            "profile" -> "home"
+            "account_auth" -> "profile"
+            "feature_hub" -> if (ownerMode) "owner_more" else "profile"
+            "api_connection", "theme_settings", "compare" -> "feature_hub"
+            "owner_dashboard" -> { ownerMode = false; "home" }
+            "owner_properties", "owner_beds", "owner_enquiries", "owner_residents", "owner_payments", "owner_issues", "owner_analytics", "owner_more", "owner_settings" -> "owner_dashboard"
+            "add_pg", "edit_pg" -> "owner_properties"
+            "add_resident" -> "owner_beds"
+            else -> if (ownerMode) "owner_dashboard" else "home"
+        }
+    }
 
     Scaffold(
         containerColor = SE.Background,
@@ -451,17 +500,17 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (route) {
-                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { route = "filters" }, { ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "profile" })
-                "search" -> SearchResultsScreen(location, { location = it; route = "search_location" }, searchQuery, { searchQuery = it }, guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, filteredListings, favorites, { selectedId = it; route = "details" }, { route = "map" }, { route = "filters" }, toggleFavorite, {
+                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { detailsReturnRoute = "home"; selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { route = "filters" }, { ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "profile" })
+                "search" -> SearchResultsScreen(location, { location = it; route = "search_location" }, searchQuery, { searchQuery = it }, guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, filteredListings, favorites, { detailsReturnRoute = "search"; selectedId = it; route = "details" }, { route = "map" }, { route = "filters" }, toggleFavorite, {
                     val criteria = "Location: $location; query: ${searchQuery.ifBlank { "any PG" }}; eligibility: $guestChoice; max rent: ${money(maxBudget.toInt())}; room types: ${advancedFilters.roomTypes.joinToString().ifBlank { "any" }}; amenities: ${chosenAmenities.joinToString().ifBlank { "any" }}; availability: ${if (advancedFilters.availableOnly) "available now" else advancedFilters.moveInDate.ifBlank { "any" }}; sort: ${advancedFilters.sortBy}"
                     StayRecordStore.add(context, StayRecord(category = "saved_searches", title = "${location.substringBefore(",")}: ${guestChoice} stays", details = criteria, property = location, amount = maxBudget.toInt(), status = "Active"))
                     StayRecordStore.notify(context, "Search saved", "We'll track this criteria locally; live availability alerts require the backend.")
                     notify("Search criteria saved on this device"); route = "records:saved_searches"
-                })
+                }, { guestChoice = "Any"; maxBudget = 30000f; chosenAmenities.clear(); advancedFilters = DiscoveryFilters(); searchQuery = "" })
                 "search_location" -> LocationSearchScreen(location, { location = it; StayUserDataStore.addRecentLocation(context, it); route = "search" }, { route = "search" })
-                "map" -> MapSearchScreen(location, { location = it }, filteredListings, { selectedId = it; route = "details" }, { route = "search" }, { route = "filters" })
+                "map" -> MapSearchScreen(location, { location = it }, filteredListings, { detailsReturnRoute = "map"; selectedId = it; route = "details" }, { route = "search" }, { route = "filters" })
                 "filters" -> FilterScreen(guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, chosenAmenities, advancedFilters, { advancedFilters = it }, { route = "search" }, { guestChoice = "Any"; maxBudget = 25000f; chosenAmenities.clear(); advancedFilters = DiscoveryFilters() })
-                "details" -> ListingDetailsScreen(selectedListing, favorites.contains(selectedListing.id), { toggleFavorite(selectedListing.id) }, { route = "chat" }, { route = "request_visit" }, { route = "search" }, { route = "request_booking" })
+                "details" -> ListingDetailsScreen(selectedListing, favorites.contains(selectedListing.id), { toggleFavorite(selectedListing.id) }, { route = "chat" }, { route = "request_visit" }, { route = detailsReturnRoute }, { route = "request_booking" })
                 "request_visit" -> VisitRequestScreen(selectedListing, { route = "details" }) { moveIn, roomType, visitSlot, note ->
                     val serverId = selectedListing.serverPropertyId
                     val token = StayApiClient.currentSessionToken(preferences.apiBaseUrl)
@@ -522,7 +571,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }
                     }
                 }
-                "saved" -> SavedScreen(allListings.filter { favorites.contains(it.id) }, { selectedId = it; route = "details" }, { id -> favorites.remove(id); StayUserDataStore.saveFavorites(context, favorites.toList()) }, { route = "search" })
+                "saved" -> SavedScreen(allListings.filter { favorites.contains(it.id) }, { detailsReturnRoute = "saved"; selectedId = it; route = "details" }, { id -> favorites.remove(id); StayUserDataStore.saveFavorites(context, favorites.toList()) }, { route = "search" })
                 "enquiries" -> FeatureRecordsScreen("enquiries", ownerMode) { route = "feature_hub" }
                 "chat" -> ChatScreen(selectedListing, { route = "enquiries" }, {
                     StayRecordStore.add(context, StayRecord(category = "messages", title = "Message · ${selectedListing.name}", details = "Demo message thread opened. Add any follow-up notes from Communication history.", property = selectedListing.name, status = "Sent"))
@@ -740,7 +789,7 @@ private fun HomeScreen(
                 Spacer(Modifier.height(8.dp))
                 TextButton(onClick = onFilters, modifier = Modifier.align(Alignment.CenterHorizontally)) {
                     Icon(Icons.Filled.Tune, null, modifier = Modifier.size(16.dp), tint = SE.Blue)
-                    Spacer(Modifier.width(6.dp)); Text("Personalise your search", color = SE.Blue, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.width(6.dp)); Text("Filters & preferences", color = SE.Blue, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -783,7 +832,7 @@ private fun HomeScreen(
 private fun SearchResultsScreen(
     location: String, onLocation: (String) -> Unit, query: String, onQuery: (String) -> Unit,
     guestChoice: String, onGuest: (String) -> Unit, budget: Float, onBudget: (Float) -> Unit,
-    listings: List<PgListing>, favorites: List<Long>, onSelect: (Long) -> Unit, onMap: () -> Unit, onFilters: () -> Unit, onFavorite: (Long) -> Unit, onSaveSearch: () -> Unit
+    listings: List<PgListing>, favorites: List<Long>, onSelect: (Long) -> Unit, onMap: () -> Unit, onFilters: () -> Unit, onFavorite: (Long) -> Unit, onSaveSearch: () -> Unit, onClearFilters: () -> Unit
 ) {
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         Spacer(Modifier.height(14.dp))
@@ -810,17 +859,17 @@ private fun SearchResultsScreen(
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text("Monthly budget · Up to ${money(budget.toInt())}", fontSize = 12.sp, color = SE.Muted)
-        Slider(value = budget, onValueChange = onBudget, valueRange = 5000f..30000f, steps = 9, modifier = Modifier.height(28.dp))
+        Text("Monthly rent · Up to ${money(budget.toInt())}", fontSize = 12.sp, color = SE.Muted)
+        RentBudgetSlider(budget, onBudget)
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) { TextButton(onClick = onSaveSearch, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 3.dp)) { Icon(Icons.Filled.FavoriteBorder, null, modifier = Modifier.size(15.dp)); Spacer(Modifier.width(4.dp)); Text("Save this search", color = SE.Blue, fontSize = 11.sp) } }
         HorizontalDivider(color = SE.Border)
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("${listings.size} stays", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Spacer(Modifier.width(6.dp)); Text("· demo inventory", color = SE.Muted, fontSize = 11.sp)
+            Spacer(Modifier.width(6.dp)); Text("· sample listings", color = SE.Muted, fontSize = 11.sp)
         }
         if (listings.isEmpty()) {
-            EmptyState("No stays match yet", "Try a wider budget or another stay preference.", "Clear filters") { onGuest("Any"); onBudget(30000f); onQuery("") }
+            EmptyState("No stays match yet", "Try a wider rent limit, remove an optional filter, or clear all preferences.", "Clear all filters") { onClearFilters() }
         } else {
             LazyColumn(contentPadding = PaddingValues(bottom = 18.dp), verticalArrangement = Arrangement.spacedBy(9.dp), modifier = Modifier.fillMaxSize()) {
                 items(listings, key = { it.id }) { p -> ListingCard(p, favorites.contains(p.id), { onSelect(p.id) }, { onFavorite(p.id) }, compact = true) }
@@ -917,6 +966,7 @@ private fun MapSearchScreen(location: String, onLocation: (String) -> Unit, list
     }
 }
 
+
 @Composable
 private fun FilterScreen(
     guestChoice: String, onGuest: (String) -> Unit, budget: Float, onBudget: (Float) -> Unit,
@@ -925,54 +975,172 @@ private fun FilterScreen(
 ) {
     var draft by remember { mutableStateOf(filters) }
     var minRentText by remember { mutableStateOf(filters.minRent.takeIf { it > 0 }?.toString() ?: "") }
-    var minDepositText by remember { mutableStateOf(filters.minDeposit.takeIf { it > 0 }?.toString() ?: "") }
-    var maxDepositText by remember { mutableStateOf(if (filters.maxDeposit < 100000) filters.maxDeposit.toString() else "") }
-    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(18.dp)) {
-        ScreenHeader("Refine your search", "More control over the total cost and stay rules", onBack = { onFilters(draft); onApply() }, trailing = { TextButton(onClick = { onReset(); draft = DiscoveryFilters(); minRentText = ""; minDepositText = ""; maxDepositText = "" }) { Text("Reset", color = SE.Blue) } })
-        Spacer(Modifier.height(18.dp)); Text("ACCOMMODATION ELIGIBILITY", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SE.Muted, letterSpacing = 1.sp)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("Any", "Boys", "Girls", "Mixed", "Couples").forEach { option ->
-                FilterChip(selected = guestChoice == option, onClick = { onGuest(option) }, label = { Text(when(option) { "Any" -> "Any"; "Mixed" -> "All genders"; "Couples" -> "Couples welcome"; else -> option }) })
+    var minDepositText by remember { mutableStateOf(if (filters.filterDeposit && filters.minDeposit > 0) filters.minDeposit.toString() else "") }
+    var maxDepositText by remember { mutableStateOf(if (filters.filterDeposit && filters.maxDeposit < 100000) filters.maxDeposit.toString() else "") }
+    var depositEnabled by remember { mutableStateOf(filters.filterDeposit) }
+    var distanceEnabled by remember { mutableStateOf(filters.filterDistance) }
+    val amenities = listOf(
+        "Wi-Fi", "AC", "Meals", "Attached bath", "Laundry", "Parking", "Power backup",
+        "Housekeeping", "Study desk", "Hot water", "Lift", "Washing machine",
+        "Refrigerator", "CCTV / security", "Water purifier", "Geyser", "Balcony",
+        "Kitchen access", "Gym", "Work desk"
+    )
+    val activeCount = (if (guestChoice != "Any") 1 else 0) +
+        (if (draft.minRent > 0) 1 else 0) + (if (draft.filterDeposit) 1 else 0) +
+        (if (draft.filterDistance) 1 else 0) + draft.roomTypes.size + selectedAmenities.size +
+        listOf(draft.availableOnly, draft.foodIncluded, draft.acRequired, draft.attachedBathroom,
+            draft.furnishedOnly, draft.verifiedOnly, draft.cookingAllowed).count { it }
+
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+        Spacer(Modifier.height(13.dp))
+        ScreenHeader(
+            "Filters & preferences",
+            "Choose what matters. Everything else stays flexible.",
+            onBack = { onFilters(draft); onApply() },
+            trailing = {
+                TextButton(onClick = {
+                    onReset()
+                    draft = DiscoveryFilters()
+                    minRentText = ""
+                    minDepositText = ""
+                    maxDepositText = ""
+                    depositEnabled = false
+                    distanceEnabled = true
+                }) { Text("Reset all", color = SE.Blue) }
+            }
+        )
+        Text("$activeCount preferences selected", color = SE.Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 5.dp, bottom = 14.dp))
+
+        FilterSection("Who can stay?", "Choose eligibility that suits your household or room policy.") {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Any", "Boys", "Girls", "Mixed", "Couples").forEach { option ->
+                    FilterChip(selected = guestChoice == option, onClick = { onGuest(option) }, label = {
+                        Text(when (option) { "Any" -> "All stays"; "Mixed" -> "All genders"; "Couples" -> "Couples welcome"; else -> option })
+                    })
+                }
             }
         }
-        Spacer(Modifier.height(17.dp)); Text("MONTHLY RENT", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SE.Muted, letterSpacing = 1.sp)
-        Text("Up to ${money(budget.toInt())}", fontSize = 20.sp, color = SE.Ink, fontWeight = FontWeight.Bold)
-        Slider(value = budget, onValueChange = onBudget, valueRange = 5000f..30000f, steps = 9)
-        OutlinedTextField(minRentText, { minRentText = it.filter(Char::isDigit).take(7); draft = draft.copy(minRent = minRentText.toIntOrNull() ?: 0) }, modifier = Modifier.fillMaxWidth(), label = { Text("Minimum monthly rent (₹)") }, singleLine = true, shape = RoundedCornerShape(12.dp))
-        Spacer(Modifier.height(14.dp)); Text("SECURITY DEPOSIT RANGE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SE.Muted, letterSpacing = 1.sp)
-        Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-            OutlinedTextField(minDepositText, { minDepositText = it.filter(Char::isDigit).take(8); draft = draft.copy(minDeposit = minDepositText.toIntOrNull() ?: 0) }, modifier = Modifier.weight(1f), label = { Text("Minimum ₹") }, singleLine = true, shape = RoundedCornerShape(12.dp))
-            OutlinedTextField(maxDepositText, { maxDepositText = it.filter(Char::isDigit).take(8); draft = draft.copy(maxDeposit = maxDepositText.toIntOrNull() ?: 100000) }, modifier = Modifier.weight(1f), label = { Text("Maximum ₹") }, singleLine = true, shape = RoundedCornerShape(12.dp))
+        FilterSection("Monthly rent", "Choose your maximum per person. The slider gives more control below ₹30,000.") {
+            Text("Up to ${money(budget.toInt())}", fontSize = 22.sp, color = SE.Ink, fontWeight = FontWeight.Bold)
+            RentBudgetSlider(budget, onBudget)
+            OutlinedTextField(
+                value = minRentText,
+                onValueChange = {
+                    minRentText = it.filter(Char::isDigit).take(7)
+                    draft = draft.copy(minRent = minRentText.toIntOrNull()?.coerceIn(100, 100000) ?: 0)
+                },
+                modifier = Modifier.fillMaxWidth(), label = { Text("Minimum rent (optional)") },
+                supportingText = { Text("Leave empty to include any rent from ₹100.") },
+                singleLine = true, shape = RoundedCornerShape(12.dp), colors = fieldColors()
+            )
         }
-        Spacer(Modifier.height(15.dp)); Text("DISTANCE FROM SEARCH AREA", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SE.Muted, letterSpacing = 1.sp)
-        Text("Within ${String.format(Locale.getDefault(), "%.1f", draft.maxDistanceKm)} km", color = SE.Ink, fontWeight = FontWeight.SemiBold)
-        Slider(value = draft.maxDistanceKm, onValueChange = { draft = draft.copy(maxDistanceKm = it) }, valueRange = .5f..20f, steps = 38)
-        Text("Distance numbers in the current sample catalogue are illustrative, not live geospatial calculations.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
-        Spacer(Modifier.height(15.dp)); Text("ROOM & SHARING TYPE", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SE.Muted, letterSpacing = 1.sp)
-        val roomTypes = listOf("Private room", "1 sharing", "2 sharing", "3 sharing", "4+ sharing")
-        FlowChips(roomTypes, remember(draft.roomTypes) { mutableStateListOf<String>().apply { addAll(draft.roomTypes) } }, onPick = { option -> draft = draft.copy(roomTypes = if (draft.roomTypes.contains(option)) draft.roomTypes - option else draft.roomTypes + option) })
-        Spacer(Modifier.height(13.dp)); Text("AVAILABILITY & LIVING PREFERENCES", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = SE.Muted, letterSpacing = 1.sp)
-        FilterSwitch("Available now", "Show only listings reporting a free bed", draft.availableOnly) { draft = draft.copy(availableOnly = it) }
-        FilterSwitch("Food available / included", "Food charge is shown separately where applicable", draft.foodIncluded) { draft = draft.copy(foodIncluded = it) }
-        FilterSwitch("AC", "Property or room has AC listed", draft.acRequired) { draft = draft.copy(acRequired = it) }
-        FilterSwitch("Attached bathroom", "Prefer a room with an attached bathroom", draft.attachedBathroom) { draft = draft.copy(attachedBathroom = it) }
-        FilterSwitch("Furnished", "Furnished room or bed accommodation", draft.furnishedOnly) { draft = draft.copy(furnishedOnly = it) }
-        FilterSwitch("Cooking permitted", "Owner confirms cooking access", draft.cookingAllowed) { draft = draft.copy(cookingAllowed = it) }
-        FilterSwitch("Owner verified", "Only records with a verification flag", draft.verifiedOnly) { draft = draft.copy(verifiedOnly = it) }
-        Spacer(Modifier.height(12.dp)); FormLabel("MOVE-IN DATE / AVAILABILITY")
-        OutlinedTextField(draft.moveInDate, { draft = draft.copy(moveInDate = it) }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Available now, 15 Nov 2026, or Any date") }, shape = RoundedCornerShape(12.dp))
-        Spacer(Modifier.height(12.dp)); FormLabel("MINIMUM-STAY POLICY")
-        Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) { listOf(0, 1, 3, 6, 12).forEach { months -> FilterChip(selected = draft.minStayMonths == months, onClick = { draft = draft.copy(minStayMonths = months) }, label = { Text(if (months == 0) "Any" else "≤$months mo") }) } }
-        Spacer(Modifier.height(12.dp)); FormLabel("AMENITIES")
-        val options = listOf("Wi-Fi", "AC", "Meals", "Attached bath", "Laundry", "Parking", "Power backup", "Study desk", "Housekeeping", "Hot water", "Lift")
-        FlowChips(options, selectedAmenities)
-        Spacer(Modifier.height(14.dp)); FormLabel("SORT RESULTS BY")
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) { listOf("Recommended", "Price: low to high", "Distance", "Availability", "Rating").forEach { FilterChip(selected = draft.sortBy == it, onClick = { draft = draft.copy(sortBy = it) }, label = { Text(it, fontSize = 10.sp) }) } }
-        Spacer(Modifier.height(20.dp)); PrimaryButton("Apply filters", Icons.Filled.Search) { onFilters(draft); onApply() }
-        Spacer(Modifier.height(12.dp))
+        FilterSection("Security deposit", "Optional. Leave this off to include all deposit amounts.") {
+            FilterSwitch("Set a deposit range", "Only match listings inside your chosen range.", depositEnabled) { enabled ->
+                depositEnabled = enabled
+                draft = draft.copy(
+                    filterDeposit = enabled,
+                    minDeposit = if (enabled) minDepositText.toIntOrNull() ?: 0 else 0,
+                    maxDeposit = if (enabled) maxDepositText.toIntOrNull() ?: 100000 else 100000
+                )
+            }
+            if (depositEnabled) {
+                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    OutlinedTextField(
+                        value = minDepositText,
+                        onValueChange = {
+                            minDepositText = it.filter(Char::isDigit).take(8)
+                            draft = draft.copy(minDeposit = minDepositText.toIntOrNull()?.coerceAtMost(100000) ?: 0)
+                        },
+                        modifier = Modifier.weight(1f), label = { Text("Minimum ₹") },
+                        singleLine = true, shape = RoundedCornerShape(12.dp), colors = fieldColors()
+                    )
+                    OutlinedTextField(
+                        value = maxDepositText,
+                        onValueChange = {
+                            maxDepositText = it.filter(Char::isDigit).take(8)
+                            draft = draft.copy(maxDeposit = maxDepositText.toIntOrNull()?.coerceAtMost(100000) ?: 100000)
+                        },
+                        modifier = Modifier.weight(1f), label = { Text("Maximum ₹") },
+                        singleLine = true, shape = RoundedCornerShape(12.dp), colors = fieldColors()
+                    )
+                }
+            }
+        }
+        FilterSection("Distance", "Default radius: 5 km. Turn this off to search without a radius preference.") {
+            FilterSwitch("Limit distance from search area", "Verified distances must be inside your radius.", distanceEnabled) { enabled ->
+                distanceEnabled = enabled
+                draft = draft.copy(filterDistance = enabled)
+            }
+            if (distanceEnabled) {
+                Text("Within ${String.format(Locale.getDefault(), "%.0f", draft.maxDistanceKm)} km", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 18.sp)
+                Slider(value = draft.maxDistanceKm, onValueChange = { draft = draft.copy(maxDistanceKm = it) }, valueRange = 1f..25f, steps = 23)
+                Text("Listings without verified distance remain visible, but are not treated as confirmed matches to the radius.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
+            }
+        }
+        FilterSection("Room & stay preferences", "All of these are optional.") {
+            Text("Room type", color = SE.Text, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+            FlowChips(
+                listOf("Private room", "1 sharing", "2 sharing", "3 sharing", "4+ sharing"),
+                remember(draft.roomTypes) { mutableStateListOf<String>().apply { addAll(draft.roomTypes) } },
+                onPick = { option -> draft = draft.copy(roomTypes = if (draft.roomTypes.contains(option)) draft.roomTypes - option else draft.roomTypes + option) }
+            )
+            Spacer(Modifier.height(4.dp))
+            FilterSwitch("Available now", "Only stays reporting a free bed.", draft.availableOnly) { draft = draft.copy(availableOnly = it) }
+            FilterSwitch("Food available", "Include properties that list food or meal service.", draft.foodIncluded) { draft = draft.copy(foodIncluded = it) }
+            FilterSwitch("Air conditioning", "AC is listed as a facility.", draft.acRequired) { draft = draft.copy(acRequired = it) }
+            FilterSwitch("Attached bathroom", "Prefer a room with its own bathroom.", draft.attachedBathroom) { draft = draft.copy(attachedBathroom = it) }
+            FilterSwitch("Furnished", "Show furnished stays.", draft.furnishedOnly) { draft = draft.copy(furnishedOnly = it) }
+            FilterSwitch("Cooking permitted", "The owner lists cooking access as allowed.", draft.cookingAllowed) { draft = draft.copy(cookingAllowed = it) }
+            FilterSwitch("Owner verified", "Only listings carrying a verification flag.", draft.verifiedOnly) { draft = draft.copy(verifiedOnly = it) }
+            FormLabel("MOVE-IN DATE (OPTIONAL)")
+            OutlinedTextField(
+                draft.moveInDate, { draft = draft.copy(moveInDate = it) },
+                modifier = Modifier.fillMaxWidth(), singleLine = true,
+                placeholder = { Text("e.g. Available now or 15 Nov 2026") },
+                shape = RoundedCornerShape(12.dp), colors = fieldColors()
+            )
+            FormLabel("MINIMUM STAY (OPTIONAL)")
+            Row(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                listOf(0, 1, 3, 6, 12).forEach { months ->
+                    FilterChip(selected = draft.minStayMonths == months, onClick = { draft = draft.copy(minStayMonths = months) }, label = { Text(if (months == 0) "Any" else "≤$months mo") })
+                }
+            }
+        }
+        FilterSection("Amenities", "Pick any number. With none selected, amenities will not narrow your results.") {
+            FlowChips(amenities, selectedAmenities)
+            if (selectedAmenities.isNotEmpty()) {
+                Text("${selectedAmenities.size} selected", color = SE.Blue, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                TextButton(onClick = { selectedAmenities.clear() }, modifier = Modifier.align(Alignment.End)) { Text("Clear amenities", color = SE.Blue) }
+            }
+        }
+        FilterSection("Sort results", "Choose how matching stays should be ordered.") {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("Recommended", "Price: low to high", "Distance", "Availability", "Rating").forEach { option ->
+                    FilterChip(selected = draft.sortBy == option, onClick = { draft = draft.copy(sortBy = option) }, label = { Text(option, fontSize = 10.sp) })
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        PrimaryButton("Show matching stays", Icons.Filled.Search) { onFilters(draft); onApply() }
+        Spacer(Modifier.height(22.dp))
     }
 }
 
+@Composable
+private fun FilterSection(title: String, subtitle: String? = null, content: @Composable ColumnScope.() -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth().padding(bottom = 11.dp),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = SE.Surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(title, color = SE.Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            if (subtitle != null) Text(subtitle, color = SE.Muted, fontSize = 11.sp, lineHeight = 15.sp)
+            content()
+        }
+    }
+}
 @Composable
 private fun FilterSwitch(title: String, subtitle: String, checked: Boolean, onChecked: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
