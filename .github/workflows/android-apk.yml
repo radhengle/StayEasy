@@ -91,7 +91,7 @@ jobs:
         with:
           name: stayeasy-android-screenshots
           path: app/build/ui-screenshots/*.png
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30
 
       - name: Upload Android UI test reports
