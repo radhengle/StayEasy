@@ -397,6 +397,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
         }
     }
     var ownerMode by remember { mutableStateOf(false) }
+    var ownerReturnRoute by remember { mutableStateOf("home") }
     var selectedId by remember { mutableLongStateOf(101L) }
     var residentPropertyName by remember { mutableStateOf("CityNest Living") }
     var residentBedOptions by remember { mutableStateOf(listOf("Room 101 · Bed A", "Room 101 · Bed B")) }
@@ -448,7 +449,16 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     // Nested routes return to their parent instead of finishing the Activity.
     // The property wizard registers a more specific handler for its own steps.
     BackHandler(enabled = route != "home") {
-        route = if (route.startsWith("records:")) "feature_hub" else when (route) {
+        route = if (route.startsWith("records:")) when (route.substringAfter("records:")) {
+            "saved_searches" -> "search"
+            "residents" -> if (ownerMode) "owner_beds" else "profile"
+            "payments", "charges", "deposits", "stays" -> if (ownerMode) "owner_payments" else "stay"
+            "issues" -> if (ownerMode) "owner_issues" else "stay"
+            "enquiries" -> if (ownerMode) "owner_enquiries" else "search"
+            "visits", "reservations" -> if (ownerMode) "owner_enquiries" else detailsReturnRoute
+            "notifications" -> if (ownerMode) "owner_dashboard" else "profile"
+            else -> if (ownerMode) "owner_dashboard" else "feature_hub"
+        } else when (route) {
             "search" -> "home"
             "filters", "map", "search_location" -> "search"
             "details" -> detailsReturnRoute
@@ -459,7 +469,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "account_auth" -> "profile"
             "feature_hub" -> if (ownerMode) "owner_more" else "profile"
             "api_connection", "theme_settings", "compare" -> "feature_hub"
-            "owner_dashboard" -> { ownerMode = false; "home" }
+            "owner_dashboard" -> { ownerMode = false; ownerReturnRoute }
             "owner_properties", "owner_beds", "owner_enquiries", "owner_residents", "owner_payments", "owner_issues", "owner_analytics", "owner_more", "owner_settings" -> "owner_dashboard"
             "add_pg", "edit_pg" -> "owner_properties"
             "add_resident" -> "owner_beds"
@@ -502,7 +512,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     ) { padding ->
         Box(Modifier.fillMaxSize().padding(padding)) {
             when (route) {
-                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { detailsReturnRoute = "home"; selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { route = "filters" }, { ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "profile" })
+                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { detailsReturnRoute = "home"; selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { route = "filters" }, { ownerReturnRoute = "home"; ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "profile" })
                 "search" -> SearchResultsScreen(location, { location = it; route = "search_location" }, searchQuery, { searchQuery = it }, guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, filteredListings, favorites, { detailsReturnRoute = "search"; selectedId = it; route = "details" }, { route = "map" }, { route = "filters" }, toggleFavorite, {
                     val criteria = "Location: $location; query: ${searchQuery.ifBlank { "any PG" }}; eligibility: $guestChoice; max rent: ${money(maxBudget.toInt())}; room types: ${advancedFilters.roomTypes.joinToString().ifBlank { "any" }}; amenities: ${chosenAmenities.joinToString().ifBlank { "any" }}; availability: ${if (advancedFilters.availableOnly) "available now" else advancedFilters.moveInDate.ifBlank { "any" }}; sort: ${advancedFilters.sortBy}"
                     StayRecordStore.add(context, StayRecord(category = "saved_searches", title = "${location.substringBefore(",")}: ${guestChoice} stays", details = criteria, property = location, amount = maxBudget.toInt(), status = "Active"))
@@ -634,7 +644,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }
                     }
                 })
-                "profile" -> ProfileScreen(signedInAccount, { ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "feature_hub" }, { route = "account_auth" })
+                "profile" -> ProfileScreen(signedInAccount, { ownerReturnRoute = "profile"; ownerMode = true; route = "owner_dashboard" }, { route = "notifications" }, { route = "feature_hub" }, { route = "account_auth" })
                 "account_auth" -> AccountAuthScreen(
                     baseUrl = preferences.apiBaseUrl,
                     account = signedInAccount,
