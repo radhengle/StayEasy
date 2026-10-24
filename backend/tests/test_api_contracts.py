@@ -651,6 +651,138 @@ def test_email_account_registration_login_role_boundary_logout_and_password_rese
     assert client.get("/auth/me", headers=new_header).status_code == 401
 
 
+def _create_owner_access_applicant(user_id, email, *, verified=True, request_status="pending_approval"):
+    requested_at = datetime.now(timezone.utc)
+    user = m.User(
+        id=user_id, email=email, display_name=user_id.replace("-", " ").title(),
+        role="customer", is_active=True,
+    )
+    credential = m.UserCredential(
+        user_id=user_id,
+        password_hash="test-only-hash",
+        requested_workspace="owner",
+        owner_access_status=request_status,
+        owner_access_requested_at=requested_at,
+        email_verified_at=requested_at if verified else None,
+    )
+    with SessionLocal() as db:
+        db.add_all([user, credential])
+        db.commit()
+    return requested_at
+
+
+def test_admin_owner_access_review_requires_verification_and_audits_decision():
+    verified_requested_at = _create_owner_access_applicant(
+        "owner-applicant-1", "owner-applicant-1@example.test", verified=True
+    )
+    _create_owner_access_applicant(
+        "owner-applicant-unverified", "unverified-owner@example.test", verified=False
+    )
+
+    set_actor("customer-1", "customer")
+    assert client.get("/admin/owner-requests").status_code == 403
+
+    set_actor("admin-1", "admin")
+    listing = client.get("/admin/owner-requests")
+    assert listing.status_code == 200, listing.text
+    requests = {row["id"]: row for row in listing.json()}
+    assert set(requests) == {"owner-applicant-1", "owner-applicant-unverified"}
+    assert requests["owner-applicant-1"]["email_verified"] is True
+    assert requests["owner-applicant-unverified"]["email_verified"] is False
+    assert requests["owner-applicant-1"]["owner_access_status"] == "pending_approval"
+
+    denied_approval = client.post("/admin/owner-requests/owner-applicant-unverified/decision", json={
+        "decision": "approve", "note": "Email verification required",
+    })
+    assert denied_approval.status_code == 422, denied_approval.text
+
+    rejected = client.post("/admin/owner-requests/owner-applicant-1/decision", json={
+        "decision": "reject", "note": "Please provide business registration details.",
+    })
+    assert rejected.status_code == 200, rejected.text
+    assert rejected.json()["role"] == "customer"
+    assert rejected.json()["owner_access_status"] == "rejected"
+
+    with SessionLocal() as db:
+        user = db.get(m.User, "owner-applicant-1")
+        credential = db.get(m.UserCredential, "owner-applicant-1")
+        assert user.role == "customer"
+        assert credential.owner_access_status == "rejected"
+        assert credential.owner_access_review_note == "Please provide business registration details."
+        assert credential.owner_access_reviewed_at is not None
+        assert credential.auth_version == 0
+        audit_row = db.scalar(select(m.AuditLog).where(
+            m.AuditLog.entity_type == "user",
+            m.AuditLog.entity_id == "owner-applicant-1",
+            m.AuditLog.action == "owner_access_decision",
+        ))
+        assert audit_row is not None
+        assert audit_row.actor_role == "admin"
+
+    # A customer can re-request after rejection, but the role remains customer.
+    api.app.dependency_overrides[get_actor] = lambda: {
+        "subject": "owner-applicant-1", "role": "customer", "scopes": ["account"], "account_session": True,
+    }
+    re_request = client.post("/auth/owner-access-request")
+    assert re_request.status_code == 200, re_request.text
+    assert re_request.json()["owner_access_status"] == "pending_approval"
+    assert re_request.json()["role"] == "customer"
+    assert re_request.json()["owner_access_review_note"] == ""
+    assert re_request.json()["owner_access_requested_at"] is not None
+
+    # Return to the verified admin actor and approve the re-submitted request.
+    set_actor("admin-1", "admin")
+    approved = client.post("/admin/owner-requests/owner-applicant-1/decision", json={
+        "decision": "approve", "note": "Verified owner identity.",
+    })
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["role"] == "owner"
+    assert approved.json()["owner_access_status"] == "active"
+
+    with SessionLocal() as db:
+        user = db.get(m.User, "owner-applicant-1")
+        credential = db.get(m.UserCredential, "owner-applicant-1")
+        assert user.role == "owner"
+        assert credential.owner_access_status == "approved"
+        assert credential.auth_version == 1
+        assert credential.owner_access_review_note == "Verified owner identity."
+        assert credential.owner_access_reviewed_at is not None
+
+    already_decided = client.post("/admin/owner-requests/owner-applicant-1/decision", json={
+        "decision": "reject", "note": "A second decision must not be accepted.",
+    })
+    assert already_decided.status_code == 409
+
+
+def test_owner_access_request_endpoint_requires_account_session_and_is_idempotent():
+    _create_owner_access_applicant(
+        "customer-owner-request", "customer-owner-request@example.test", verified=True, request_status="rejected"
+    )
+    set_actor("customer-owner-request", "customer")
+    assert client.post("/auth/owner-access-request").status_code == 403
+
+    api.app.dependency_overrides[get_actor] = lambda: {
+        "subject": "customer-owner-request", "role": "customer", "scopes": ["account"], "account_session": True,
+    }
+    first = client.post("/auth/owner-access-request")
+    assert first.status_code == 200, first.text
+    assert first.json()["owner_access_status"] == "pending_approval"
+    assert first.json()["role"] == "customer"
+
+    second = client.post("/auth/owner-access-request")
+    assert second.status_code == 200, second.text
+    assert second.json()["owner_access_status"] == "pending_approval"
+    assert second.json()["owner_access_requested_at"] == first.json()["owner_access_requested_at"]
+
+    with SessionLocal() as db:
+        user = db.get(m.User, "customer-owner-request")
+        credential = db.get(m.UserCredential, "customer-owner-request")
+        assert user.role == "customer"
+        assert credential.requested_workspace == "owner"
+        assert credential.owner_access_status == "pending_approval"
+        assert credential.owner_access_reviewed_at is None
+
+
 def test_registration_requires_configured_email_delivery(monkeypatch):
     monkeypatch.setattr(auth_routes, "_mail_ready", lambda: False)
     response = client.post("/auth/register", json={
