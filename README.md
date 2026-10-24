@@ -2,7 +2,7 @@
 
 StayEasy is a PG discovery, booking, and accommodation-operations product. This project expands the original Kotlin/Jetpack Compose Android codebase with customer and owner workflows, local persistence, a configurable theme system, a FastAPI/PostgreSQL backend foundation, and a small browser-based moderation console.
 
-**This is a comprehensive development foundation, not a claim that every external integration is production-live.** The Android UI and local workflows are implemented, several public discovery actions can call the API, and API foundations are covered by automated tests. Google Maps/Places, online payments, OTP delivery, push/email/SMS, object storage, production identity, and real multi-device synchronisation for all records still require credentials and integration work. See [`docs/IMPLEMENTATION_MATRIX.md`](docs/IMPLEMENTATION_MATRIX.md) for the feature-by-feature status and [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) for release gates.
+**This is a comprehensive development foundation, not a claim that every external integration is production-live.** The Android UI and local workflows are implemented, several public discovery actions can call the API, and API foundations are covered by automated tests. Google Maps/Places, online payments, OTP delivery, push/email/SMS, object storage, production identity, and real multi-device synchronisation for all records still require credentials and integration work. See [`CHANGELOG.md`](CHANGELOG.md) for recent changes, [`docs/IMPLEMENTATION_MATRIX.md`](docs/IMPLEMENTATION_MATRIX.md) for the feature-by-feature status, and [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) for release gates.
 
 ## Project layout
 
@@ -36,6 +36,7 @@ Every push to `main` or a `feat/**` branch runs the **Android APK** workflow ([`
 
 - `stayeasy-debug-apk` — debug build (`app-debug.apk`), installable directly on a phone.
 - `stayeasy-release-unsigned-apk` — release build (`app-release-unsigned.apk`). It is **not signed**, so Android will not install it until it is signed with a release key.
+- `stayeasy-android-screenshots` — PNG screenshots captured on the emulator for Customer Home, Explore search and Owner workspace preview. This artifact is uploaded even when UI tests fail, if screenshots were captured before the failure.
 
 ### Download from the website
 
@@ -45,6 +46,7 @@ Every push to `main` or a `feat/**` branch runs the **Android APK** workflow ([`
 4. Scroll to **Artifacts** and click **stayeasy-debug-apk** to download a `.zip`. You must be signed in to GitHub to download artifacts.
 5. Unzip it to get `app-debug.apk`.
 6. Copy the `.apk` to your Android device (minimum Android 8.0) and open it. If asked, allow **Install unknown apps** for the app you're opening it from (Files, Chrome, etc.), then tap **Install**.
+7. For UI evidence, return to the same run's **Artifacts** section and download `stayeasy-android-screenshots`. Unzip it to view the PNGs. A successful build does not guarantee screenshots or production readiness; check the UI-test job status too.
 
 ### Run the build manually
 
@@ -121,7 +123,7 @@ The tested API contracts use a temporary/test database. Passing tests verifies t
 
 ## API connection from Android
 
-In the app, open Profile → Owner/management features → API connection & sync. Enter a reachable API base URL and run the health/listing check. The screen can fetch public listings from `/properties?city=Pune`. Use HTTPS except for explicitly permitted local development hosts (`localhost`, `127.0.0.1`, `10.0.2.2`). A token entered for an optional owner-dashboard check is kept in screen state rather than persisted as an app preference. Beyond public discovery and health checks, Android now supports role-token sessions for development, owner property creation with room/bed inventory and amenity submission, customer enquiry + visit requests, server-backed reservation requests for a selected server unit, and owner status updates for server-side enquiries, visits, and reservations. Enquiry, visit, and reservation views refresh from the API when a session is active. Drafts and finance/resident records remain device-local until their individual workflows are connected and reconciled. Maintenance tickets sync only when a customer has a valid API session and an active server-backed stay; owner issue queues and status updates use property-scoped API permissions. Development-token minting is for a configured development environment only and must be disabled in production.
+In the app, open Profile → Owner/management features → API connection & sync. Enter a reachable API base URL and run the health/listing check. The screen can fetch public listings from `/properties?city=Pune`. Use HTTPS except for explicitly permitted local development hosts (`localhost`, `127.0.0.1`, `10.0.2.2`). A token entered for an optional owner-dashboard check is kept in screen state rather than persisted as an app preference. Beyond public discovery and health checks, Android now supports role-token sessions for development, owner property creation with room/bed inventory and amenity submission, customer enquiry + visit requests, server-backed reservation requests for a selected server unit, owner status updates for server-side enquiries, visits, and reservations, and verified-resident assignment to available server units via `POST /owner/stays`. The app refreshes server inventory after the stay is confirmed; the API remains the source of truth for unit occupancy and stay creation. Enquiry, visit, and reservation views refresh from the API when a session is active. Other drafts and operational records can still remain device-local until their specific workflows are connected and reconciled. Maintenance tickets sync only when a customer has a valid API session and an active server-backed stay; owner issue queues and status updates use property-scoped API permissions. Development-token minting is for a configured development environment only and must be disabled in production.
 
 ## Google Maps and location accuracy
 
