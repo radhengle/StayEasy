@@ -416,7 +416,7 @@ def expire_pending_reservations_for_unit(db: Session, unit_id: int, actor: dict[
     return len(expired)
 
 
-def property_dict(p: m.Property, db: Session | None = None) -> dict:
+def property_dict(p: m.Property, db: Session | None = None, include_private_inventory: bool = False) -> dict:
     out = {"id": p.id, "owner_id": p.owner_id, "name": p.name, "description": p.description, "address": p.address,
            "locality": p.locality, "city": p.city, "pin_code": p.pin_code, "latitude": p.latitude, "longitude": p.longitude,
            "nearby_places": p.nearby_places or [], "eligibility": p.eligibility, "couples_welcome": p.couples_welcome,
@@ -430,7 +430,7 @@ def property_dict(p: m.Property, db: Session | None = None) -> dict:
     if db is not None:
         units = list(db.scalars(select(m.PropertyUnit).where(m.PropertyUnit.property_id == p.id)
                                 .order_by(m.PropertyUnit.floor_label, m.PropertyUnit.room_code, m.PropertyUnit.unit_code)))
-        public_units = [unit_inventory_dict(db, unit, include_private=False) for unit in units]
+        public_units = [unit_inventory_dict(db, unit, include_private=include_private_inventory) for unit in units]
         out["inventory"] = {
             "total": len(public_units),
             "available": sum(u["status"] == "available" for u in public_units),
@@ -498,7 +498,7 @@ def list_owner_properties(actor: dict = Depends(require_roles("owner", "admin"))
     if actor["role"] != "admin":
         stmt = stmt.where(m.Property.owner_id == actor_user_id(actor))
     rows = list(db.scalars(stmt.order_by(m.Property.id.desc())))
-    return [property_dict(prop, db) for prop in rows]
+    return [property_dict(prop, db, include_private_inventory=True) for prop in rows]
 
 
 @app.post("/owner/properties", status_code=201)
