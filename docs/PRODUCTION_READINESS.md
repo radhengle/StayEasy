@@ -18,4 +18,4 @@
 
 ## Scope explicitly not claimed as complete
 
-The current package is an implementation foundation, not a public launch-ready marketplace: Google Maps/Places, real payment processing, push notification delivery, document/object storage, Android↔API syncing, production authentication, full multi-lingual resources, iOS app and subscription billing are not active integrations.
+The current package is an implementation foundation, not a public launch-ready marketplace: basic Tenant/Owner email-password registration and JWT role sessions are implemented, but verification/recovery and production authentication hardening remain. Google Maps/Places, real payment processing, push notification delivery, document/object storage, complete Android↔API sync, full multi-lingual resources, iOS app and subscription billing are not active integrations.
