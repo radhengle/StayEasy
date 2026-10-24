@@ -511,7 +511,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 }, { guestChoice = "Any"; maxBudget = 30000f; chosenAmenities.clear(); advancedFilters = DiscoveryFilters(); searchQuery = "" })
                 "search_location" -> LocationSearchScreen(location, { location = it; StayUserDataStore.addRecentLocation(context, it); route = "search" }, { route = "search" })
                 "map" -> MapSearchScreen(location, { location = it }, filteredListings, { detailsReturnRoute = "map"; selectedId = it; route = "details" }, { route = "search" }, { route = "filters" })
-                "filters" -> FilterScreen(guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, chosenAmenities, advancedFilters, { advancedFilters = it }, { route = "search" }, { guestChoice = "Any"; maxBudget = 25000f; chosenAmenities.clear(); advancedFilters = DiscoveryFilters() })
+                "filters" -> FilterScreen(guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, chosenAmenities, advancedFilters, { advancedFilters = it }, { route = "search" }, { guestChoice = "Any"; maxBudget = 30000f; chosenAmenities.clear(); advancedFilters = DiscoveryFilters() })
                 "details" -> ListingDetailsScreen(selectedListing, favorites.contains(selectedListing.id), { toggleFavorite(selectedListing.id) }, { route = "chat" }, { route = "request_visit" }, { route = detailsReturnRoute }, { route = "request_booking" })
                 "request_visit" -> VisitRequestScreen(selectedListing, { route = "details" }) { moveIn, roomType, visitSlot, note ->
                     val serverId = selectedListing.serverPropertyId
