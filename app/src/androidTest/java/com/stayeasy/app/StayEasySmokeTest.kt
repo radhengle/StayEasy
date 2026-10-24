@@ -211,6 +211,47 @@ class StayEasySmokeTest {
     }
 
     @Test
+    fun moveOutRequestRejectsMissingStayAndMalformedDateBeforeNetworkAccess() {
+        val invalidStayId = runCatching {
+            StayApiClient.requestMoveOut(
+                "https://api.example.invalid", "test-token", 0L, "2026-12-15", "Moving"
+            )
+        }.exceptionOrNull()
+        assertTrue("A valid server stay id is required", invalidStayId is IllegalArgumentException)
+
+        val malformedDate = runCatching {
+            StayApiClient.requestMoveOut(
+                "https://api.example.invalid", "test-token", 1L, "2026-02-30", "Moving"
+            )
+        }.exceptionOrNull()
+        assertTrue("Invalid calendar dates must be rejected before network access", malformedDate is IllegalArgumentException)
+
+        val partialDate = runCatching {
+            StayApiClient.requestMoveOut(
+                "https://api.example.invalid", "test-token", 1L, "15 Dec 2026 trailing text", "Moving"
+            )
+        }.exceptionOrNull()
+        assertTrue("Partial move-out dates must be rejected before network access", partialDate is IllegalArgumentException)
+    }
+
+    @Test
+    fun ownerMoveOutReviewRejectsInvalidIdAndDecisionBeforeNetworkAccess() {
+        val invalidId = runCatching {
+            StayApiClient.reviewMoveOutRequest(
+                "https://api.example.invalid", "test-token", 0L, "approve"
+            )
+        }.exceptionOrNull()
+        assertTrue("A move-out request id must be positive", invalidId is IllegalArgumentException)
+
+        val invalidDecision = runCatching {
+            StayApiClient.reviewMoveOutRequest(
+                "https://api.example.invalid", "test-token", 1L, "close"
+            )
+        }.exceptionOrNull()
+        assertTrue("Only approve/reject decisions are accepted", invalidDecision is IllegalArgumentException)
+    }
+
+    @Test
     fun stayLifecycleRequiresNoticeAndMoveOutDatesBeforeNetworkAccess() {
         val missingNotice = runCatching {
             StayApiClient.updateOwnerStay(
