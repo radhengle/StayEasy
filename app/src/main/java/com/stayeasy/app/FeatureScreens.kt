@@ -1221,6 +1221,9 @@ private fun serverStatusOptions(category: String, current: String): List<String>
         "notice given" -> listOf("Active", "Completed")
         else -> emptyList()
     }
+    "move_out_requests" -> if (current.trim().equals("pending", ignoreCase = true)) {
+        listOf("Approve", "Reject")
+    } else emptyList()
     else -> emptyList()
 }
 
