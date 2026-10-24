@@ -262,6 +262,7 @@ def test_customer_stay_history_has_property_labels_and_is_scoped_to_customer():
     assert row["property_name"] == "Test House"
     assert row["locality"] == "Wakad"
     assert row["city"] == "Pune"
+    assert row["notice_period_days"] == 30
     assert row["room_code"] == "101"
     assert row["unit_code"] == "101-A"
     assert row["joining_date"] == "2026-10-01"
