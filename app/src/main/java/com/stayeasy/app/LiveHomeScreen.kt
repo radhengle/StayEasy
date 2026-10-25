@@ -50,7 +50,8 @@ internal fun LiveHomeScreen(
     maxBudget: Float, listings: List<PgListing>, favorites: List<Long>, onListing: (Long) -> Unit, onFavorite: (Long) -> Unit,
     onSearch: () -> Unit, onMap: () -> Unit, onFilters: () -> Unit, onOwner: () -> Unit, onNotifications: () -> Unit, onProfile: () -> Unit
 ) {
-    val liveListings = listings.filter { !it.isDemo && it.dataSource != "demo-fixture" }
+    val apiListings = listings.filter { it.serverPropertyId != null }
+    val liveListings = apiListings.filter { !it.isDemo && it.dataSource != "demo-fixture" }
     val previewListings = listings.filter { it.isDemo || it.dataSource == "demo-fixture" }
     Column(Modifier.fillMaxSize().background(Color(0xFFF5F7FB)).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(12.dp))
@@ -75,7 +76,7 @@ internal fun LiveHomeScreen(
                 Column {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(Modifier.clip(CircleShape).background(if (liveListings.isNotEmpty()) LiveLime else Color(0xFF42516A)).padding(horizontal = 10.dp, vertical = 5.dp)) {
-                            Text(if (liveListings.isNotEmpty()) "● LIVE SERVER DATA" else "● PREVIEW MODE", color = if (liveListings.isNotEmpty()) LiveNavy else Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .6.sp)
+                            Text(when { liveListings.isNotEmpty() -> "● LIVE SERVER DATA"; apiListings.isNotEmpty() -> "● API CONNECTED · DEMO DATA"; else -> "● PREVIEW MODE" }, color = if (liveListings.isNotEmpty() || apiListings.isNotEmpty()) LiveNavy else Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold, letterSpacing = .6.sp)
                         }
                         Spacer(Modifier.weight(1f))
                         Text("PUNE · INDIA", color = Color(0xFFB8C7DF), fontSize = 9.sp, letterSpacing = 1.sp)
@@ -128,7 +129,7 @@ internal fun LiveHomeScreen(
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             Column(Modifier.weight(1f)) {
                 Text("Stays around you", color = LiveNavy, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
-                Text(if (liveListings.isNotEmpty()) "Fresh from the StayEasy API" else "Connect a backend to replace previews", color = LiveMuted, fontSize = 11.sp)
+                Text(when { liveListings.isNotEmpty() -> "Fresh from the API · check each verification label"; apiListings.isNotEmpty() -> "Backend connected · these are seeded test fixtures"; else -> "Connect a backend to replace local previews" }, color = LiveMuted, fontSize = 11.sp)
             }
             Text(listings.size.toString() + " total", color = LiveBlue, fontSize = 11.sp, fontWeight = FontWeight.Bold)
         }
