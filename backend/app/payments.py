@@ -635,7 +635,7 @@ def request_payment_refund(
     return _refund_payload(refund)
 
 
-@router.get("/payments/owner")
+@router.get("/payments/owner/summary")
 def list_property_payments(
     property_id: int | None = None,
     actor: dict = Depends(require_roles("owner", "manager", "staff", "admin")),
