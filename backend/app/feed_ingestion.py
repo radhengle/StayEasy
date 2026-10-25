@@ -16,8 +16,8 @@ from urllib.request import Request, urlopen
 
 from sqlalchemy import select
 
-from app.database import Base, SessionLocal, engine
-from app import models as m
+from .database import Base, SessionLocal, engine
+from . import models as m
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("stayeasy.feed")
@@ -65,6 +65,8 @@ def sync_once() -> dict[str, int]:
             try:
                 rent = int(item.get("rent_from", 0))
                 deposit = int(item.get("deposit_from", 0))
+                food_monthly = int(item.get("food_monthly", 0) or 0)
+                utilities_estimate = int(item.get("utilities_estimate", 0) or 0)
             except (TypeError, ValueError):
                 skipped += 1
                 continue
@@ -90,8 +92,8 @@ def sync_once() -> dict[str, int]:
                 "food_policy": str(item.get("food_policy", "Not offered"))[:40],
                 "rent_from": rent,
                 "deposit_from": deposit,
-                "food_monthly": max(0, int(item.get("food_monthly", 0) or 0)),
-                "utilities_estimate": max(0, int(item.get("utilities_estimate", 0) or 0)),
+                "food_monthly": max(0, food_monthly),
+                "utilities_estimate": max(0, utilities_estimate),
                 "status": "published",
                 "verification_status": "unverified",
                 "data_source": source,
