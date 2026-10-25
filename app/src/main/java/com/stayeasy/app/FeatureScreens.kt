@@ -1,5 +1,6 @@
 package com.stayeasy.app
 
+import org.json.JSONObject
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
