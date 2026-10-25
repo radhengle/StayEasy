@@ -2056,3 +2056,148 @@ def test_finance_refund_is_provider_confirmed_and_auditable(monkeypatch):
     assert summary.status_code == 200, summary.text
     payment = summary.json()["payments"][0]
     assert payment["refunds"][0]["status"] == "processed"
+
+
+def test_status_refresh_recovers_capture_after_provider_query_outage(monkeypatch):
+    import hashlib
+    import hmac
+
+    charge_id, _, _ = _create_payment_scenario()
+    order, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert order.status_code == 201, order.text
+    attempt = order.json()
+
+    def unavailable(payment_id):
+        raise payment_routes.GatewayRequestError("provider temporarily unavailable", ambiguous=True)
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", unavailable)
+    signature = hmac.new(
+        b"test-secret-key",
+        b"order_stayeasy_test_01|pay_recover_capture_01",
+        hashlib.sha256,
+    ).hexdigest()
+    interrupted = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_recover_capture_01",
+        "razorpay_signature": signature,
+    })
+    assert interrupted.status_code == 503
+    with SessionLocal() as db:
+        pending = db.get(m.PaymentAttempt, attempt["id"])
+        assert pending.status == "unknown"
+        assert pending.provider_payment_id == "pay_recover_capture_01"
+        assert db.scalar(select(func.count()).select_from(m.LedgerEntry).where(
+            m.LedgerEntry.payment_attempt_id == attempt["id"],
+            m.LedgerEntry.category == "payment",
+        )) == 0
+
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", lambda payment_id: {
+        "id": payment_id, "order_id": "order_stayeasy_test_01", "amount": 12500,
+        "currency": "INR", "status": "captured", "captured": True, "method": "upi",
+    })
+    recovered = client.post(f"/payments/{attempt['id']}/refresh")
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["ledger_posted"] is True
+    assert recovered.json()["payment"]["status"] == "captured"
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(m.LedgerEntry).where(
+            m.LedgerEntry.payment_attempt_id == attempt["id"],
+            m.LedgerEntry.category == "payment",
+        )) == 1
+
+
+def test_captured_payment_does_not_mark_larger_updated_charge_fully_paid(monkeypatch):
+    import hashlib
+    import hmac
+
+    charge_id, _, _ = _create_payment_scenario()
+    order, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert order.status_code == 201, order.text
+    attempt = order.json()
+    with SessionLocal() as db:
+        charge = db.get(m.LedgerEntry, charge_id)
+        charge.amount = 200
+        charge.amount_paise = 20000
+        charge.status = "open"
+        db.commit()
+
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", lambda payment_id: {
+        "id": payment_id, "order_id": "order_stayeasy_test_01", "amount": 12500,
+        "currency": "INR", "status": "captured", "captured": True, "method": "upi",
+    })
+    signature = hmac.new(
+        b"test-secret-key",
+        b"order_stayeasy_test_01|pay_partial_due_01",
+        hashlib.sha256,
+    ).hexdigest()
+    captured = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_partial_due_01",
+        "razorpay_signature": signature,
+    })
+    assert captured.status_code == 200, captured.text
+    with SessionLocal() as db:
+        charge = db.get(m.LedgerEntry, charge_id)
+        assert charge.status == "partial"
+        assert payment_routes._amount_due(db, charge) == 7500
+
+
+def test_processed_refund_writes_ledger_reversal_and_reopens_due(monkeypatch):
+    import hashlib
+    import hmac
+    import json
+
+    charge_id, _, property_id = _create_payment_scenario()
+    order, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert order.status_code == 201, order.text
+    attempt = order.json()
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", lambda payment_id: {
+        "id": payment_id, "order_id": "order_stayeasy_test_01", "amount": 12500,
+        "currency": "INR", "status": "captured", "captured": True, "method": "upi",
+    })
+    signature = hmac.new(
+        b"test-secret-key",
+        b"order_stayeasy_test_01|pay_refund_reopens_due_01",
+        hashlib.sha256,
+    ).hexdigest()
+    verified = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_refund_reopens_due_01",
+        "razorpay_signature": signature,
+    })
+    assert verified.status_code == 200, verified.text
+
+    set_actor("owner-1", "owner")
+    monkeypatch.setattr(payment_routes, "create_razorpay_refund", lambda payment_id, amount_paise, notes: {
+        "id": "rfnd_reopen_due_01", "amount": amount_paise, "status": "pending",
+    })
+    request = client.post(
+        f"/payments/{attempt['id']}/refund",
+        json={"amount_paise": 5000, "reason": "Partial refund for rent"},
+        headers={"Idempotency-Key": "owner-refund-reopen-01"},
+    )
+    assert request.status_code == 202, request.text
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "test-webhook-secret")
+    payload = {"event": "refund.processed", "payload": {"refund": {"entity": {
+        "id": "rfnd_reopen_due_01", "payment_id": "pay_refund_reopens_due_01",
+        "amount": 5000, "status": "processed",
+    }}}}
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    sig = hmac.new(b"test-webhook-secret", raw, hashlib.sha256).hexdigest()
+    webhook = client.post("/payments/webhooks/razorpay", content=raw, headers={
+        "Content-Type": "application/json",
+        "X-Razorpay-Signature": sig,
+        "X-Razorpay-Event-Id": "evt_refund_reopens_due_01",
+    })
+    assert webhook.status_code == 200, webhook.text
+    with SessionLocal() as db:
+        charge = db.get(m.LedgerEntry, charge_id)
+        assert charge.status == "partial"
+        assert payment_routes._amount_due(db, charge) == 5000
+        reversal = list(db.scalars(select(m.LedgerEntry).where(
+            m.LedgerEntry.category == "refund",
+            m.LedgerEntry.related_charge_id == charge_id,
+        )))
+        assert len(reversal) == 1
+        assert reversal[0].amount_paise == 5000
+    summary = client.get(f"/payments/owner/summary?property_id={property_id}")
+    assert summary.status_code == 200, summary.text

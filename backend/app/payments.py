@@ -100,6 +100,11 @@ def fetch_razorpay_payment(payment_id: str) -> dict[str, Any]:
     return _gateway_request("GET", f"/payments/{payment_id}")
 
 
+def fetch_razorpay_order_payments(order_id: str) -> dict[str, Any]:
+    """Recover payment attempts after the Android process dies before saving its callback."""
+    return _gateway_request("GET", f"/orders/{order_id}/payments")
+
+
 def create_razorpay_refund(payment_id: str, amount_paise: int, notes: dict[str, str]) -> dict[str, Any]:
     return _gateway_request("POST", f"/payments/{payment_id}/refund", {
         "amount": amount_paise,
@@ -139,7 +144,14 @@ def _paid_for_charge(db: Session, charge: m.LedgerEntry) -> int:
         m.LedgerEntry.status.in_(PAID_LEDGER_STATUSES),
         or_(*conditions),
     ))
-    return sum(_amount_paise(row) for row in rows)
+    received = sum(_amount_paise(row) for row in rows)
+    refunds = db.scalars(select(m.LedgerEntry).where(
+        m.LedgerEntry.category == "refund",
+        m.LedgerEntry.status.in_(PAID_LEDGER_STATUSES),
+        m.LedgerEntry.related_charge_id == charge.id,
+    ))
+    refunded = sum(_amount_paise(row) for row in refunds)
+    return max(0, received - refunded)
 
 
 def _amount_due(db: Session, charge: m.LedgerEntry) -> int:
@@ -284,15 +296,16 @@ def _settle_captured_payment(
             created_by=attempt.customer_id,
         )
         db.add(payment_entry)
+        short_paid = attempt.amount_paise < remaining
         if unapplied:
             attempt.status = "captured_unapplied"
             attempt.failure_code = "overpayment_reconciliation_required"
+            charge.status = "paid"
         else:
             attempt.status = "captured"
-            attempt.failure_code = ""
-        # The receivable is satisfied once a full amount was captured. Any excess
-        # is separately surfaced on the payment attempt for refund/reconciliation.
-        charge.status = "paid"
+            attempt.failure_code = "charge_balance_changed_after_order" if short_paid else ""
+            charge.status = "partial" if short_paid else "paid"
+        # If the balance changed after order creation, an underpaid charge remains partial.
     attempt.provider_payment_id = provider_payment_id
     attempt.payment_method = str(provider_payment.get("method") or "online")[:32]
     attempt.captured_at = _utcnow()
@@ -341,6 +354,37 @@ def _refresh_refund_status(db: Session, refund: m.PaymentRefund, provider_status
                 attempt.status = "refunded"
             elif attempt.status == "refunded":
                 attempt.status = "captured"
+
+            charge = db.get(m.LedgerEntry, attempt.charge_entry_id)
+            if charge and refund.provider_refund_id:
+                reversal = db.scalar(select(m.LedgerEntry).where(
+                    m.LedgerEntry.category == "refund",
+                    m.LedgerEntry.payment_reference == refund.provider_refund_id,
+                ))
+                if reversal is None:
+                    refund_rupees = int((Decimal(refund.amount_paise) / Decimal(100)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+                    db.add(m.LedgerEntry(
+                        property_id=charge.property_id,
+                        resident_stay_id=charge.resident_stay_id,
+                        reservation_id=charge.reservation_id,
+                        related_charge_id=charge.id,
+                        category="refund",
+                        amount=refund_rupees,
+                        amount_paise=refund.amount_paise,
+                        currency=attempt.currency,
+                        billing_period=charge.billing_period,
+                        due_date=charge.due_date,
+                        paid_at=_utcnow(),
+                        payment_method="online_refund",
+                        payment_reference=refund.provider_refund_id,
+                        provider_status="provider_confirmed",
+                        description=f"Verified online refund for charge #{charge.id}.",
+                        status="paid",
+                        created_by=refund.requested_by,
+                    ))
+                    db.flush()
+                net_paid = _paid_for_charge(db, charge)
+                charge.status = "paid" if _amount_due(db, charge) == 0 else ("partial" if net_paid > 0 else "open")
     elif provider_status == "failed":
         refund.status = "failed"
         refund.failure_code = "provider_refund_failed"
@@ -511,7 +555,14 @@ def verify_checkout_payment(
     try:
         provider_payment = fetch_razorpay_payment(body.razorpay_payment_id)
     except GatewayRequestError as exc:
-        raise HTTPException(503, "We could not confirm the payment status with the provider. Retry status verification.") from exc
+        # The callback signature is valid. Persist the provider ID for a later
+        # server-to-server reconciliation, but do not post a payment yet.
+        attempt.provider_payment_id = body.razorpay_payment_id
+        attempt.status = "unknown"
+        attempt.failure_code = "provider_verification_unavailable"
+        attempt.updated_at = _utcnow()
+        db.commit()
+        raise HTTPException(503, "We could not confirm the payment status with the provider. Use Check status; do not pay again.") from exc
     provider_payment["id"] = provider_payment.get("id") or body.razorpay_payment_id
     if str(provider_payment.get("order_id") or "") != attempt.provider_order_id:
         raise HTTPException(409, "The provider payment does not belong to this StayEasy order.")
@@ -642,6 +693,112 @@ def request_payment_refund(
             raise HTTPException(503, "The refund result is indeterminate. Do not submit it again with a new key; reconcile with the provider.") from exc
         raise HTTPException(502, "The provider rejected this refund request.") from exc
     return _refund_payload(refund)
+
+
+@router.post("/payments/{payment_attempt_id}/refresh")
+def refresh_payment_status(
+    payment_attempt_id: int,
+    actor: dict = Depends(require_roles("customer", "owner", "manager", "staff", "admin")),
+    db: Session = Depends(get_db),
+):
+    """Reconcile an existing order with Razorpay; this never initiates a new charge."""
+    attempt = db.scalar(select(m.PaymentAttempt).where(
+        m.PaymentAttempt.id == payment_attempt_id
+    ).with_for_update())
+    if attempt is None:
+        raise HTTPException(404, "Payment attempt not found.")
+    charge = db.get(m.LedgerEntry, attempt.charge_entry_id)
+    if actor["role"] == "customer":
+        if attempt.customer_id != str(actor["subject"]):
+            raise HTTPException(404, "Payment attempt not found.")
+    else:
+        if charge is None:
+            raise HTTPException(409, "The charge linked to this payment no longer exists.")
+        _require_finance_manager(db, actor, charge.property_id)
+
+    if attempt.status in {"captured", "captured_unapplied", "refunded"}:
+        return {"payment": _attempt_payload(attempt), "ledger_posted": True}
+    if not attempt.provider_order_id:
+        raise HTTPException(409, "Provider order reference is missing. Finance must reconcile this indeterminate order before retrying.")
+
+    try:
+        if attempt.provider_payment_id:
+            candidates = [fetch_razorpay_payment(attempt.provider_payment_id)]
+        else:
+            collection = fetch_razorpay_order_payments(attempt.provider_order_id)
+            candidates = [item for item in collection.get("items", []) if isinstance(item, dict)]
+    except GatewayRequestError as exc:
+        attempt.status = "unknown"
+        attempt.failure_code = "provider_status_unavailable"
+        attempt.updated_at = _utcnow()
+        db.commit()
+        raise HTTPException(503, "Razorpay status is temporarily unavailable. Do not start another payment; retry Check status.") from exc
+
+    for candidate in candidates:
+        if str(candidate.get("order_id") or "") != attempt.provider_order_id:
+            continue
+        if candidate.get("amount") != attempt.amount_paise or str(candidate.get("currency") or "") != attempt.currency:
+            attempt.status = "unknown"
+            attempt.failure_code = "provider_amount_mismatch"
+            attempt.updated_at = _utcnow()
+            db.commit()
+            raise HTTPException(409, "The provider payment does not match the stored order amount/currency. Finance review is required.")
+
+    captured = [
+        item for item in candidates
+        if str(item.get("order_id") or "") == attempt.provider_order_id
+        and (item.get("captured") is True or str(item.get("status") or "").lower() == "captured")
+    ]
+    if len(captured) > 1:
+        attempt.status = "unknown"
+        attempt.failure_code = "multiple_captures_requires_reconciliation"
+        attempt.updated_at = _utcnow()
+        db.commit()
+        raise HTTPException(409, "Multiple captured payments were returned for one order. Finance reconciliation is required; do not pay again.")
+
+    if captured:
+        _settle_captured_payment(db, attempt, captured[0])
+        db.commit()
+        db.refresh(attempt)
+        return {"payment": _attempt_payload(attempt), "ledger_posted": True}
+
+    selected = next((
+        item for desired in ("authorized", "created", "pending", "failed")
+        for item in candidates
+        if str(item.get("order_id") or "") == attempt.provider_order_id
+        and str(item.get("status") or "").lower() == desired
+    ), None)
+    if selected is None:
+        if attempt.status != "unknown":
+            attempt.status = "created"
+            attempt.failure_code = ""
+        attempt.updated_at = _utcnow()
+        db.commit()
+        return {
+            "payment": _attempt_payload(attempt),
+            "ledger_posted": False,
+            "message": "Razorpay has no payment attempt to confirm yet. The existing order is still available; do not create a duplicate charge.",
+        }
+
+    selected_id = str(selected.get("id") or "")
+    if not selected_id:
+        raise HTTPException(502, "Razorpay returned a payment without an ID; status was not changed.")
+    state = str(selected.get("status") or "").lower()
+    if state in {"authorized", "created", "pending"}:
+        attempt.provider_payment_id = selected_id
+        attempt.status = "authorized" if state == "authorized" else "created"
+        attempt.payment_method = str(selected.get("method") or "")[:32]
+        attempt.failure_code = ""
+        attempt.updated_at = _utcnow()
+    else:
+        _set_payment_failed(db, attempt, selected)
+    db.commit()
+    db.refresh(attempt)
+    return {
+        "payment": _attempt_payload(attempt),
+        "ledger_posted": False,
+        "message": "Razorpay status was refreshed. The payment is not captured yet." if attempt.status != "failed" else "Razorpay reports that this payment attempt failed. Review the charge before retrying.",
+    }
 
 
 @router.get("/payments/owner/summary")

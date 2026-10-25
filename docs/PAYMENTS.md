@@ -23,7 +23,7 @@ The app returns key_id, checkout_order_id, checkout_amount, and checkout_currenc
 1. GET /payments/charges (customer) lists charges that belong to the signed-in tenant and still have an outstanding balance.
 2. POST /payments/orders with {"charge_id": <ledger charge id>} and an Idempotency-Key header creates/reuses the server-owned Razorpay order. The request intentionally accepts no client-supplied price.
 3. Open Razorpay Standard Checkout in the app using the returned key_id, checkout_order_id, checkout_amount, and checkout_currency.
-4. After checkout, POST /payments/verify with payment_attempt_id, razorpay_payment_id, and razorpay_signature. StayEasy validates the checkout HMAC against the stored order ID, then queries Razorpay for the canonical payment status.
+4. After checkout, POST /payments/verify with payment_attempt_id, razorpay_payment_id, and razorpay_signature. StayEasy validates the checkout HMAC against the stored order ID, then queries Razorpay for the canonical payment status. If the app was interrupted or provider verification was temporarily unavailable, POST /payments/{payment_attempt_id}/refresh reconciles the existing order/payment without charging again.
 5. Razorpay calls POST /payments/webhooks/razorpay. StayEasy validates X-Razorpay-Signature on the unmodified raw body, de-duplicates events, and handles captured, failed, authorized and refund events idempotently.
 6. GET /payments/mine returns the tenant's payment history; GET /payments/owner/summary?property_id=<id> returns scoped payment/refund status to property finance operators.
 7. POST /payments/{payment_attempt_id}/refund requests a full or partial provider refund. This endpoint is available only to an owner or finance-authorized manager/staff/admin. A refund is not reported as processed until Razorpay confirms it; unknown provider responses are intentionally held for reconciliation.
@@ -35,13 +35,13 @@ The app returns key_id, checkout_order_id, checkout_amount, and checkout_currenc
 - Provider order IDs, payment IDs, refund IDs, client idempotency keys and webhook event IDs are unique at database level.
 - The provider callback cannot mark a payment complete by itself: its signature is checked and the canonical provider payment is fetched server-to-server.
 - Webhook HMAC is verified over the raw body before JSON processing. Raw webhook bodies are not stored. Event ID + payload SHA-256 are retained for replay detection and audit.
-- Captured payments create linked ledger payment records with exact amount_paise. Refund records retain the original capture and separate the refund movement.
+- Captured payments create linked ledger payment records with exact amount_paise. Provider-confirmed refunds create linked ledger reversal rows with exact amount_paise, and the charge balance is recalculated so a refund cannot leave a charge falsely marked paid.
 - A network timeout after an order/refund request can be indeterminate. Such records are marked unknown; do not retry under a new key until an operator checks the provider dashboard/API.
 - A database backup/restore, gateway reconciliation job, webhook retry monitoring, secrets rotation and periodic finance settlement reconciliation are required operational controls before production.
 
 ## Required checks before launch
 
-- Add and test the Android Razorpay Standard Checkout SDK integration; do not use a webview or a fake payment success screen.
+- The native Android Razorpay Standard Checkout SDK is wired to the tenant Rent & Payments screen; test it on real devices against a staging account. Do not use a webview or fake payment success screen.
 - Configure test-mode API keys and webhook secret in staging and verify order/create, success, failure, pending/authorized, duplicate webhook, amount mismatch, refund, partial refund, timeout and restore/replay scenarios.
 - Verify gateway settlements against StayEasy's payment ledger and the property owner's settlement arrangement. Razorpay collection does not automatically mean StayEasy is authorized to hold or split rental funds; use a provider-approved marketplace/linked-account model if StayEasy will collect money on behalf of property owners.
 - Obtain legal/accounting review for security deposit treatment, fee disclosure, refund policy, GST/tax invoices, KYC, payout timing and applicable payment regulations in every launch geography.
