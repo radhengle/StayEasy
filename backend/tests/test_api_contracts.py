@@ -1774,9 +1774,11 @@ def test_pre_registration_document_delete_keeps_metadata_when_blob_unlink_fails(
         document_id = document.id
 
     original_unlink = Path.unlink
+    fail_once = {"pending": True}
 
     def fail_document_unlink(path, *args, **kwargs):
-        if path == blob:
+        if path == blob and fail_once["pending"]:
+            fail_once["pending"] = False
             raise PermissionError("simulated private storage failure")
         return original_unlink(path, *args, **kwargs)
 
