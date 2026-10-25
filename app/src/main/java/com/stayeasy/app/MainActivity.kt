@@ -125,6 +125,7 @@ import com.razorpay.PaymentResultWithDataListener
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -282,7 +283,8 @@ internal data class PgListing(
     val expectedVacancy: String = "Available now",
     val nearbyPlaces: String = "",
     val serverPropertyId: Long? = null,
-    val serverUnits: List<RemoteUnit> = emptyList()
+    val serverUnits: List<RemoteUnit> = emptyList(),
+    val dataSource: String = if (isDemo) "preview" else "owner"
 )
 
 private val demoListings = listOf(
@@ -709,6 +711,25 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             }
         }
     }
+    // Refresh API-backed listings while the app is foregrounded; preserve the last good snapshot during outages.
+    LaunchedEffect(preferences.apiBaseUrl, location) {
+        val baseUrl = preferences.apiBaseUrl.trim()
+        if (baseUrl.isBlank()) {
+            remoteListings.clear()
+        } else {
+            while (true) {
+                try {
+                    val city = if (location.contains("Pune", ignoreCase = true)) "Pune" else location.substringAfterLast(",").trim().ifBlank { "Pune" }
+                    val refreshed = withContext(Dispatchers.IO) { StayApiClient.publishedProperties(baseUrl, city) }
+                    remoteListings.clear()
+                    remoteListings.addAll(refreshed)
+                } catch (_: Exception) {
+                    // Preserve the last successful response during transient network failures.
+                }
+                delay(30_000)
+            }
+        }
+    }
     val allListings = remoteListings.toList() + customListings.filter { local -> remoteListings.none { remote -> remote.id == local.id } } + demoListings.filter { demo -> customListings.none { it.id == demo.id } && remoteListings.none { it.id == demo.id } }
     val selectedListing = allListings.firstOrNull { it.id == selectedId } ?: allListings.firstOrNull() ?: demoListings.first()
     val localOwnerListings = customListings.filter { local ->
@@ -832,7 +853,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     onOwnerRegister = { authStartMode = "signup"; authWorkspace = "owner"; authReturnRoute = "auth_entry"; route = "account_auth" },
                     onBrowsePreview = { ownerMode = false; route = "home" }
                 )
-                "home" -> HomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { detailsReturnRoute = "home"; selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { filtersReturnRoute = "home"; route = "filters" }, { workspaceReturnRoute = "home"; route = "account_type" }, { notificationsReturnRoute = "home"; route = "notifications" }, { route = "profile" })
+                "home" -> LiveHomeScreen(location, { location = it }, guestChoice, { guestChoice = it }, maxBudget, filteredListings, favorites, { detailsReturnRoute = "home"; selectedId = it; route = "details" }, toggleFavorite, { route = "search" }, { route = "map" }, { filtersReturnRoute = "home"; route = "filters" }, { workspaceReturnRoute = "home"; route = "account_type" }, { notificationsReturnRoute = "home"; route = "notifications" }, { route = "profile" })
                 "search" -> SearchResultsScreen(location, { location = it; route = "search_location" }, searchQuery, { searchQuery = it }, guestChoice, { guestChoice = it }, maxBudget, { maxBudget = it }, filteredListings, favorites, { detailsReturnRoute = "search"; selectedId = it; route = "details" }, { route = "map" }, { filtersReturnRoute = "search"; route = "filters" }, toggleFavorite, {
                     val criteria = "Location: $location; query: ${searchQuery.ifBlank { "any PG" }}; eligibility: $guestChoice; max rent: ${money(maxBudget.toInt())}; room types: ${advancedFilters.roomTypes.joinToString().ifBlank { "any" }}; amenities: ${chosenAmenities.joinToString().ifBlank { "any" }}; availability: ${if (advancedFilters.availableOnly) "available now" else advancedFilters.moveInDate.ifBlank { "any" }}; sort: ${advancedFilters.sortBy}"
                     StayRecordStore.add(context, StayRecord(category = "saved_searches", title = "${location.substringBefore(",")}: ${guestChoice} stays", details = criteria, property = location, amount = maxBudget.toInt(), status = "Active"))

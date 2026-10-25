@@ -21,6 +21,10 @@ stayeasy_android/
 └── tools/validate_project.py      # Static project validation
 ```
 
+## One-command backend + data test setup
+
+Use `python tools/start_test_stack.py` to create a private local development `.env`, start PostgreSQL + FastAPI, run Alembic migrations, and seed three clearly marked demo properties, inventory, an active demo stay, and an unpaid rent charge. The API health check and Swagger docs are exposed on `localhost:8000`. The Android emulator uses `http://10.0.2.2:8000`; Android will refresh published server listings every 30 seconds while the app is foregrounded. See [`docs/REALTIME_TEST_ENVIRONMENT.md`](docs/REALTIME_TEST_ENVIRONMENT.md) for tenant/owner test tokens, payment setup and the optional authorised external listing-feed worker. Demo fixtures are not real rental inventory; real supply requires a permitted provider feed.
+
 ## Run the Android app
 
 1. Clone this repository and open its root folder in Android Studio.

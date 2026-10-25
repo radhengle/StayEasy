@@ -116,7 +116,7 @@ class StayEasySmokeTest {
     fun launchesCustomerHomeFromExplicitPreviewAction() {
         enterGuestPreview()
         composeRule.onNodeWithText("StayEasy").assertIsDisplayed()
-        composeRule.onNodeWithText("Find a place that").assertIsDisplayed()
+        composeRule.onNodeWithText("Your next chapter", substring = true).assertIsDisplayed()
         composeRule.onNodeWithText("Explore").assertIsDisplayed()
         captureScreenshot("customer-home")
     }
@@ -128,7 +128,7 @@ class StayEasySmokeTest {
         composeRule.onNodeWithText("Explore stays").assertIsDisplayed()
         composeRule.activity.onBackPressedDispatcher.onBackPressed()
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("Find a place that").assertIsDisplayed()
+        composeRule.onNodeWithText("Your next chapter", substring = true).assertIsDisplayed()
     }
 
     @Test
@@ -152,7 +152,7 @@ class StayEasySmokeTest {
         composeRule.onNodeWithText("I'm looking for a place").assertIsDisplayed()
         composeRule.onNodeWithText("I have a property to rent").assertIsDisplayed()
         composeRule.onNodeWithText("Continue as Tenant").performClick()
-        composeRule.onNodeWithText("Find a place that").assertIsDisplayed()
+        composeRule.onNodeWithText("Your next chapter", substring = true).assertIsDisplayed()
     }
 
     @Test

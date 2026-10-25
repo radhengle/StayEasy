@@ -169,3 +169,65 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: warn
           retention-days: 30
+
+  compose-seeded-e2e:
+    needs: backend-contracts
+    name: Docker Compose seeded API and rent-charge smoke test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure disposable local-only test secrets
+        run: |
+          cat > .env <<'EOF'
+          POSTGRES_DB=stayeasy
+          POSTGRES_USER=stayeasy
+          POSTGRES_PASSWORD=ci-local-postgres-password
+          APP_ENV=development
+          JWT_SECRET=ci-only-secret-not-for-deployment-0123456789abcdef
+          JWT_ISSUER=stayeasy-api
+          ACCESS_TOKEN_MINUTES=120
+          DEV_TOKEN_PASSWORD=ci-dev-token-password
+          API_PORT=8000
+          API_BIND_HOST=127.0.0.1
+          SEED_DEMO_DATA=true
+          CORS_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
+          RAZORPAY_KEY_ID=
+          RAZORPAY_KEY_SECRET=
+          RAZORPAY_WEBHOOK_SECRET=
+          PROPERTY_FEED_URL=
+          PROPERTY_FEED_SOURCE=partner-feed
+          PROPERTY_FEED_TOKEN=
+          PROPERTY_FEED_POLL_SECONDS=300
+          EOF
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config --quiet
+
+      - name: Start PostgreSQL and migrated API
+        run: docker compose up --build -d
+
+      - name: Verify health, seeded listings and unpaid tenant charge
+        env:
+          DEV_TOKEN_PASSWORD: ci-dev-token-password
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:8000/health > /tmp/stayeasy-health.json; then break; fi
+            sleep 2
+          done
+          python -c 'import json; d=json.load(open("/tmp/stayeasy-health.json")); assert d["status"] == "ok", d; print("API health:", d)'
+          curl --fail --silent 'http://127.0.0.1:8000/properties?city=Pune' > /tmp/stayeasy-listings.json
+          python -c 'import json; d=json.load(open("/tmp/stayeasy-listings.json")); items=d["items"]; assert len(items) >= 3, d; assert all(p.get("data_source") == "demo-fixture" for p in items), items; print("Seeded listing rows:", len(items))'
+          TENANT_TOKEN=$(curl --fail --silent -X POST http://127.0.0.1:8000/auth/dev-token -H 'Content-Type: application/json' -d "{\"subject\":\"stayeasy-demo-tenant\",\"role\":\"customer\",\"dev_password\":\"$DEV_TOKEN_PASSWORD\"}" | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          curl --fail --silent http://127.0.0.1:8000/payments/charges -H "Authorization: Bearer $TENANT_TOKEN" > /tmp/stayeasy-charges.json
+          python -c 'import json; d=json.load(open("/tmp/stayeasy-charges.json")); charges=d["charges"]; assert len(charges) >= 1, d; assert charges[0]["amount_due_paise"] > 0, charges[0]; print("Tenant payable charges:", len(charges), "first due paise:", charges[0]["amount_due_paise"])'
+
+      - name: Print container logs if the stack failed
+        if: failure()
+        run: docker compose logs --no-color --tail=200
+
+      - name: Stop and remove disposable stack
+        if: always()
+        run: docker compose down -v
