@@ -26,6 +26,14 @@ Seed data includes three Pune demo listings, room/bed inventory, one active demo
 
 For a physical phone, use a trusted HTTPS development tunnel to the local API and enter its HTTPS URL in the app; do not enable plain HTTP for arbitrary LAN/public hosts. The default loopback-only Compose bind intentionally avoids exposing the dev API.
 
+## Inspect integration readiness from the Android app
+
+From **API connection & sync**, use a short-lived owner/admin token and tap **Test connection**. The **Integration readiness** section shows whether a partner feed is configured, the worker's last attempt and last successful sync, the last successful batch's created/updated/skipped counts, the number of imported feed listings, and whether Razorpay checkout/webhook configuration flags are present.
+
+The authenticated diagnostic endpoint is `GET /owner/integrations/status`. It never returns the property-feed URL, feed bearer token, Razorpay key ID, API secret, or webhook secret. A configured URL does not prove that the worker is running; use the last-success timestamp and batch counts to confirm delivery. `not_run` means the worker has not recorded a sync yet; `error` includes only a safe error category. Razorpay configuration flags are not an end-to-end checkout test.
+
+The feed worker records status in the `integration_sync_state` table. Apply Alembic migrations before enabling the worker in staging/production. In local development, the worker creates local schema as needed.
+
 ## End-to-end rent/payment checks
 
 - Tenant token: `stayeasy-demo-tenant`, role `customer` → `GET /payments/charges` should return the seeded open charge.

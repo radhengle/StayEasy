@@ -16,6 +16,21 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+class IntegrationSyncState(Base):
+    """Latest feed worker health and counts; deliberately excludes URLs, tokens and provider payloads."""
+    __tablename__ = "integration_sync_state"
+    integration_key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    status: Mapped[str] = mapped_column(String(24), default="never_run", index=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_error_category: Mapped[str] = mapped_column(String(80), default="")
+    received_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_count: Mapped[int] = mapped_column(Integer, default=0)
+    skipped_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
 class TenantProfile(Base):
     """Tenant-owned optional profile fields; property-specific copies remain attached to an invitation."""
     __tablename__ = "tenant_profiles"

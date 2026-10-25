@@ -511,6 +511,73 @@ def property_dict(p: m.Property, db: Session | None = None, include_private_inve
 def health():
     return {"status": "ok", "service": "stayeasy-api", "environment": APP_ENV}
 
+@app.get("/owner/integrations/status")
+def owner_integration_status(
+    actor: dict = Depends(require_roles("owner", "admin")),
+    db: Session = Depends(get_db),
+):
+    """Safe integration diagnostics; never return provider URLs, tokens or secret values."""
+    feed_url_configured = bool(os.getenv("PROPERTY_FEED_URL", "").strip())
+    feed_source = os.getenv("PROPERTY_FEED_SOURCE", "partner-feed").strip()[:39] or "partner-feed"
+    try:
+        poll_seconds = max(60, int(os.getenv("PROPERTY_FEED_POLL_SECONDS", "300")))
+    except (TypeError, ValueError):
+        poll_seconds = 300
+
+    sync_state = db.get(m.IntegrationSyncState, "property_feed")
+    imported_count = db.scalar(
+        select(func.count()).select_from(m.Property).where(m.Property.external_source_key.is_not(None))
+    ) or 0
+    latest_listing_update = db.scalar(
+        select(func.max(m.Property.external_updated_at)).where(m.Property.external_source_key.is_not(None))
+    )
+
+    key_id = os.getenv("RAZORPAY_KEY_ID", "").strip()
+    api_secret_configured = bool(os.getenv("RAZORPAY_KEY_SECRET", "").strip())
+    webhook_secret_configured = bool(os.getenv("RAZORPAY_WEBHOOK_SECRET", "").strip())
+    checkout_configured = bool(key_id) and api_secret_configured
+    mode_hint = "test" if key_id.startswith("rzp_test_") else (
+        "live" if key_id.startswith("rzp_live_") else "unknown"
+    )
+    if checkout_configured:
+        checkout_state = "configured"
+    elif key_id or api_secret_configured:
+        checkout_state = "incomplete"
+    else:
+        checkout_state = "not_configured"
+
+    def timestamp(value):
+        return value.isoformat() if value is not None else None
+
+    return {
+        "environment": APP_ENV,
+        "property_feed": {
+            "configured": feed_url_configured,
+            "source": feed_source,
+            "poll_interval_seconds": poll_seconds,
+            "sync_status": sync_state.status if sync_state else "not_run",
+            "last_attempt_at": timestamp(sync_state.last_attempt_at) if sync_state else None,
+            "last_success_at": timestamp(sync_state.last_success_at) if sync_state else None,
+            "last_error_category": sync_state.last_error_category if sync_state else "",
+            "last_successful_batch": {
+                "received": sync_state.received_count if sync_state else 0,
+                "created": sync_state.created_count if sync_state else 0,
+                "updated": sync_state.updated_count if sync_state else 0,
+                "skipped": sync_state.skipped_count if sync_state else 0,
+            },
+            "imported_listing_count": int(imported_count),
+            "latest_listing_update_at": timestamp(latest_listing_update),
+            "note": "Configuration does not prove the worker is running. A successful sync timestamp is required to verify feed delivery.",
+        },
+        "razorpay": {
+            "checkout_state": checkout_state,
+            "checkout_configured": checkout_configured,
+            "webhook_secret_configured": webhook_secret_configured,
+            "mode_hint": mode_hint,
+            "note": "Configuration presence is not a provider acceptance test; verify checkout and signed webhooks in test mode.",
+        },
+    }
+
 @app.post("/auth/dev-token")
 def dev_token(body: DevTokenRequest):
     if APP_ENV != "development" or not check_dev_password(body.dev_password):

@@ -100,9 +100,20 @@ class StayEasySmokeTest {
 
     @Test
     fun tenantLoginActionOpensApiSetupWhenBackendIsNotConfigured() {
-        composeRule.onAllNodesWithText("Login")[0].performScrollTo().performClick()
-        composeRule.onNodeWithText("Connect your StayEasy API first").assertIsDisplayed()
-        composeRule.onNodeWithText("Configure API connection").assertIsDisplayed()
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        try {
+            composeRule.onAllNodesWithText("Login")[0].performScrollTo().performClick()
+            composeRule.onNodeWithText("Connect your StayEasy API first").assertIsDisplayed()
+            composeRule.onNodeWithText("Configure API connection").performClick()
+            composeRule.onNodeWithText("API connection & sync").assertIsDisplayed()
+            composeRule.onNodeWithText("Integration readiness").performScrollTo().assertIsDisplayed()
+            composeRule.onNodeWithText("Use an owner/admin token and tap Test connection", substring = true)
+                .performScrollTo().assertIsDisplayed()
+        } finally {
+            // Opening API setup seeds the emulator's default URL. Reset it so this test
+            // cannot change the expectations of the other auth tests that require no URL.
+            StayPreferenceStore.save(context, StayPreferenceStore.load(context).copy(apiBaseUrl = ""))
+        }
     }
 
     @Test

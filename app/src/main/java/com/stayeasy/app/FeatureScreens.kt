@@ -1,5 +1,6 @@
 package com.stayeasy.app
 
+import org.json.JSONObject
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1366,6 +1367,51 @@ private fun themeSwatches(theme: String) = when (theme) {
     else -> listOf(Color(0xFF5478FF), Color(0xFFFF9C73), Color(0xFF141C2B))
 }
 
+private fun summarizeIntegrationReadiness(payload: JSONObject?): String {
+    if (payload == null) {
+        return "Use an owner/admin token and tap Test connection to inspect provider setup. This screen never displays feed URLs, access tokens or Razorpay secrets."
+    }
+    val feed = payload.optJSONObject("property_feed") ?: JSONObject()
+    val batch = feed.optJSONObject("last_successful_batch") ?: JSONObject()
+    val configured = feed.optBoolean("configured", false)
+    val syncStatus = feed.optString("sync_status", "not_run")
+    val feedState = when {
+        !configured -> "Not configured"
+        syncStatus == "running" -> "Sync running"
+        syncStatus == "success" -> "Last sync successful"
+        syncStatus == "error" -> "Last sync failed"
+        else -> "Configured · awaiting first sync"
+    }
+    val lastAttempt = if (feed.isNull("last_attempt_at")) "Never" else feed.optString("last_attempt_at")
+    val lastSuccess = if (feed.isNull("last_success_at")) "Never" else feed.optString("last_success_at")
+    val lastError = feed.optString("last_error_category").takeIf { it.isNotBlank() }
+    val payment = payload.optJSONObject("razorpay") ?: JSONObject()
+    val checkoutState = payment.optString("checkout_state", "not_configured")
+        .replace('_', ' ')
+    val webhookState = if (payment.optBoolean("webhook_secret_configured", false)) "Configured" else "Not configured"
+    val mode = payment.optString("mode_hint", "unknown")
+    return buildString {
+        append("PROPERTY FEED\n")
+        append("Provider: ").append(feed.optString("source", "partner-feed")).append('\n')
+        append("Configuration: ").append(if (configured) "Present" else "Missing").append('\n')
+        append("Sync status: ").append(feedState).append('\n')
+        append("Last attempt: ").append(lastAttempt).append('\n')
+        append("Last successful sync: ").append(lastSuccess).append('\n')
+        append("Last successful batch: ").append(batch.optInt("received")).append(" received · ")
+            .append(batch.optInt("created")).append(" created · ")
+            .append(batch.optInt("updated")).append(" updated · ")
+            .append(batch.optInt("skipped")).append(" skipped\n")
+        append("Imported feed listings: ").append(feed.optInt("imported_listing_count")).append('\n')
+        append("Polling interval: ").append(feed.optInt("poll_interval_seconds", 300)).append(" seconds")
+        if (lastError != null) append("\nLast error category: ").append(lastError)
+        append("\n\nRAZORPAY PAYMENTS\n")
+        append("Checkout credentials: ").append(checkoutState).append('\n')
+        append("Webhook secret: ").append(webhookState).append('\n')
+        append("Mode hint: ").append(mode).append('\n')
+        append("Configuration presence is not a live provider test. Checkout and signed webhooks still need staging acceptance.")
+    }
+}
+
 @Composable
 internal fun ApiConnectionScreen(
     initialBaseUrl: String,
@@ -1382,6 +1428,7 @@ internal fun ApiConnectionScreen(
     var status by remember { mutableStateOf("Not connected yet") }
     var healthText by remember { mutableStateOf("") }
     var dashboardText by remember { mutableStateOf("") }
+    var integrationText by remember { mutableStateOf("Use an owner/admin token and tap Test connection to inspect feed and payment configuration.") }
     val scope = rememberCoroutineScope()
     LaunchedEffect(baseUrl) { onBaseUrlChanged(baseUrl.trimEnd('/')) }
     fun runCheck(loadListings: Boolean) {
@@ -1395,14 +1442,19 @@ internal fun ApiConnectionScreen(
                     if (token.isNotBlank()) StayApiClient.setSessionToken(token, baseUrl)
                     val rows = if (loadListings) StayApiClient.publishedProperties(baseUrl) else emptyList()
                     val dashboard = if (token.isNotBlank()) runCatching { StayApiClient.ownerDashboard(baseUrl, token) }.getOrNull() else null
-                    Triple(health, rows, dashboard)
+                    val integrations = if (token.isNotBlank()) runCatching {
+                        StayApiClient.integrationStatus(baseUrl, token)
+                    }.getOrNull() else null
+                    Triple(health, rows, dashboard to integrations)
                 }
                 healthText = "${result.first.optString("service", "API")} · ${result.first.optString("status", "unknown")} · ${result.first.optString("environment", "")}".trim()
-                dashboardText = result.third?.toString(2) ?: if (token.isNotBlank()) "Owner dashboard not available for this token/role." else "No bearer token provided; public listing search does not require one."
+                dashboardText = result.third.first?.toString(2) ?: if (token.isNotBlank()) "Owner dashboard not available for this token/role." else "No bearer token provided; public listing search does not require one."
+                integrationText = summarizeIntegrationReadiness(result.third.second)
                 if (loadListings) onListingsLoaded(result.second)
                 status = if (loadListings) "Connected. Loaded ${result.second.size} published server listing(s)." else "API health check succeeded."
             } catch (e: Exception) {
                 status = "Connection failed: ${e.message ?: "Unknown network error"}"
+                integrationText = "Could not retrieve integration status. Check the API URL and use a token with owner/admin access."
             } finally { busy = false }
         }
     }
@@ -1471,6 +1523,14 @@ internal fun ApiConnectionScreen(
                 Text("Connection status", color = SE.Text, fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 Spacer(Modifier.height(4.dp)); Text(status, color = SE.Text, fontSize = 11.sp, lineHeight = 16.sp)
                 if (healthText.isNotBlank()) { Spacer(Modifier.height(7.dp)); Text(healthText, color = SE.Muted, fontSize = 10.sp) }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Card(colors = CardDefaults.cardColors(containerColor = SE.Surface), shape = RoundedCornerShape(14.dp), modifier = Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(13.dp)) {
+                Text("Integration readiness", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Spacer(Modifier.height(7.dp))
+                Text(integrationText, color = SE.Muted, fontSize = 10.sp, lineHeight = 15.sp)
             }
         }
         Spacer(Modifier.height(12.dp))

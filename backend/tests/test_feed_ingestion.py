@@ -148,3 +148,56 @@ def test_sync_once_upserts_existing_provider_listing_and_skips_invalid_rows(monk
             assert rows[0].rent_from == 9700
     finally:
         engine.dispose()
+
+def test_sync_once_persists_successful_feed_health_and_batch_counts(monkeypatch):
+    engine = _use_isolated_database(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("PROPERTY_FEED_URL", "https://feed.example.test/listings")
+    monkeypatch.setenv("PROPERTY_FEED_SOURCE", "status-test")
+    payload = [{
+        "external_id": "health-1",
+        "name": "Feed health listing",
+        "locality": "Baner",
+        "city": "Pune",
+        "rent_from": 11000,
+    }]
+    monkeypatch.setattr(feed_ingestion, "_read_feed", lambda _url: payload)
+    try:
+        result = feed_ingestion.sync_once()
+        assert result == {"received": 1, "created": 1, "updated": 0, "skipped": 0}
+        with feed_ingestion.SessionLocal() as db:
+            state = db.get(models.IntegrationSyncState, "property_feed")
+            assert state is not None
+            assert state.status == "success"
+            assert state.last_attempt_at is not None
+            assert state.last_success_at is not None
+            assert state.last_error_category == ""
+            assert (state.received_count, state.created_count, state.updated_count, state.skipped_count) == (1, 1, 0, 0)
+    finally:
+        engine.dispose()
+
+
+def test_sync_once_persists_safe_failure_category_without_provider_payload(monkeypatch):
+    engine = _use_isolated_database(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("PROPERTY_FEED_URL", "https://feed.example.test/private?token=never-store")
+    monkeypatch.setenv("PROPERTY_FEED_TOKEN", "never-store-this-token")
+
+    def fail_read(_url):
+        raise ValueError("malformed provider payload with private details")
+
+    monkeypatch.setattr(feed_ingestion, "_read_feed", fail_read)
+    try:
+        with pytest.raises(ValueError):
+            feed_ingestion.sync_once()
+        with feed_ingestion.SessionLocal() as db:
+            state = db.get(models.IntegrationSyncState, "property_feed")
+            assert state is not None
+            assert state.status == "error"
+            assert state.last_attempt_at is not None
+            assert state.last_error_category == "invalid_feed"
+            assert "never-store" not in state.last_error_category
+            assert "private details" not in state.last_error_category
+    finally:
+        engine.dispose()
+
