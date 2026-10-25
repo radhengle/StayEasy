@@ -25,6 +25,7 @@ from backend.app import models as m
 from backend.app import auth as auth_routes
 from backend.app.config import validate_runtime_configuration
 from backend.scripts.provision_admin import provision_admin
+from backend.scripts.purge_expired_invitation_documents import purge_expired_invitation_documents
 
 client = TestClient(api.app)
 
@@ -1616,4 +1617,89 @@ def test_invitation_document_upload_requires_disclosed_purpose_consent_and_valid
     }, files={"file": ("identity.pdf", b"This is not a PDF or image.", "application/pdf")})
     assert invalid_signature.status_code == 415, invalid_signature.text
     assert not list((tmp_path / "encrypted-documents").glob("*.enc")) if (tmp_path / "encrypted-documents").exists() else True
+
+
+def test_retention_purge_deletes_expired_blobs_and_metadata_but_keeps_future_documents(tmp_path):
+    owner_id = "retention-owner"
+    tenant_id = "retention-tenant"
+    email = "retention-tenant@example.test"
+    _prop, _unit, invitation, purpose = _create_tenant_document_invitation(owner_id, tenant_id, email)
+
+    storage_root = tmp_path / "encrypted-documents"
+    storage_root.mkdir(mode=0o700)
+    now = datetime.now(timezone.utc)
+    expired_key = "a" * 32
+    missing_key = "b" * 32
+    invalid_key = "invalid-storage-key"
+    future_key = "c" * 32
+
+    def make_doc(storage_key: str, retention_until: datetime, filename: str):
+        return m.InvitationDocument(
+            invitation_id=invitation["id"],
+            uploaded_by=tenant_id,
+            category="government_id",
+            purpose=purpose,
+            storage_key=storage_key,
+            original_filename=filename,
+            media_type="application/pdf",
+            size_bytes=128,
+            consent_at=now - timedelta(days=31),
+            status="approved",
+            retention_until=retention_until,
+        )
+
+    with SessionLocal() as db:
+        expired_doc = make_doc(expired_key, now - timedelta(minutes=1), "expired-private.pdf")
+        missing_doc = make_doc(missing_key, now - timedelta(hours=1), "already-missing-private.pdf")
+        invalid_doc = make_doc(invalid_key, now - timedelta(hours=2), "invalid-key-private.pdf")
+        future_doc = make_doc(future_key, now + timedelta(days=1), "future-private.pdf")
+        db.add_all([expired_doc, missing_doc, invalid_doc, future_doc])
+        db.commit()
+        expired_id = expired_doc.id
+        missing_id = missing_doc.id
+        invalid_id = invalid_doc.id
+        future_id = future_doc.id
+
+    expired_blob = storage_root / f"{expired_key}.enc"
+    future_blob = storage_root / f"{future_key}.enc"
+    expired_blob.write_bytes(b"SE1encrypted-expired-document")
+    future_blob.write_bytes(b"SE1encrypted-future-document")
+    expired_blob.chmod(0o600)
+    future_blob.chmod(0o600)
+
+    with SessionLocal() as db:
+        dry_run = purge_expired_invitation_documents(db, storage_root, now=now, dry_run=True)
+        assert dry_run["dry_run"] is True
+        assert dry_run["expired_found"] == 3
+        assert dry_run["purged"] == 0
+        assert expired_blob.exists()
+
+        result = purge_expired_invitation_documents(db, storage_root, now=now, batch_size=2)
+
+    assert result["dry_run"] is False
+    assert result["expired_found"] == 3
+    assert result["purged"] == 2
+    assert result["content_deleted"] == 1
+    assert result["content_missing"] == 1
+    assert result["failed"] == 1
+    assert {error["reason"] for error in result["errors"]} == {"storage_path_invalid"}
+    assert not expired_blob.exists()
+    assert future_blob.exists()
+
+    with SessionLocal() as db:
+        assert db.get(m.InvitationDocument, expired_id) is None
+        assert db.get(m.InvitationDocument, missing_id) is None
+        assert db.get(m.InvitationDocument, invalid_id) is not None
+        assert db.get(m.InvitationDocument, future_id) is not None
+        audit_rows = list(db.scalars(select(m.AuditLog).where(
+            m.AuditLog.entity_type == "invitation_document",
+            m.AuditLog.action == "retention_purge",
+        )))
+        assert len(audit_rows) == 2
+        for row in audit_rows:
+            assert row.actor_id == "system-retention-purge"
+            assert row.actor_role == "system"
+            assert "filename" not in str(row.old_value).lower()
+            assert "purpose" not in row.old_value
+            assert row.new_value["policy"] == "retention_expired"
 
