@@ -25,6 +25,7 @@ validate_runtime_configuration()
 from .database import Base, engine, get_db
 from . import models as m
 from .security import create_access_token, get_actor, require_roles, check_dev_password, APP_ENV
+from .payments import router as payments_router
 
 # Auto-create tables only in local development/test. Staging and production must run Alembic.
 if APP_ENV in {"development", "test"}:
@@ -34,6 +35,7 @@ from .auth import router as auth_router
 from .owner_access import router as owner_access_router
 app.include_router(auth_router)
 app.include_router(owner_access_router)
+app.include_router(payments_router)
 origins = [x.strip() for x in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://localhost:8080").split(",") if x.strip()]
 app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type", "X-Request-ID"])
 
