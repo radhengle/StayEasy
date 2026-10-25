@@ -119,6 +119,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.core.content.edit
+import com.razorpay.Checkout
+import com.razorpay.PaymentData
+import com.razorpay.PaymentResultWithDataListener
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -370,9 +373,85 @@ private fun RentBudgetSlider(value: Float, onValueChange: (Float) -> Unit) {
     }
 }
 
-class MainActivity : ComponentActivity() {
+internal data class RazorpayCheckoutEvent(
+    val attemptId: Long,
+    val paymentId: String? = null,
+    val orderId: String? = null,
+    val signature: String? = null,
+    val errorCode: Int? = null,
+    val errorMessage: String = ""
+)
+
+class MainActivity : ComponentActivity(), PaymentResultWithDataListener {
+    var checkoutEvent by mutableStateOf<RazorpayCheckoutEvent?>(null)
+        private set
+    private var pendingPaymentAttemptId: Long = 0L
+    private val paymentPreferences by lazy {
+        getSharedPreferences("stayeasy_payment_session_v1", Context.MODE_PRIVATE)
+    }
+
+    fun launchRazorpayCheckout(order: JSONObject) {
+        val attemptId = order.optLong("id")
+        val keyId = order.optString("key_id").trim()
+        val orderId = order.optString("checkout_order_id").trim()
+        val amountPaise = order.optLong("checkout_amount")
+        val currency = order.optString("checkout_currency", "INR")
+        require(attemptId > 0L && keyId.isNotBlank() && orderId.isNotBlank() && amountPaise >= 100L && currency == "INR") {
+            "The server returned an incomplete payment order. No payment was started."
+        }
+        pendingPaymentAttemptId = attemptId
+        paymentPreferences.edit().putLong("pending_attempt_id", attemptId).apply()
+        val options = JSONObject()
+            .put("key", keyId)
+            .put("order_id", orderId)
+            .put("amount", amountPaise.toString())
+            .put("currency", currency)
+            .put("name", "StayEasy")
+            .put("description", "Rent or accommodation charge")
+            .put("theme.color", "#315BE8")
+            .put("retry", JSONObject().put("enabled", true).put("max_count", 2))
+        try {
+            Checkout().open(this, options)
+        } catch (error: Exception) {
+            checkoutEvent = RazorpayCheckoutEvent(
+                attemptId = attemptId,
+                errorMessage = error.message ?: "Checkout could not be opened."
+            )
+        }
+    }
+
+    fun consumeCheckoutEvent() {
+        checkoutEvent = null
+        pendingPaymentAttemptId = 0L
+        paymentPreferences.edit().remove("pending_attempt_id").apply()
+    }
+
+    override fun onPaymentSuccess(razorpayPaymentID: String?, paymentData: PaymentData?) {
+        val attemptId = pendingPaymentAttemptId.takeIf { it > 0L }
+            ?: paymentPreferences.getLong("pending_attempt_id", 0L)
+        checkoutEvent = RazorpayCheckoutEvent(
+            attemptId = attemptId,
+            paymentId = razorpayPaymentID,
+            orderId = paymentData?.orderId,
+            signature = paymentData?.signature
+        )
+    }
+
+    override fun onPaymentError(errorCode: Int, response: String?) {
+        val attemptId = pendingPaymentAttemptId.takeIf { it > 0L }
+            ?: paymentPreferences.getLong("pending_attempt_id", 0L)
+        checkoutEvent = RazorpayCheckoutEvent(
+            attemptId = attemptId,
+            errorCode = errorCode,
+            errorMessage = response.orEmpty().take(500)
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingPaymentAttemptId = savedInstanceState?.getLong("pending_payment_attempt_id")
+            ?: paymentPreferences.getLong("pending_attempt_id", 0L)
+        runCatching { Checkout.preload(applicationContext) }
         @Suppress("DEPRECATION")
         window.statusBarColor = android.graphics.Color.rgb(246, 247, 250)
         @Suppress("DEPRECATION")
@@ -394,6 +473,11 @@ class MainActivity : ComponentActivity() {
                 })
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putLong("pending_payment_attempt_id", pendingPaymentAttemptId)
+        super.onSaveInstanceState(outState)
     }
 }
 
