@@ -90,8 +90,12 @@ def send_security_code(recipient: str, subject: str, code: str, body_text: str) 
         else:
             with smtplib.SMTP(host, port, timeout=10) as server:
                 server.ehlo()
-                server.starttls(context=ssl.create_default_context())
-                server.ehlo()
+                # STARTTLS remains the default. Local Mailpit can explicitly disable it
+                # because the inbox is isolated on the development-only Compose network.
+                starttls_enabled = os.getenv("SMTP_STARTTLS", "true").strip().lower() not in {"0", "false", "no", "off"}
+                if starttls_enabled:
+                    server.starttls(context=ssl.create_default_context())
+                    server.ehlo()
                 if username:
                     server.login(username, password)
                 server.send_message(message)
