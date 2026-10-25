@@ -50,7 +50,7 @@ Real rental inventory must come from a provider or owner-authorised feed; StayEa
 docker compose --profile ingestion up --build -d
 ```
 
-The provider must return either a JSON array or `{ "items": [ ... ] }`. Each item must include `external_id`, `name`, `locality`, `city`, and `rent_from`; optional fields include `deposit_from`, `food_monthly`, `utilities_estimate`, `description`, `address`, `pin_code`, `latitude`, `longitude`, `eligibility`, and `couples_welcome`. Ingestion upserts on provider + external ID, labels rows as unverified, and reports failures without logging the auth token or feed payload. A real provider endpoint/API key is required before actual external listings can appear.
+The provider must return either a JSON array or `{ "items": [ ... ] }`; an arbitrary JSON object without an `items` array is rejected so provider error pages cannot be misreported as a successful empty sync. Each item must include `external_id`, `name`, `locality`, `city`, and `rent_from`; optional fields include `deposit_from`, `food_monthly`, `utilities_estimate`, `description`, `address`, `pin_code`, `latitude`, `longitude`, `eligibility`, and `couples_welcome`. Non-object rows are counted as skipped (rather than disappearing from the received count), and out-of-range coordinates are discarded instead of becoming invalid map points. Ingestion upserts on provider + external ID, labels rows as unverified, and reports failures without logging the auth token or feed payload. A real provider endpoint/API key is required before actual external listings can appear.
 
 ## Reset local test data
 
