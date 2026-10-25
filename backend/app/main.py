@@ -476,6 +476,8 @@ def property_dict(p: m.Property, db: Session | None = None, include_private_inve
            "minimum_stay_months": p.minimum_stay_months, "notice_period_days": p.notice_period_days,
            "rent_from": p.rent_from, "deposit_from": p.deposit_from, "food_monthly": p.food_monthly,
            "utilities_estimate": p.utilities_estimate, "status": p.status, "verification_status": p.verification_status,
+           "data_source": getattr(p, "data_source", "owner"),
+           "external_updated_at": p.external_updated_at.isoformat() if getattr(p, "external_updated_at", None) else None,
            "availability_confirmed_at": p.availability_confirmed_at.isoformat() if p.availability_confirmed_at else None,
            "created_at": p.created_at.isoformat(), "updated_at": p.updated_at.isoformat()}
     if db is not None:
