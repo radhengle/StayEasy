@@ -559,7 +559,7 @@ def owner_integration_status(
             "last_attempt_at": timestamp(sync_state.last_attempt_at) if sync_state else None,
             "last_success_at": timestamp(sync_state.last_success_at) if sync_state else None,
             "last_error_category": sync_state.last_error_category if sync_state else "",
-            "last_batch": {
+            "last_successful_batch": {
                 "received": sync_state.received_count if sync_state else 0,
                 "created": sync_state.created_count if sync_state else 0,
                 "updated": sync_state.updated_count if sync_state else 0,
