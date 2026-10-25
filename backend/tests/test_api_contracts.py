@@ -1703,3 +1703,13 @@ def test_retention_purge_deletes_expired_blobs_and_metadata_but_keeps_future_doc
             assert "purpose" not in row.old_value
             assert row.new_value["policy"] == "retention_expired"
 
+def test_retention_purge_fails_closed_without_document_storage_root(monkeypatch):
+    monkeypatch.delenv("DOCUMENT_STORAGE_ROOT", raising=False)
+    with SessionLocal() as db:
+        try:
+            purge_expired_invitation_documents(db, now=datetime.now(timezone.utc))
+        except ValueError as exc:
+            assert "DOCUMENT_STORAGE_ROOT" in str(exc)
+        else:
+            raise AssertionError("Retention purge must refuse to run without an explicit storage root.")
+
