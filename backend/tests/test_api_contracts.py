@@ -16,7 +16,7 @@ os.environ["JWT_SECRET"] = "test-secret-long-enough-for-stayeasy-api-contract-te
 os.environ["DEV_TOKEN_PASSWORD"] = "local-test-only-password"
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, func
 
 from backend.app import main as api
 from backend.app.database import Base, engine, SessionLocal
@@ -2002,6 +2002,7 @@ def test_invalid_webhook_signature_is_rejected_before_event_storage(monkeypatch)
 def test_finance_refund_is_provider_confirmed_and_auditable(monkeypatch):
     import hashlib
     import hmac
+    import json
 
     charge_id, _, property_id = _create_payment_scenario()
     order, _ = _create_test_payment_order(monkeypatch, charge_id)
