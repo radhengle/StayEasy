@@ -1371,7 +1371,7 @@ private fun summarizeIntegrationReadiness(payload: JSONObject?): String {
         return "Use an owner/admin token and tap Test connection to inspect provider setup. This screen never displays feed URLs, access tokens or Razorpay secrets."
     }
     val feed = payload.optJSONObject("property_feed") ?: JSONObject()
-    val batch = feed.optJSONObject("last_batch") ?: JSONObject()
+    val batch = feed.optJSONObject("last_successful_batch") ?: JSONObject()
     val configured = feed.optBoolean("configured", false)
     val syncStatus = feed.optString("sync_status", "not_run")
     val feedState = when {
@@ -1396,7 +1396,7 @@ private fun summarizeIntegrationReadiness(payload: JSONObject?): String {
         append("Sync status: ").append(feedState).append('\n')
         append("Last attempt: ").append(lastAttempt).append('\n')
         append("Last successful sync: ").append(lastSuccess).append('\n')
-        append("Last batch: ").append(batch.optInt("received")).append(" received · ")
+        append("Last successful batch: ").append(batch.optInt("received")).append(" received · ")
             .append(batch.optInt("created")).append(" created · ")
             .append(batch.optInt("updated")).append(" updated · ")
             .append(batch.optInt("skipped")).append(" skipped\n")
