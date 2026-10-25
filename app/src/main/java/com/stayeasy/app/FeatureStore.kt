@@ -114,19 +114,25 @@ data class StayPreferences(
     val rentAlerts: Boolean = true,
     val maintenanceAlerts: Boolean = true,
     val availabilityAlerts: Boolean = true,
-    val apiBaseUrl: String = ""
+    val apiBaseUrl: String = "http://10.0.2.2:8000"
 )
 
 object StayPreferenceStore {
     private const val PREFS = "stayeasy_preferences_v1"
+    private const val DEFAULT_EMULATOR_API_URL = "http://10.0.2.2:8000"
+
     fun load(context: Context): StayPreferences {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val savedApiBaseUrl = p.getString("apiBaseUrl", null)
+        // A blank value persisted by earlier builds is migrated to the local test API.
+        // Users can still change the URL in API connection & sync for staging/physical devices.
+        val apiBaseUrl = savedApiBaseUrl?.takeIf { it.isNotBlank() } ?: DEFAULT_EMULATOR_API_URL
         return StayPreferences(
             mode = p.getString("mode", "System") ?: "System", theme = p.getString("theme", "Midnight Cobalt") ?: "Midnight Cobalt",
             language = p.getString("language", "English") ?: "English", largeText = p.getBoolean("largeText", false),
             enquiryAlerts = p.getBoolean("enquiryAlerts", true), rentAlerts = p.getBoolean("rentAlerts", true),
             maintenanceAlerts = p.getBoolean("maintenanceAlerts", true), availabilityAlerts = p.getBoolean("availabilityAlerts", true),
-            apiBaseUrl = p.getString("apiBaseUrl", "") ?: ""
+            apiBaseUrl = apiBaseUrl
         )
     }
     fun save(context: Context, value: StayPreferences) {
