@@ -50,8 +50,8 @@ internal fun LiveHomeScreen(
     maxBudget: Float, listings: List<PgListing>, favorites: List<Long>, onListing: (Long) -> Unit, onFavorite: (Long) -> Unit,
     onSearch: () -> Unit, onMap: () -> Unit, onFilters: () -> Unit, onOwner: () -> Unit, onNotifications: () -> Unit, onProfile: () -> Unit
 ) {
-    val liveListings = listings.filter { !it.isDemo }
-    val previewListings = listings.filter { it.isDemo }
+    val liveListings = listings.filter { !it.isDemo && it.dataSource != "demo-fixture" }
+    val previewListings = listings.filter { it.isDemo || it.dataSource == "demo-fixture" }
     Column(Modifier.fillMaxSize().background(Color(0xFFF5F7FB)).verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) {
         Spacer(Modifier.height(12.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
@@ -155,7 +155,7 @@ internal fun LiveHomeScreen(
                             Row(verticalAlignment = Alignment.CenterVertically) {
                                 Text(listing.name, color = LiveNavy, fontWeight = FontWeight.ExtraBold, fontSize = 14.sp, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
                                 Spacer(Modifier.width(4.dp))
-                                Text(if (listing.isDemo) "PREVIEW" else "SERVER", color = if (listing.isDemo) LiveMuted else Color(0xFF28775D), fontSize = 8.sp, fontWeight = FontWeight.ExtraBold)
+                                Text(when { listing.isDemo || listing.dataSource == "demo-fixture" -> "DEMO DATA"; listing.dataSource != "owner" -> "EXTERNAL"; !listing.isVerified -> "SERVER · UNVERIFIED"; else -> "VERIFIED" }, color = if (listing.isDemo || listing.dataSource == "demo-fixture") LiveMuted else if (!listing.isVerified) Color(0xFF99611C) else Color(0xFF28775D), fontSize = 8.sp, fontWeight = FontWeight.ExtraBold)
                             }
                             Spacer(Modifier.height(5.dp))
                             Text(listing.area, color = LiveMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
