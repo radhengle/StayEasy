@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 
 import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
-from backend.app import feed_ingestion
+from backend.app import feed_ingestion, models
+from backend.app.database import Base
 
 
 class FakeResponse:
@@ -19,6 +23,18 @@ class FakeResponse:
 
     def read(self, limit: int = -1) -> bytes:
         return self.body[:limit]
+
+
+def _use_isolated_database(monkeypatch):
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(bind=engine)
+    monkeypatch.setattr(feed_ingestion, "engine", engine)
+    monkeypatch.setattr(feed_ingestion, "SessionLocal", sessionmaker(bind=engine, expire_on_commit=False))
+    return engine
 
 
 def test_feed_requires_configured_url():
@@ -64,3 +80,71 @@ def test_feed_rejects_oversized_response(monkeypatch):
     monkeypatch.setattr(feed_ingestion, "urlopen", lambda *_args, **_kwargs: FakeResponse(b" " * (feed_ingestion.MAX_FEED_BYTES + 1)))
     with pytest.raises(ValueError, match="2 MiB"):
         feed_ingestion._read_feed("https://feed.example.test/listings")
+
+
+def test_sync_once_creates_published_unverified_provider_listing(monkeypatch):
+    engine = _use_isolated_database(monkeypatch)
+    monkeypatch.setenv("PROPERTY_FEED_URL", "https://feed.example.test/listings")
+    monkeypatch.setenv("PROPERTY_FEED_SOURCE", "authorised-partner")
+    monkeypatch.setattr(feed_ingestion, "_read_feed", lambda _url: [{
+        "external_id": "partner-100",
+        "name": "Partner PG",
+        "locality": "Kothrud",
+        "city": "Pune",
+        "rent_from": 8500,
+        "deposit_from": 5000,
+        "food_monthly": 1800,
+        "latitude": 18.5074,
+        "longitude": 73.8077,
+    }])
+
+    try:
+        result = feed_ingestion.sync_once()
+        assert result == {"received": 1, "created": 1, "updated": 0, "skipped": 0}
+        with feed_ingestion.SessionLocal() as db:
+            prop = db.scalar(select(models.Property).where(models.Property.external_source_key == "authorised-partner:partner-100"))
+            assert prop is not None
+            assert prop.name == "Partner PG"
+            assert prop.rent_from == 8500
+            assert prop.data_source == "authorised-partner"
+            assert prop.status == "published"
+            assert prop.verification_status == "unverified"
+            assert prop.external_updated_at is not None
+    finally:
+        engine.dispose()
+
+
+def test_sync_once_upserts_existing_provider_listing_and_skips_invalid_rows(monkeypatch):
+    engine = _use_isolated_database(monkeypatch)
+    monkeypatch.setenv("PROPERTY_FEED_URL", "https://feed.example.test/listings")
+    monkeypatch.setenv("PROPERTY_FEED_SOURCE", "authorised-partner")
+    payload = [{
+        "external_id": "partner-200",
+        "name": "First Name",
+        "locality": "Baner",
+        "city": "Pune",
+        "rent_from": 9000,
+    }, {
+        "external_id": "invalid-no-rent",
+        "name": "Invalid listing",
+        "locality": "Baner",
+        "city": "Pune",
+        "rent_from": "not-a-number",
+    }]
+    monkeypatch.setattr(feed_ingestion, "_read_feed", lambda _url: payload)
+
+    try:
+        first = feed_ingestion.sync_once()
+        assert first == {"received": 2, "created": 1, "updated": 0, "skipped": 1}
+        payload[0]["name"] = "Updated Name"
+        payload[0]["rent_from"] = 9700
+        second = feed_ingestion.sync_once()
+        assert second == {"received": 2, "created": 0, "updated": 1, "skipped": 1}
+
+        with feed_ingestion.SessionLocal() as db:
+            rows = db.scalars(select(models.Property).where(models.Property.data_source == "authorised-partner")).all()
+            assert len(rows) == 1
+            assert rows[0].name == "Updated Name"
+            assert rows[0].rent_from == 9700
+    finally:
+        engine.dispose()
