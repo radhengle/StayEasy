@@ -750,7 +750,8 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "saved_searches" -> "search"
             "residents" -> if (ownerMode) "owner_beds" else "profile"
             "move_out_requests" -> if (ownerMode) "owner_more" else "stay"
-            "payments", "charges", "deposits", "stays", "tenant_payments" -> if (ownerMode) "owner_payments" else "stay"
+            "payments", "charges", "deposits", "stays" -> if (ownerMode) "owner_payments" else "stay"
+            "tenant_payments" -> "stay"
             "issues" -> if (ownerMode) "owner_issues" else "stay"
             "enquiries" -> if (ownerMode) "owner_enquiries" else "search"
             "visits", "reservations" -> if (ownerMode) "owner_enquiries" else detailsReturnRoute
@@ -764,7 +765,8 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "request_visit", "request_booking" -> "details"
             "chat" -> chatReturnRoute
             "saved", "stay" -> if (ownerMode) "owner_dashboard" else "home"
-            "payments", "tenant_payments" -> if (ownerMode) "owner_dashboard" else "stay"
+            "payments" -> if (ownerMode) "owner_dashboard" else "stay"
+            "tenant_payments" -> if (ownerMode) "owner_dashboard" else "stay"
             "issue" -> if (ownerMode) "owner_dashboard" else "stay"
             "enquiries" -> if (ownerMode) "owner_dashboard" else "search"
             "notifications" -> notificationsReturnRoute
