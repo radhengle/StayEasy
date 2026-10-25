@@ -166,6 +166,12 @@ class StayEasySmokeTest {
         composeRule.onNodeWithText("Continue as Owner").performClick()
         composeRule.onNodeWithText("Your business, at a glance").assertIsDisplayed()
         composeRule.onNodeWithText("Your properties", useUnmergedTree = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Work queues").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Awaiting API connection").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Connect inventory for occupancy").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Connect the API to load real customer enquiries").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("4 people are waiting for a response").assertDoesNotExist()
+        composeRule.onNodeWithText("Work queues").performScrollTo()
         captureScreenshot("owner-workspace-preview")
     }
 
