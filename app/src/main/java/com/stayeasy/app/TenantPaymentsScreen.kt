@@ -72,6 +72,7 @@ internal fun TenantPaymentsScreen(
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
     var busyChargeId by remember { mutableLongStateOf(0L) }
+    var refreshingAttemptId by remember { mutableLongStateOf(0L) }
     var loadCycle by remember { mutableIntStateOf(0) }
 
     LaunchedEffect(baseUrl, token, refreshToken, loadCycle) {
@@ -253,19 +254,67 @@ internal fun TenantPaymentsScreen(
                         else -> state.replace('_', ' ')
                     }
                     Card(shape = RoundedCornerShape(13.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface), modifier = Modifier.fillMaxWidth()) {
-                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text(payment.tenantText("property_name", "Accommodation"), color = SE.Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                                Text("Payment #${payment.optLong("id")} · $stateLabel", color = SE.Muted, fontSize = 10.sp)
+                        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Column(Modifier.weight(1f)) {
+                                    Text(payment.tenantText("property_name", "Accommodation"), color = SE.Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                    Text("Payment #${payment.optLong("id")} · $stateLabel", color = SE.Muted, fontSize = 10.sp)
+                                }
+                                Text(tenantMoneyPaise(payment.optLong("amount_paise")), color = SE.Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold)
                             }
-                            Text(tenantMoneyPaise(payment.optLong("amount_paise")), color = SE.Ink, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                            if (state in setOf("created", "authorized", "unknown")) {
+                                OutlinedButton(
+                                    enabled = refreshingAttemptId == 0L,
+                                    onClick = {
+                                        val attemptId = payment.optLong("id")
+                                        if (attemptId <= 0L || refreshingAttemptId != 0L) return@OutlinedButton
+                                        refreshingAttemptId = attemptId
+                                        scope.launch {
+                                            try {
+                                                val result = withContext(Dispatchers.IO) {
+                                                    StayApiClient.refreshPaymentStatus(baseUrl, token.orEmpty(), attemptId)
+                                                }
+                                                val latest = result.optJSONObject("payment")
+                                                if (result.optBoolean("ledger_posted") && latest?.optString("status") == "captured") {
+                                                    notify("Razorpay confirmed this payment and StayEasy recorded it.")
+                                                } else if (latest?.optString("status") == "captured_unapplied") {
+                                                    notify("Razorpay confirms the money was captured, but finance review is required. Do not pay again.")
+                                                } else {
+                                                    notify(result.optString("message", "Status refreshed. The payment is not confirmed as captured; do not pay again until you review the latest status."))
+                                                }
+                                            } catch (e: Exception) {
+                                                notify("StayEasy could not resolve the payment yet. Do not pay again; retry status check or wait for the verified webhook. ${e.message.orEmpty()}")
+                                            } finally {
+                                                refreshingAttemptId = 0L
+                                                loadCycle++
+                                            }
+                                        }
+                                    }
+                                ) {
+                                    if (refreshingAttemptId == payment.optLong("id")) {
+                                        CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.width(16.dp).height(16.dp))
+                                        Spacer(Modifier.width(7.dp))
+                                        Text("Checking with provider…")
+                                    } else Text("Check payment status")
+                                }
+                            }
+                            val refunds = payment.optJSONArray("refunds")
+                            if (refunds != null) {
+                                for (i in 0 until refunds.length()) {
+                                    val refund = refunds.optJSONObject(i) ?: continue
+                                    Text(
+                                        "Refund #${refund.optLong("id")} · ${tenantMoneyPaise(refund.optLong("amount_paise"))} · ${refund.tenantText("status")}",
+                                        color = SE.Muted, fontSize = 10.sp
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
         Text(
-            "A checkout success message is not a receipt. Use Refresh to retrieve the provider-confirmed status.",
+            "A checkout success message is not a receipt. Use Check payment status to reconcile with Razorpay; general Refresh reloads StayEasy's latest record.",
             color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp, modifier = Modifier.padding(top = 8.dp, bottom = 8.dp)
         )
     }

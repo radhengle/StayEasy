@@ -779,6 +779,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "api_connection" -> apiConnectionReturnRoute
             "theme_settings", "compare" -> "feature_hub"
             "owner_dashboard" -> { ownerMode = false; ownerReturnRoute }
+            "owner_payment_history" -> "owner_payments"
             "owner_properties", "owner_beds", "owner_enquiries", "owner_residents", "owner_resident_roster", "owner_payments", "owner_issues", "owner_analytics", "owner_more", "owner_settings" -> "owner_dashboard"
             "add_pg", "edit_pg" -> "owner_properties"
             "add_resident" -> "owner_beds"
@@ -806,7 +807,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 )
                 NavigationBar(containerColor = SE.Surface, tonalElevation = 0.dp) {
                     navItems.forEach { item ->
-                        val selected = route == item.route || (item.route == "search" && route == "map") || (item.route == "owner_more" && (route in setOf("owner_properties", "owner_residents", "owner_resident_roster", "owner_issues", "owner_analytics") || route == "records:move_out_requests"))
+                        val selected = route == item.route || (item.route == "search" && route == "map") || (item.route == "owner_more" && (route in setOf("owner_properties", "owner_residents", "owner_resident_roster", "owner_issues", "owner_analytics") || route == "records:move_out_requests")) || (item.route == "owner_payments" && route == "owner_payment_history")
                         NavigationBarItem(
                             selected = selected,
                             onClick = { route = item.route },
@@ -1287,7 +1288,8 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }, { route = "owner_beds" })
                     }
                 }
-                "owner_payments" -> OwnerRentDueScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), { route = "owner_dashboard" }, notify)
+                "owner_payments" -> OwnerRentDueScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), { route = "owner_dashboard" }, notify, onPaymentHistory = { route = "owner_payment_history" })
+                "owner_payment_history" -> OwnerOnlinePaymentsScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), { route = "owner_payments" }, notify)
                 "owner_issues" -> OwnerMaintenancePriorityScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), { route = "owner_dashboard" }, notify)
                 "owner_analytics" -> FeatureRecordsScreen("reports", ownerMode = true) { route = "feature_hub" }
                 "owner_settings" -> ThemeSettingsScreen(preferences, { updated -> onPreferencesChanged(updated) }, { route = "feature_hub" })

@@ -954,6 +954,33 @@ internal object StayApiClient {
     fun paymentAttempt(baseUrl: String, token: String, attemptId: Long): JSONObject =
         JSONObject(request(baseUrl, "/payments/$attemptId", token))
 
+    /** Queries the stored provider order/payment; it never initiates a new charge. */
+    fun refreshPaymentStatus(baseUrl: String, token: String, attemptId: Long): JSONObject =
+        JSONObject(request(baseUrl, "/payments/$attemptId/refresh", token, "POST", JSONObject()))
+
+    fun ownerPaymentHistory(baseUrl: String, token: String, propertyId: Long? = null): List<JSONObject> {
+        val suffix = propertyId?.takeIf { it > 0L }?.let { "?property_id=$it" }.orEmpty()
+        val result = JSONObject(request(baseUrl, "/payments/owner/summary$suffix", token))
+        val rows = result.optJSONArray("payments") ?: JSONArray()
+        return (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+    }
+
+    fun requestOnlineRefund(
+        baseUrl: String,
+        token: String,
+        attemptId: Long,
+        amountPaise: Long?,
+        reason: String,
+        idempotencyKey: String
+    ): JSONObject {
+        val body = JSONObject().put("reason", reason)
+        if (amountPaise != null) body.put("amount_paise", amountPaise)
+        return JSONObject(request(
+            baseUrl, "/payments/$attemptId/refund", token, "POST", body,
+            mapOf("Idempotency-Key" to idempotencyKey)
+        ))
+    }
+
     fun myPayments(baseUrl: String, token: String): List<JSONObject> {
         val result = JSONObject(request(baseUrl, "/payments/mine", token))
         val rows = result.optJSONArray("payments") ?: JSONArray()
