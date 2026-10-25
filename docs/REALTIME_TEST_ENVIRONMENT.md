@@ -19,11 +19,11 @@ Seed data includes three Pune demo listings, room/bed inventory, one active demo
 ## Register and sign in with real accounts
 
 1. Start the local stack with `python tools/start_test_stack.py`.
-2. In the emulator, open **API connection & sync** and set the base URL to `http://10.0.2.2:8000`.
+2. Fresh installs and saved blank API settings now default to `http://10.0.2.2:8000` (the emulator's host alias). If you use a physical phone or a staging API, change it under **API connection & sync**.
 3. From the first screen, choose **Tenant / Customer → Register** or **Property Owner → Register** and submit a real email address plus a password of at least 12 characters.
 4. Open `http://127.0.0.1:8025) on the host computer, open the StayEasy verification message, copy its six-digit code into the app, and verify the account. This is a local email-catcher, not a real outbound email service.
 5. Sign in with the newly registered email and password. The account/token are stored in the backend; closing/reopening the app should restore the account session while it remains valid.
-6. Owner sign-up deliberately does **not** grant Owner permissions. It creates a verified customer account with an Owner-access request awaiting admin approval. To test the protected Owner workspace, use a local development admin session to approve it; production Owner access must remain approval-gated.
+6. Owner sign-up deliberately does **not** grant Owner permissions. It creates a customer-role account with an Owner-access request awaiting admin approval. After verifying the Owner email, run `python tools/approve_local_owner.py owner@example.com` from the repository root (replace the address with the registered email), then sign out and sign back in to receive the approved Owner role. This helper only runs when `.env` uses `APP_ENV=development`; production Owner access remains approval-gated.
 
 ## Connect Android to the API
 
