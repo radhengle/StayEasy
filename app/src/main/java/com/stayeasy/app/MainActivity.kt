@@ -645,8 +645,10 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     val state = payment?.optString("status", "unknown") ?: "unknown"
                     if (verified.optBoolean("ledger_posted") && state == "captured") {
                         notify("Payment confirmed by Razorpay and recorded in StayEasy.")
+                    } else if (state == "captured_unapplied") {
+                        notify("Razorpay confirms the money was captured, but the charge needs finance review. Do not pay again.")
                     } else {
-                        notify("Provider response received, but payment is not confirmed as captured. Refresh status before retrying.")
+                        notify("Provider response received, but payment is not confirmed as captured. Check status before retrying.")
                     }
                 } catch (e: Exception) {
                     notify("StayEasy could not confirm capture yet. Do not pay again; refresh history while provider webhooks reconcile the final status. ${e.message.orEmpty()}")
