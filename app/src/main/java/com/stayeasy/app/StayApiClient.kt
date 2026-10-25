@@ -133,7 +133,8 @@ internal object StayApiClient {
         path: String,
         token: String? = null,
         method: String = "GET",
-        body: JSONObject? = null
+        body: JSONObject? = null,
+        headers: Map<String, String> = emptyMap()
     ): String {
         val trimmedBase = baseUrl.trim().trimEnd('/')
         val parsed = java.net.URI(trimmedBase)
@@ -148,6 +149,7 @@ internal object StayApiClient {
             readTimeout = 12_000
             setRequestProperty("Accept", "application/json")
             if (!token.isNullOrBlank()) setRequestProperty("Authorization", "Bearer ${token.trim()}")
+            headers.forEach { (name, value) -> setRequestProperty(name, value) }
             if (body != null) {
                 doOutput = true
                 setRequestProperty("Content-Type", "application/json; charset=utf-8")
@@ -913,6 +915,49 @@ internal object StayApiClient {
             return SimpleDateFormat("yyyy-MM-dd", Locale.US).apply { timeZone = TimeZone.getTimeZone("UTC") }.format(date)
         }
         return null
+    }
+
+    /** Server-priced payment charges for the currently authenticated tenant. */
+    fun payableCharges(baseUrl: String, token: String): List<JSONObject> {
+        val result = JSONObject(request(baseUrl, "/payments/charges", token))
+        val rows = result.optJSONArray("charges") ?: JSONArray()
+        return (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
+    }
+
+    /** Create a server-priced checkout order. Amounts are never supplied by the client. */
+    fun createPaymentOrder(baseUrl: String, token: String, chargeId: Long, idempotencyKey: String): JSONObject {
+        require(chargeId > 0) { "Choose a valid rent charge." }
+        require(idempotencyKey.length in 8..128) { "Payment request key is invalid." }
+        return JSONObject(request(
+            baseUrl, "/payments/orders", token, "POST",
+            JSONObject().put("charge_id", chargeId),
+            mapOf("Idempotency-Key" to idempotencyKey)
+        ))
+    }
+
+    /** Ask the backend to verify Razorpay's checkout signature and canonical provider status. */
+    fun verifyPayment(
+        baseUrl: String,
+        token: String,
+        attemptId: Long,
+        paymentId: String,
+        signature: String
+    ): JSONObject {
+        require(attemptId > 0 && paymentId.isNotBlank() && signature.isNotBlank()) { "Checkout verification details are missing." }
+        val body = JSONObject()
+            .put("payment_attempt_id", attemptId)
+            .put("razorpay_payment_id", paymentId)
+            .put("razorpay_signature", signature)
+        return JSONObject(request(baseUrl, "/payments/verify", token, "POST", body))
+    }
+
+    fun paymentAttempt(baseUrl: String, token: String, attemptId: Long): JSONObject =
+        JSONObject(request(baseUrl, "/payments/$attemptId", token))
+
+    fun myPayments(baseUrl: String, token: String): List<JSONObject> {
+        val result = JSONObject(request(baseUrl, "/payments/mine", token))
+        val rows = result.optJSONArray("payments") ?: JSONArray()
+        return (0 until rows.length()).mapNotNull { rows.optJSONObject(it) }
     }
 
     /** Read the shared owner ledger, optionally scoped to one property. */
