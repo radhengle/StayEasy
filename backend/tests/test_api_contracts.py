@@ -3,6 +3,7 @@
 Run from the project root with: python -m pytest backend/tests -q
 SQLite verifies API contracts; PostgreSQL concurrency testing is still required before production.
 """
+import base64
 import os
 import tempfile
 from datetime import date, datetime, timedelta, timezone
@@ -719,14 +720,14 @@ def test_owner_invites_specific_tenant_and_acceptance_reserves_only_once_with_ac
     assert quote["first_period_rent_paise"] >= 0
 
     missing_ack = client.post("/invitations/accept", json={
-        "token": token, "billable_start_date": date.today().isoformat(),
-        "billable_terms_acknowledged": False,
+        "token": token, "phone": "9876543210", "profile_completion_acknowledged": True,
+        "billable_start_date": date.today().isoformat(), "billable_terms_acknowledged": False,
     })
     assert missing_ack.status_code == 422, missing_ack.text
 
     accepted = client.post("/invitations/accept", json={
-        "token": token, "billable_start_date": date.today().isoformat(),
-        "billable_terms_acknowledged": True,
+        "token": token, "phone": "9876543210", "profile_completion_acknowledged": True,
+        "billable_start_date": date.today().isoformat(), "billable_terms_acknowledged": True,
     })
     assert accepted.status_code == 201, accepted.text
     accepted_body = accepted.json()
@@ -752,8 +753,8 @@ def test_owner_invites_specific_tenant_and_acceptance_reserves_only_once_with_ac
 
     set_actor("invite-tenant-2", "customer")
     competing_acceptance = client.post("/invitations/accept", json={
-        "token": second.json()["invitation_url"].split("/")[-1],
-        "billable_start_date": date.today().isoformat(),
+        "token": second.json()["invitation_url"].split("/")[-1], "phone": "9876543210",
+        "profile_completion_acknowledged": True, "billable_start_date": date.today().isoformat(),
         "billable_terms_acknowledged": True,
     })
     assert competing_acceptance.status_code == 409, competing_acceptance.text
@@ -778,8 +779,8 @@ def test_cancelling_unpaid_invitation_reservation_voids_rent_charge():
 
     set_actor("cancel-tenant-1", "customer")
     accepted = client.post("/invitations/accept", json={
-        "token": token, "billable_start_date": date.today().isoformat(),
-        "billable_terms_acknowledged": True,
+        "token": token, "phone": "9876543210", "profile_completion_acknowledged": True,
+        "billable_start_date": date.today().isoformat(), "billable_terms_acknowledged": True,
     })
     assert accepted.status_code == 201, accepted.text
     reservation_id = accepted.json()["reservation_id"]
@@ -809,8 +810,8 @@ def test_registration_charge_cannot_be_voided_after_a_payment_was_recorded():
     token = invitation.json()["invitation_url"].split("/")[-1]
     set_actor("paid-tenant-1", "customer")
     accepted = client.post("/invitations/accept", json={
-        "token": token, "billable_start_date": date.today().isoformat(),
-        "billable_terms_acknowledged": True,
+        "token": token, "phone": "9876543210", "profile_completion_acknowledged": True,
+        "billable_start_date": date.today().isoformat(), "billable_terms_acknowledged": True,
     })
     assert accepted.status_code == 201, accepted.text
     reservation_id = accepted.json()["reservation_id"]
@@ -1483,3 +1484,136 @@ def test_registration_requires_configured_email_delivery(monkeypatch):
     assert response.status_code == 503
     with SessionLocal() as db:
         assert db.scalar(select(m.User).where(m.User.email == "missing.smtp@example.com")) is None
+
+
+def _create_tenant_document_invitation(owner_id: str, tenant_id: str, email: str):
+    prop, unit = setup_property(owner_id=owner_id)
+    _create_verified_customer(tenant_id, email, "Document Test Tenant")
+    reason = "Verify identity for the rental agreement and property registration."
+    set_actor(owner_id, "owner")
+    invitation = client.post("/owner/invitations", json={
+        "property_id": prop["id"],
+        "unit_id": unit["id"],
+        "recipient_email": email,
+        "recipient_name": "Document Test Tenant",
+        "recipient_phone": "9876543210",
+        "move_in_date": (date.today() + timedelta(days=10)).isoformat(),
+        "required_document_categories": ["government_id"],
+        "document_request_reason": reason,
+    })
+    assert invitation.status_code == 201, invitation.text
+    return prop, unit, invitation.json(), reason
+
+
+def test_invitation_documents_are_encrypted_scoped_and_retention_limited(monkeypatch, tmp_path):
+    owner_id = "document-owner"
+    tenant_id = "document-tenant"
+    email = "document-tenant@example.test"
+    prop, _unit, invitation, purpose = _create_tenant_document_invitation(owner_id, tenant_id, email)
+
+    storage_root = tmp_path / "encrypted-documents"
+    key = base64.urlsafe_b64encode(b"stayeasy-document-test-key-00001").decode("ascii").rstrip("=")
+    monkeypatch.setenv("DOCUMENT_STORAGE_ROOT", str(storage_root))
+    monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", key)
+    monkeypatch.setenv("DOCUMENT_RETENTION_DAYS", "30")
+
+    plaintext = b"%PDF-1.7\\nPRIVATE TENANT ID TEST CONTENT 3fc12d\\n%%EOF"
+    set_actor(tenant_id, "customer")
+    uploaded = client.post(
+        f"/tenant/invitations/{invitation['id']}/documents",
+        data={
+            "category": "government_id",
+            "purpose": purpose,
+            "consent_confirmed": "true",
+        },
+        files={"file": ("identity.pdf", plaintext, "application/pdf")},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    metadata = uploaded.json()
+    assert metadata["status"] == "submitted"
+    assert metadata["category"] == "government_id"
+    assert metadata["purpose"] == purpose
+    assert metadata["content_url"] == f"/invitations/{invitation['id']}/documents/{metadata['id']}/content"
+    assert "storage_key" not in metadata
+
+    with SessionLocal() as db:
+        document = db.get(m.InvitationDocument, metadata["id"])
+        assert document is not None
+        storage_key = document.storage_key
+        retention_until = document.retention_until
+        assert len(storage_key) == 32
+        assert all(char in "0123456789abcdef" for char in storage_key)
+        encrypted_path = storage_root / f"{storage_key}.enc"
+        encrypted = encrypted_path.read_bytes()
+        assert encrypted.startswith(b"SE1")
+        assert plaintext not in encrypted
+        assert encrypted_path.stat().st_mode & 0o777 == 0o600
+        assert storage_root.stat().st_mode & 0o777 == 0o700
+
+    # The invited tenant and the property owner can retrieve the document; an unrelated
+    # tenant and an unrelated owner cannot use the invitation/document IDs as a bearer link.
+    tenant_download = client.get(metadata["content_url"])
+    assert tenant_download.status_code == 200
+    assert tenant_download.content == plaintext
+    assert tenant_download.headers["cache-control"] == "no-store, private"
+    assert tenant_download.headers["x-content-type-options"] == "nosniff"
+
+    _create_verified_customer("document-intruder", "intruder@example.test", "Unrelated Tenant")
+    set_actor("document-intruder", "customer")
+    intruder_download = client.get(metadata["content_url"])
+    assert intruder_download.status_code == 404
+
+    set_actor(owner_id, "owner")
+    owner_download = client.get(metadata["content_url"])
+    assert owner_download.status_code == 200
+    assert owner_download.content == plaintext
+
+    set_actor("unrelated-owner", "owner")
+    unrelated_owner = client.get(f"/owner/invitations/{invitation['id']}/documents")
+    assert unrelated_owner.status_code in {403, 404}
+
+    with SessionLocal() as db:
+        document = db.get(m.InvitationDocument, metadata["id"])
+        assert document is not None
+        document.retention_until = datetime.now(timezone.utc) - timedelta(days=1)
+        db.commit()
+    set_actor(tenant_id, "customer")
+    expired_download = client.get(metadata["content_url"])
+    assert expired_download.status_code == 410
+    assert retention_until is not None
+
+
+def test_invitation_document_upload_requires_disclosed_purpose_consent_and_valid_file(monkeypatch, tmp_path):
+    owner_id = "document-owner-2"
+    tenant_id = "document-tenant-2"
+    email = "document-tenant-2@example.test"
+    _prop, _unit, invitation, purpose = _create_tenant_document_invitation(owner_id, tenant_id, email)
+    monkeypatch.setenv("DOCUMENT_STORAGE_ROOT", str(tmp_path / "encrypted-documents"))
+    key = base64.urlsafe_b64encode(b"stayeasy-document-test-key-00001").decode("ascii").rstrip("=")
+    monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", key)
+
+    url = f"/tenant/invitations/{invitation['id']}/documents"
+    file = {"file": ("identity.pdf", b"%PDF-1.7\\ncontent\\n%%EOF", "application/pdf")}
+    set_actor(tenant_id, "customer")
+
+    no_consent = client.post(url, data={
+        "category": "government_id", "purpose": purpose, "consent_confirmed": "false",
+    }, files=file)
+    assert no_consent.status_code == 422, no_consent.text
+
+    wrong_purpose = client.post(url, data={
+        "category": "government_id", "purpose": "Generic document upload.", "consent_confirmed": "true",
+    }, files=file)
+    assert wrong_purpose.status_code == 422, wrong_purpose.text
+
+    unrequested_category = client.post(url, data={
+        "category": "other", "purpose": purpose, "consent_confirmed": "true",
+    }, files=file)
+    assert unrequested_category.status_code == 403, unrequested_category.text
+
+    invalid_signature = client.post(url, data={
+        "category": "government_id", "purpose": purpose, "consent_confirmed": "true",
+    }, files={"file": ("identity.pdf", b"This is not a PDF or image.", "application/pdf")})
+    assert invalid_signature.status_code == 415, invalid_signature.text
+    assert not list((tmp_path / "encrypted-documents").glob("*.enc")) if (tmp_path / "encrypted-documents").exists() else True
+

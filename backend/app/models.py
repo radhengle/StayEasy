@@ -16,6 +16,15 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+class TenantProfile(Base):
+    """Tenant-owned optional profile fields; property-specific copies remain attached to an invitation."""
+    __tablename__ = "tenant_profiles"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    emergency_contact_name: Mapped[str] = mapped_column(String(180), default="")
+    emergency_contact_phone: Mapped[str] = mapped_column(String(40), default="")
+    accommodation_preferences: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
 class Property(Base):
     __tablename__ = "properties"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
@@ -165,10 +174,42 @@ class PropertyInvitation(Base):
     accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reservation_id: Mapped[int | None] = mapped_column(ForeignKey("reservations.id"), nullable=True, index=True)
     reassignment_reason: Mapped[str] = mapped_column(Text, default="")
+    proposed_unit_id: Mapped[int | None] = mapped_column(ForeignKey("property_units.id"), nullable=True, index=True)
+    proposed_rent_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    proposed_deposit_snapshot: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reassignment_proposed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    required_document_categories: Mapped[list] = mapped_column(JSON, default=list)
+    document_request_reason: Mapped[str] = mapped_column(Text, default="")
+    registration_profile: Mapped[dict] = mapped_column(JSON, default=dict)
+    registration_submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 Index("ix_property_invitations_pending_expiry", PropertyInvitation.status, PropertyInvitation.expires_at)
+
+
+class InvitationDocument(Base):
+    """Metadata for encrypted tenant documents. Plaintext document bytes never live in the database."""
+    __tablename__ = "invitation_documents"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    invitation_id: Mapped[int] = mapped_column(ForeignKey("property_invitations.id", ondelete="CASCADE"), index=True)
+    uploaded_by: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    category: Mapped[str] = mapped_column(String(40), index=True)
+    purpose: Mapped[str] = mapped_column(Text)
+    storage_key: Mapped[str] = mapped_column(String(80), unique=True)
+    original_filename: Mapped[str] = mapped_column(String(200), default="")
+    media_type: Mapped[str] = mapped_column(String(80))
+    size_bytes: Mapped[int] = mapped_column(Integer)
+    consent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(24), default="submitted", index=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    review_note: Mapped[str] = mapped_column(Text, default="")
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retention_until: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+Index("ix_invitation_documents_invitation_status", InvitationDocument.invitation_id, InvitationDocument.status)
 
 
 
