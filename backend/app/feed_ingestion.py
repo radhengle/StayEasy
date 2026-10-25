@@ -51,7 +51,7 @@ def _read_feed(url: str) -> list[dict]:
 
 def sync_once() -> dict[str, int]:
     url = os.getenv("PROPERTY_FEED_URL", "").strip()
-    source = os.getenv("PROPERTY_FEED_SOURCE", "partner-feed").strip()[:40] or "partner-feed"
+    source = os.getenv("PROPERTY_FEED_SOURCE", "partner-feed").strip()[:39] or "partner-feed"
     items = _read_feed(url)
     Base.metadata.create_all(bind=engine)
     created = updated = skipped = 0
@@ -73,7 +73,7 @@ def sync_once() -> dict[str, int]:
             if not external_id or len(name) < 2 or not locality or not city or rent < 0 or deposit < 0:
                 skipped += 1
                 continue
-            source_key = f"{source}:{external_id}"[:160]
+            source_key = f"{source}:{external_id}"
             prop = db.scalar(select(m.Property).where(m.Property.external_source_key == source_key))
             fields = {
                 "owner_id": str(item.get("owner_id") or "external-feed-owner")[:36],
