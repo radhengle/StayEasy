@@ -1662,17 +1662,32 @@ def test_retention_purge_deletes_expired_blobs_and_metadata_but_keeps_future_doc
 
     expired_blob = storage_root / f"{expired_key}.enc"
     future_blob = storage_root / f"{future_key}.enc"
+    orphan_key = "d" * 32
+    fresh_orphan_key = "e" * 32
+    aged_orphan_blob = storage_root / f"{orphan_key}.enc"
+    fresh_orphan_blob = storage_root / f"{fresh_orphan_key}.enc"
+    unrelated_file = storage_root / "operator-notes.txt"
     expired_blob.write_bytes(b"SE1encrypted-expired-document")
     future_blob.write_bytes(b"SE1encrypted-future-document")
+    aged_orphan_blob.write_bytes(b"SE1orphaned-encrypted-document")
+    fresh_orphan_blob.write_bytes(b"SE1fresh-orphaned-encrypted-document")
+    unrelated_file.write_text("Do not delete unrelated files.", encoding="utf-8")
     expired_blob.chmod(0o600)
     future_blob.chmod(0o600)
+    aged_orphan_blob.chmod(0o600)
+    fresh_orphan_blob.chmod(0o600)
+    old_timestamp = (now - timedelta(hours=48)).timestamp()
+    os.utime(aged_orphan_blob, (old_timestamp, old_timestamp))
 
     with SessionLocal() as db:
         dry_run = purge_expired_invitation_documents(db, storage_root, now=now, dry_run=True)
         assert dry_run["dry_run"] is True
         assert dry_run["expired_found"] == 3
         assert dry_run["purged"] == 0
+        assert dry_run["orphan_found"] == 1
+        assert dry_run["orphan_deleted"] == 0
         assert expired_blob.exists()
+        assert aged_orphan_blob.exists()
 
         result = purge_expired_invitation_documents(db, storage_root, now=now, batch_size=2)
 
@@ -1681,10 +1696,15 @@ def test_retention_purge_deletes_expired_blobs_and_metadata_but_keeps_future_doc
     assert result["purged"] == 2
     assert result["content_deleted"] == 1
     assert result["content_missing"] == 1
+    assert result["orphan_found"] == 1
+    assert result["orphan_deleted"] == 1
     assert result["failed"] == 1
     assert {error["reason"] for error in result["errors"]} == {"storage_path_invalid"}
     assert not expired_blob.exists()
+    assert not aged_orphan_blob.exists()
     assert future_blob.exists()
+    assert fresh_orphan_blob.exists()
+    assert unrelated_file.exists()
 
     with SessionLocal() as db:
         assert db.get(m.InvitationDocument, expired_id) is None
@@ -1702,6 +1722,13 @@ def test_retention_purge_deletes_expired_blobs_and_metadata_but_keeps_future_doc
             assert "filename" not in str(row.old_value).lower()
             assert "purpose" not in row.old_value
             assert row.new_value["policy"] == "retention_expired"
+        orphan_audits = list(db.scalars(select(m.AuditLog).where(
+            m.AuditLog.entity_type == "invitation_document_blob",
+            m.AuditLog.action == "orphan_blob_purge",
+        )))
+        assert len(orphan_audits) == 1
+        assert orphan_audits[0].entity_id != orphan_key
+        assert orphan_audits[0].new_value["policy"] == "orphan_grace_period"
 
 def test_retention_purge_fails_closed_without_document_storage_root(monkeypatch):
     monkeypatch.delenv("DOCUMENT_STORAGE_ROOT", raising=False)
