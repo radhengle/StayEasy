@@ -189,7 +189,7 @@ internal fun OwnerOnlinePaymentsScreen(
                                     )
                                 }
                             }
-                            if (captured) {
+                            if (captured && payment.optBoolean("can_refund")) {
                                 OutlinedButton(
                                     enabled = busyAttemptId == 0L,
                                     onClick = {
