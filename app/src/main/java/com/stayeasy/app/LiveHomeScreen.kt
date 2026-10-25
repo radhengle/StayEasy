@@ -60,7 +60,7 @@ internal fun LiveHomeScreen(
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                Text("STAYEASY", color = LiveNavy, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp, letterSpacing = 1.2.sp)
+                Text("StayEasy", color = LiveNavy, fontWeight = FontWeight.ExtraBold, fontSize = 19.sp, letterSpacing = 1.2.sp)
                 Text("The smarter way to find a stay", color = LiveMuted, fontSize = 11.sp)
             }
             Icon(Icons.Filled.Notifications, "Notifications", tint = LiveNavy, modifier = Modifier.size(23.dp).clickable(onClick = onNotifications))
