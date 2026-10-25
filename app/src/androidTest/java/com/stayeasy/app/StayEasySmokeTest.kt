@@ -102,7 +102,11 @@ class StayEasySmokeTest {
     fun tenantLoginActionOpensApiSetupWhenBackendIsNotConfigured() {
         composeRule.onAllNodesWithText("Login")[0].performScrollTo().performClick()
         composeRule.onNodeWithText("Connect your StayEasy API first").assertIsDisplayed()
-        composeRule.onNodeWithText("Configure API connection").assertIsDisplayed()
+        composeRule.onNodeWithText("Configure API connection").performClick()
+        composeRule.onNodeWithText("API connection & sync").assertIsDisplayed()
+        composeRule.onNodeWithText("Integration readiness").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Use an owner/admin token and tap Test connection", substring = true)
+            .performScrollTo().assertIsDisplayed()
     }
 
     @Test
