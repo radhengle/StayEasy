@@ -26,11 +26,38 @@ services:
       ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-120}
       DEV_TOKEN_PASSWORD: ${DEV_TOKEN_PASSWORD:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
+      SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
+      PROPERTY_FEED_URL: ${PROPERTY_FEED_URL:-}
+      PROPERTY_FEED_SOURCE: ${PROPERTY_FEED_SOURCE:-partner-feed}
+      PROPERTY_FEED_TOKEN: ${PROPERTY_FEED_TOKEN:-}
+      PROPERTY_FEED_POLL_SECONDS: ${PROPERTY_FEED_POLL_SECONDS:-300}
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+    command: ["sh", "-c", "python -m alembic -c backend/alembic.ini upgrade head && if [ \"$APP_ENV\" = development ] && [ \"$SEED_DEMO_DATA\" = true ]; then python -m app.seed_demo; fi && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     ports:
-      - "127.0.0.1:${API_PORT:-8000}:8000"
+      - "${API_BIND_HOST:-127.0.0.1}:${API_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
+    networks: [stayeasy-internal]
+  feed-sync:
+    build: ./backend
+    profiles: ["ingestion"]
+    restart: unless-stopped
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-stayeasy}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-stayeasy}
+      PROPERTY_FEED_URL: ${PROPERTY_FEED_URL:-}
+      PROPERTY_FEED_SOURCE: ${PROPERTY_FEED_SOURCE:-partner-feed}
+      PROPERTY_FEED_TOKEN: ${PROPERTY_FEED_TOKEN:-}
+      PROPERTY_FEED_POLL_SECONDS: ${PROPERTY_FEED_POLL_SECONDS:-300}
+    command: ["python", "-m", "app.feed_ingestion"]
+    depends_on:
+      db:
+        condition: service_healthy
+      api:
+        condition: service_started
     networks: [stayeasy-internal]
 volumes:
   stayeasy_pgdata:
