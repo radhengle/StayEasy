@@ -2201,3 +2201,36 @@ def test_processed_refund_writes_ledger_reversal_and_reopens_due(monkeypatch):
         assert reversal[0].amount_paise == 5000
     summary = client.get(f"/payments/owner/summary?property_id={property_id}")
     assert summary.status_code == 200, summary.text
+
+
+def test_provider_refunded_state_never_reposts_capture(monkeypatch):
+    import hashlib
+    import hmac
+
+    charge_id, _, _ = _create_payment_scenario()
+    order, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert order.status_code == 201, order.text
+    attempt = order.json()
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", lambda payment_id: {
+        "id": payment_id, "order_id": "order_stayeasy_test_01", "amount": 12500,
+        "currency": "INR", "status": "refunded", "captured": True, "method": "upi",
+    })
+    signature = hmac.new(
+        b"test-secret-key",
+        b"order_stayeasy_test_01|pay_provider_refunded_01",
+        hashlib.sha256,
+    ).hexdigest()
+    response = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_provider_refunded_01",
+        "razorpay_signature": signature,
+    })
+    assert response.status_code == 409
+    with SessionLocal() as db:
+        payment_attempt = db.get(m.PaymentAttempt, attempt["id"])
+        assert payment_attempt.status == "unknown"
+        assert payment_attempt.failure_code == "provider_reports_refunded_requires_reconciliation"
+        assert db.scalar(select(func.count()).select_from(m.LedgerEntry).where(
+            m.LedgerEntry.payment_attempt_id == attempt["id"],
+            m.LedgerEntry.category == "payment",
+        )) == 0
