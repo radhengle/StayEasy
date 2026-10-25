@@ -228,8 +228,8 @@ jobs:
         env:
           DEV_TOKEN_PASSWORD: ci-dev-token-password
         run: |
-          OWNER_TOKEN=$(curl --fail --silent -X POST http://127.0.0.1:8000/auth/dev-token -H 'Content-Type: application/json' -d "{\\"subject\\":\\"stayeasy-demo-owner\\",\\"role\\":\\"owner\\",\\"dev_password\\":\\"$DEV_TOKEN_PASSWORD\\"}" | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
-          TENANT_TOKEN=$(curl --fail --silent -X POST http://127.0.0.1:8000/auth/dev-token -H 'Content-Type: application/json' -d "{\\"subject\\":\\"stayeasy-demo-tenant\\",\\"role\\":\\"customer\\",\\"dev_password\\":\\"$DEV_TOKEN_PASSWORD\\"}" | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          OWNER_TOKEN=$(curl --fail --silent -X POST http://127.0.0.1:8000/auth/dev-token -H 'Content-Type: application/json' -d "{\"subject\":\"stayeasy-demo-owner\",\"role\":\"owner\",\"dev_password\":\"$DEV_TOKEN_PASSWORD\"}" | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          TENANT_TOKEN=$(curl --fail --silent -X POST http://127.0.0.1:8000/auth/dev-token -H 'Content-Type: application/json' -d "{\"subject\":\"stayeasy-demo-tenant\",\"role\":\"customer\",\"dev_password\":\"$DEV_TOKEN_PASSWORD\"}" | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
           curl --fail --silent http://127.0.0.1:8000/owner/properties -H "Authorization: Bearer $OWNER_TOKEN" > /tmp/stayeasy-owner-properties.json
           python -c 'import json; rows=json.load(open("/tmp/stayeasy-owner-properties.json")); assert len(rows) >= 3, rows; assert all(row.get("data_source") == "demo-fixture" for row in rows), rows; print("Owner-scoped demo properties:", len(rows))'
           TENANT_OWNER_STATUS=$(curl --silent --output /tmp/stayeasy-tenant-owner-denied.json --write-out '%{http_code}' http://127.0.0.1:8000/owner/properties -H "Authorization: Bearer $TENANT_TOKEN")
