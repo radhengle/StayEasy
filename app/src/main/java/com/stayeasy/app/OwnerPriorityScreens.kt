@@ -319,7 +319,7 @@ private data class RentDueLine(
 }
 
 @Composable
-internal fun OwnerRentDueScreen(baseUrl: String, token: String?, onBack: () -> Unit, notify: (String) -> Unit) {
+internal fun OwnerRentDueScreen(baseUrl: String, token: String?, onBack: () -> Unit, notify: (String) -> Unit, onPaymentHistory: () -> Unit = {}) {
     val scope = rememberCoroutineScope()
     var ledger by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
     var stays by remember { mutableStateOf<List<JSONObject>>(emptyList()) }
@@ -360,7 +360,14 @@ internal fun OwnerRentDueScreen(baseUrl: String, token: String?, onBack: () -> U
                     payment.pText("billing_period") == period && payment.pText("status").lowercase(Locale.ROOT) !in setOf("cancelled", "void", "rejected")
                 }
                 val billed = items.sumOf { if (it.has("amount_paise") && !it.isNull("amount_paise")) it.optLong("amount_paise") else it.optLong("amount") * 100L }
-                val paid = payments.sumOf { if (it.has("amount_paise") && !it.isNull("amount_paise")) it.optLong("amount_paise") else it.optLong("amount") * 100L }
+                val receivedPaise = payments.sumOf { if (it.has("amount_paise") && !it.isNull("amount_paise")) it.optLong("amount_paise") else it.optLong("amount") * 100L }
+                val refundsPaise = ledger.filter { refund ->
+                    refund.pText("category").lowercase(Locale.ROOT) == "refund" &&
+                    refund.optLong("property_id") == propertyId &&
+                    (if (reservationId > 0L) refund.optLong("reservation_id") == reservationId else refund.optLong("resident_stay_id") == stayId) &&
+                    refund.pText("billing_period") == period && refund.pText("status").lowercase(Locale.ROOT) !in setOf("cancelled", "void", "rejected")
+                }.sumOf { if (it.has("amount_paise") && !it.isNull("amount_paise")) it.optLong("amount_paise") else it.optLong("amount") * 100L }
+                val paid = (receivedPaise - refundsPaise).coerceAtLeast(0L)
                 if (billed <= paid) return@mapNotNull null
                 val first = items.minByOrNull { it.pText("due_date", "9999-12-31") } ?: items.first()
                 val stay = stays.firstOrNull { it.optLong("id") == stayId }
@@ -374,6 +381,13 @@ internal fun OwnerRentDueScreen(baseUrl: String, token: String?, onBack: () -> U
     }
     Column(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         PriorityHeader("Review rent due", "Server ledger balances and recorded payment history. Manual entries are not bank-verified.", onBack) { refresh++ }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            OutlinedButton(onClick = onPaymentHistory) {
+                Icon(Icons.Filled.Payments, contentDescription = null)
+                Spacer(Modifier.width(6.dp))
+                Text("Online payments & refunds")
+            }
+        }
         PriorityState(loading, error) { refresh++ }
         if (!loading && error.isBlank()) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {

@@ -119,6 +119,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material.icons.filled.Refresh
 import androidx.core.content.edit
+import com.razorpay.Checkout
+import com.razorpay.PaymentData
+import com.razorpay.PaymentResultWithDataListener
 import coil.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -370,9 +373,85 @@ private fun RentBudgetSlider(value: Float, onValueChange: (Float) -> Unit) {
     }
 }
 
-class MainActivity : ComponentActivity() {
+internal data class RazorpayCheckoutEvent(
+    val attemptId: Long,
+    val paymentId: String? = null,
+    val orderId: String? = null,
+    val signature: String? = null,
+    val errorCode: Int? = null,
+    val errorMessage: String = ""
+)
+
+class MainActivity : ComponentActivity(), PaymentResultWithDataListener {
+    internal var checkoutEvent by mutableStateOf<RazorpayCheckoutEvent?>(null)
+        private set
+    private var pendingPaymentAttemptId: Long = 0L
+    private val paymentPreferences by lazy {
+        getSharedPreferences("stayeasy_payment_session_v1", Context.MODE_PRIVATE)
+    }
+
+    fun launchRazorpayCheckout(order: JSONObject) {
+        val attemptId = order.optLong("id")
+        val keyId = order.optString("key_id").trim()
+        val orderId = order.optString("checkout_order_id").trim()
+        val amountPaise = order.optLong("checkout_amount")
+        val currency = order.optString("checkout_currency", "INR")
+        require(attemptId > 0L && keyId.isNotBlank() && orderId.isNotBlank() && amountPaise >= 100L && currency == "INR") {
+            "The server returned an incomplete payment order. No payment was started."
+        }
+        pendingPaymentAttemptId = attemptId
+        paymentPreferences.edit().putLong("pending_attempt_id", attemptId).apply()
+        val options = JSONObject()
+            .put("key", keyId)
+            .put("order_id", orderId)
+            .put("amount", amountPaise.toString())
+            .put("currency", currency)
+            .put("name", "StayEasy")
+            .put("description", "Rent or accommodation charge")
+            .put("theme.color", "#315BE8")
+            .put("retry", JSONObject().put("enabled", true).put("max_count", 2))
+        try {
+            Checkout().open(this, options)
+        } catch (error: Exception) {
+            checkoutEvent = RazorpayCheckoutEvent(
+                attemptId = attemptId,
+                errorMessage = error.message ?: "Checkout could not be opened."
+            )
+        }
+    }
+
+    fun consumeCheckoutEvent() {
+        checkoutEvent = null
+        pendingPaymentAttemptId = 0L
+        paymentPreferences.edit().remove("pending_attempt_id").apply()
+    }
+
+    override fun onPaymentSuccess(razorpayPaymentID: String?, paymentData: PaymentData?) {
+        val attemptId = pendingPaymentAttemptId.takeIf { it > 0L }
+            ?: paymentPreferences.getLong("pending_attempt_id", 0L)
+        checkoutEvent = RazorpayCheckoutEvent(
+            attemptId = attemptId,
+            paymentId = razorpayPaymentID,
+            orderId = paymentData?.orderId,
+            signature = paymentData?.signature
+        )
+    }
+
+    override fun onPaymentError(errorCode: Int, response: String?, paymentData: PaymentData?) {
+        val attemptId = pendingPaymentAttemptId.takeIf { it > 0L }
+            ?: paymentPreferences.getLong("pending_attempt_id", 0L)
+        checkoutEvent = RazorpayCheckoutEvent(
+            attemptId = attemptId,
+            errorCode = errorCode,
+            errorMessage = response.orEmpty().take(500)
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingPaymentAttemptId = savedInstanceState?.getLong("pending_payment_attempt_id")
+            ?: paymentPreferences.getLong("pending_attempt_id", 0L)
+        runCatching { Checkout.preload(applicationContext) }
         @Suppress("DEPRECATION")
         window.statusBarColor = android.graphics.Color.rgb(246, 247, 250)
         @Suppress("DEPRECATION")
@@ -394,6 +473,11 @@ class MainActivity : ComponentActivity() {
                 })
             }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putLong("pending_payment_attempt_id", pendingPaymentAttemptId)
+        super.onSaveInstanceState(outState)
     }
 }
 
@@ -475,6 +559,7 @@ private fun StayEasyTheme(preferences: StayPreferences, content: @Composable () 
 @Composable
 private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (StayPreferences) -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val activity = context as? MainActivity
     val incomingInvitationLink = remember { (context as? android.app.Activity)?.intent?.dataString.orEmpty() }
     val hasInvitationDeepLink = incomingInvitationLink.startsWith("stayeasy://invitation/", ignoreCase = true)
     val customListings = remember { mutableStateListOf<PgListing>().apply { addAll(ListingStore.load(context)) } }
@@ -539,6 +624,41 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val notify: (String) -> Unit = { message -> scope.launch { snackbar.showSnackbar(message) } }
+    var paymentRefreshToken by remember { mutableIntStateOf(0) }
+    LaunchedEffect(activity?.checkoutEvent) {
+        val event = activity?.checkoutEvent ?: return@LaunchedEffect
+        try {
+            val baseUrl = preferences.apiBaseUrl.trim()
+            val token = if (baseUrl.isNotBlank()) StayApiClient.currentSessionToken(baseUrl) else null
+            if (event.errorCode != null || !event.errorMessage.isBlank()) {
+                notify("Checkout did not confirm payment. ${event.errorMessage.ifBlank { "No payment confirmation was received." }}")
+            } else if (event.attemptId <= 0L || event.paymentId.isNullOrBlank() || event.signature.isNullOrBlank()) {
+                notify("The checkout response is incomplete. Refresh payment history; do not pay again until the status is checked.")
+            } else if (baseUrl.isBlank() || token.isNullOrBlank()) {
+                notify("Checkout returned a response, but StayEasy cannot verify it without your signed-in server session. The payment is not marked paid.")
+            } else {
+                try {
+                    val verified = withContext(Dispatchers.IO) {
+                        StayApiClient.verifyPayment(baseUrl, token, event.attemptId, event.paymentId, event.signature)
+                    }
+                    val payment = verified.optJSONObject("payment")
+                    val state = payment?.optString("status", "unknown") ?: "unknown"
+                    if (verified.optBoolean("ledger_posted") && state == "captured") {
+                        notify("Payment confirmed by Razorpay and recorded in StayEasy.")
+                    } else if (state == "captured_unapplied") {
+                        notify("Razorpay confirms the money was captured, but the charge needs finance review. Do not pay again.")
+                    } else {
+                        notify("Provider response received, but payment is not confirmed as captured. Check status before retrying.")
+                    }
+                } catch (e: Exception) {
+                    notify("StayEasy could not confirm capture yet. Do not pay again; refresh history while provider webhooks reconcile the final status. ${e.message.orEmpty()}")
+                }
+            }
+        } finally {
+            activity.consumeCheckoutEvent()
+            paymentRefreshToken++
+        }
+    }
     val loadResidentCandidates: (Long) -> Unit = { propertyId ->
         residentCandidates = emptyList()
         residentCandidatesError = ""
@@ -623,7 +743,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
     }.let { rows -> when (advancedFilters.sortBy) {
         "Price: low to high" -> rows.sortedBy { it.monthlyRent }; "Distance" -> rows.filter { it.distanceIsVerified }.sortedBy { it.distanceKm } + rows.filterNot { it.distanceIsVerified }; "Availability" -> rows.sortedByDescending { it.availableBeds }; "Rating" -> rows.sortedByDescending { it.rating }; else -> rows.sortedWith(compareByDescending<PgListing> { it.featuredListing }.thenByDescending { it.availableBeds })
     } }
-    val hideNav = route in setOf("auth_entry", "add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account_auth", "account_type", "admin_owner_requests", "tenant_invitations") || route.startsWith("records:")
+    val hideNav = route in setOf("auth_entry", "add_pg", "edit_pg", "add_resident", "map", "filters", "details", "chat", "issue", "search_location", "request_visit", "compare", "theme_settings", "api_connection", "account_auth", "account_type", "admin_owner_requests", "tenant_invitations", "tenant_payments") || route.startsWith("records:")
 
     // Nested routes return to their parent instead of finishing the Activity.
     // The property wizard registers a more specific handler for its own steps.
@@ -633,6 +753,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "residents" -> if (ownerMode) "owner_beds" else "profile"
             "move_out_requests" -> if (ownerMode) "owner_more" else "stay"
             "payments", "charges", "deposits", "stays" -> if (ownerMode) "owner_payments" else "stay"
+            "tenant_payments" -> "stay"
             "issues" -> if (ownerMode) "owner_issues" else "stay"
             "enquiries" -> if (ownerMode) "owner_enquiries" else "search"
             "visits", "reservations" -> if (ownerMode) "owner_enquiries" else detailsReturnRoute
@@ -647,6 +768,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "chat" -> chatReturnRoute
             "saved", "stay" -> if (ownerMode) "owner_dashboard" else "home"
             "payments" -> if (ownerMode) "owner_dashboard" else "stay"
+            "tenant_payments" -> if (ownerMode) "owner_dashboard" else "stay"
             "issue" -> if (ownerMode) "owner_dashboard" else "stay"
             "enquiries" -> if (ownerMode) "owner_dashboard" else "search"
             "notifications" -> notificationsReturnRoute
@@ -659,6 +781,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
             "api_connection" -> apiConnectionReturnRoute
             "theme_settings", "compare" -> "feature_hub"
             "owner_dashboard" -> { ownerMode = false; ownerReturnRoute }
+            "owner_payment_history" -> "owner_payments"
             "owner_properties", "owner_beds", "owner_enquiries", "owner_residents", "owner_resident_roster", "owner_payments", "owner_issues", "owner_analytics", "owner_more", "owner_settings" -> "owner_dashboard"
             "add_pg", "edit_pg" -> "owner_properties"
             "add_resident" -> "owner_beds"
@@ -686,7 +809,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 )
                 NavigationBar(containerColor = SE.Surface, tonalElevation = 0.dp) {
                     navItems.forEach { item ->
-                        val selected = route == item.route || (item.route == "search" && route == "map") || (item.route == "owner_more" && (route in setOf("owner_properties", "owner_residents", "owner_resident_roster", "owner_issues", "owner_analytics") || route == "records:move_out_requests"))
+                        val selected = route == item.route || (item.route == "search" && route == "map") || (item.route == "owner_more" && (route in setOf("owner_properties", "owner_residents", "owner_resident_roster", "owner_issues", "owner_analytics") || route == "records:move_out_requests")) || (item.route == "owner_payments" && route == "owner_payment_history")
                         NavigationBarItem(
                             selected = selected,
                             onClick = { route = item.route },
@@ -790,11 +913,23 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                 "stay" -> MyStayScreen(
                     baseUrl = preferences.apiBaseUrl,
                     account = signedInAccount,
-                    onPayments = { route = "records:payments" },
+                    onPayments = { route = "tenant_payments" },
                     onIssue = { route = "issue" },
                     onChat = { chatReturnRoute = "stay"; route = "chat" }
                 )
-                "payments" -> FeatureRecordsScreen("payments", ownerMode = false) { route = "stay" }
+                "payments", "tenant_payments" -> TenantPaymentsScreen(
+                    baseUrl = preferences.apiBaseUrl,
+                    token = StayApiClient.currentSessionToken(preferences.apiBaseUrl),
+                    refreshToken = paymentRefreshToken,
+                    onCheckout = { order ->
+                        val checkoutActivity = activity
+                        if (checkoutActivity == null) notify("Secure checkout is unavailable in this app session.")
+                        else runCatching { checkoutActivity.launchRazorpayCheckout(order) }
+                            .onFailure { notify(it.message ?: "Could not open secure checkout.") }
+                    },
+                    onBack = { route = "stay" },
+                    notify = notify
+                )
                 "issue" -> IssueScreen({ route = "stay" }, { category, details, urgency ->
                     val apiBaseUrl = preferences.apiBaseUrl
                     val token = StayApiClient.currentSessionToken(apiBaseUrl)
@@ -1155,7 +1290,8 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                         }, { route = "owner_beds" })
                     }
                 }
-                "owner_payments" -> OwnerRentDueScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), { route = "owner_dashboard" }, notify)
+                "owner_payments" -> OwnerRentDueScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), { route = "owner_dashboard" }, notify, onPaymentHistory = { route = "owner_payment_history" })
+                "owner_payment_history" -> OwnerOnlinePaymentsScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), { route = "owner_payments" }, notify)
                 "owner_issues" -> OwnerMaintenancePriorityScreen(preferences.apiBaseUrl, StayApiClient.currentSessionToken(preferences.apiBaseUrl), { route = "owner_dashboard" }, notify)
                 "owner_analytics" -> FeatureRecordsScreen("reports", ownerMode = true) { route = "feature_hub" }
                 "owner_settings" -> ThemeSettingsScreen(preferences, { updated -> onPreferencesChanged(updated) }, { route = "feature_hub" })

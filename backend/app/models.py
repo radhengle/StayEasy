@@ -270,10 +270,14 @@ class LedgerEntry(Base):
     payment_method: Mapped[str] = mapped_column(String(30), default="manual")
     payment_reference: Mapped[str] = mapped_column(String(180), default="")
     provider_status: Mapped[str] = mapped_column(String(24), default="manual_record")
+    related_charge_id: Mapped[int | None] = mapped_column(ForeignKey("ledger_entries.id"), nullable=True, index=True)
+    payment_attempt_id: Mapped[int | None] = mapped_column(ForeignKey("payment_attempts.id", use_alter=True, name="fk_ledger_payment_attempt_id"), nullable=True)
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(24), default="open", index=True)
     created_by: Mapped[str] = mapped_column(String(36), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+Index("uq_ledger_entries_payment_attempt_id", LedgerEntry.payment_attempt_id, unique=True)
 
 class MaintenanceIssue(Base):
     __tablename__ = "maintenance_issues"
@@ -459,3 +463,65 @@ class UserCredential(Base):
     reset_attempts: Mapped[int] = mapped_column(Integer, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PaymentAttempt(Base):
+    """Server-owned gateway order and reconciliation state. Never stores card/UPI credentials."""
+    __tablename__ = "payment_attempts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    charge_entry_id: Mapped[int] = mapped_column(ForeignKey("ledger_entries.id"), index=True)
+    customer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(24), default="razorpay")
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    amount_paise: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    status: Mapped[str] = mapped_column(String(30), default="creating", index=True)
+    provider_order_id: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
+    provider_payment_id: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
+    payment_method: Mapped[str] = mapped_column(String(32), default="")
+    failure_code: Mapped[str] = mapped_column(String(80), default="")
+    captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    __table_args__ = (
+        UniqueConstraint("customer_id", "idempotency_key", name="uq_payment_attempts_customer_idempotency"),
+        Index(
+            "uq_payment_attempts_one_active_per_charge",
+            "charge_entry_id",
+            unique=True,
+            postgresql_where=text("status IN ('creating', 'created', 'authorized', 'unknown')"),
+            sqlite_where=text("status IN ('creating', 'created', 'authorized', 'unknown')"),
+        ),
+    )
+
+
+class PaymentRefund(Base):
+    """A gateway refund request; only signed provider confirmation changes it to processed."""
+    __tablename__ = "payment_refunds"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payment_attempt_id: Mapped[int] = mapped_column(ForeignKey("payment_attempts.id"), index=True)
+    provider_refund_id: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
+    amount_paise: Mapped[int] = mapped_column(Integer)
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[str] = mapped_column(String(24), default="requested", index=True)
+    requested_by: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    failure_code: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        UniqueConstraint("requested_by", "idempotency_key", name="uq_payment_refunds_requester_idempotency"),
+        Index("ix_payment_refunds_attempt_status", "payment_attempt_id", "status"),
+    )
+
+
+class PaymentWebhookEvent(Base):
+    """Deduplication ledger for signed gateway events; raw bodies and customer data are not retained."""
+    __tablename__ = "payment_webhook_events"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[str] = mapped_column(String(180), unique=True)
+    event_type: Mapped[str] = mapped_column(String(80), index=True)
+    payload_sha256: Mapped[str] = mapped_column(String(64))
+    processing_status: Mapped[str] = mapped_column(String(24), default="received", index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

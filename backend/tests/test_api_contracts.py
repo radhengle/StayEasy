@@ -16,13 +16,14 @@ os.environ["JWT_SECRET"] = "test-secret-long-enough-for-stayeasy-api-contract-te
 os.environ["DEV_TOKEN_PASSWORD"] = "local-test-only-password"
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, func
 
 from backend.app import main as api
 from backend.app.database import Base, engine, SessionLocal
 from backend.app.security import create_access_token, get_actor, verify_password
 from backend.app import models as m
 from backend.app import auth as auth_routes
+from backend.app import payments as payment_routes
 from backend.app.config import validate_runtime_configuration
 from backend.scripts.provision_admin import provision_admin
 from backend.scripts.purge_expired_invitation_documents import purge_expired_invitation_documents
@@ -1790,3 +1791,446 @@ def test_pre_registration_document_delete_keeps_metadata_when_blob_unlink_fails(
     with SessionLocal() as db:
         assert db.get(m.InvitationDocument, document_id) is not None
 
+
+
+def _create_payment_scenario():
+    """Create an authenticated tenant, a confirmed reservation, and an open exact-paise rent charge."""
+    prop, unit = setup_property(owner_id="owner-1")
+    with SessionLocal() as db:
+        customer_id = "payment-customer"
+        if db.get(m.User, customer_id) is None:
+            db.add(m.User(id=customer_id, email="payment-customer@example.test",
+                          display_name="Payment tenant", role="customer", is_active=True))
+            db.flush()
+        reservation = m.Reservation(
+            property_id=prop["id"], unit_id=unit["id"], customer_id=customer_id,
+            move_in_date=date.today(), status="confirmed", rent_snapshot=125,
+            deposit_snapshot=0, terms_snapshot={},
+        )
+        db.add(reservation)
+        db.flush()
+        charge = m.LedgerEntry(
+            property_id=prop["id"], reservation_id=reservation.id, resident_stay_id=None,
+            category="rent_charge", amount=125, amount_paise=12500, currency="INR",
+            billing_period="2026-10", due_date=date.today(), payment_method="manual",
+            provider_status="manual_record", description="Test rent charge", status="open",
+            created_by="owner-1",
+        )
+        db.add(charge)
+        db.commit()
+        ids = (charge.id, reservation.id, prop["id"])
+    set_actor("payment-customer", "customer")
+    return ids
+
+
+def _create_test_payment_order(monkeypatch, charge_id):
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_public")
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "test-secret-key")
+    calls = []
+    def fake_create(amount_paise, receipt, notes):
+        calls.append((amount_paise, receipt, notes))
+        return {"id": "order_stayeasy_test_01", "amount": amount_paise, "currency": "INR", "status": "created"}
+    monkeypatch.setattr(payment_routes, "create_razorpay_order", fake_create)
+    response = client.post(
+        "/payments/orders",
+        json={"charge_id": charge_id, "amount_paise": 1},
+        headers={"Idempotency-Key": "tenant-rent-charge-01"},
+    )
+    return response, calls
+
+
+def test_online_payment_order_uses_server_amount_and_is_idempotent(monkeypatch):
+    charge_id, _, _ = _create_payment_scenario()
+    response, calls = _create_test_payment_order(monkeypatch, charge_id)
+    assert response.status_code == 201, response.text
+    payload = response.json()
+    assert payload["amount_paise"] == 12500
+    assert payload["checkout_amount"] == 12500
+    assert payload["checkout_order_id"] == "order_stayeasy_test_01"
+    assert payload["key_id"] == "rzp_test_public"
+    assert len(calls) == 1
+
+    replay = client.post(
+        "/payments/orders",
+        json={"charge_id": charge_id, "amount_paise": 3},
+        headers={"Idempotency-Key": "tenant-rent-charge-01"},
+    )
+    assert replay.status_code == 201, replay.text
+    assert replay.json()["id"] == payload["id"]
+    assert len(calls) == 1
+
+
+def test_checkout_verification_fetches_provider_capture_and_posts_ledger_once(monkeypatch):
+    import hashlib
+    import hmac
+
+    charge_id, _, _ = _create_payment_scenario()
+    response, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert response.status_code == 201, response.text
+    attempt = response.json()
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", lambda payment_id: {
+        "id": payment_id, "order_id": "order_stayeasy_test_01", "amount": 12500,
+        "currency": "INR", "status": "captured", "captured": True, "method": "upi",
+    })
+    signature = hmac.new(
+        b"test-secret-key",
+        b"order_stayeasy_test_01|pay_stayeasy_test_01",
+        hashlib.sha256,
+    ).hexdigest()
+    verified = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_stayeasy_test_01",
+        "razorpay_signature": signature,
+    })
+    assert verified.status_code == 200, verified.text
+    assert verified.json()["payment"]["status"] == "captured"
+    assert verified.json()["ledger_posted"] is True
+
+    with SessionLocal() as db:
+        rows = list(db.scalars(select(m.LedgerEntry).where(
+            m.LedgerEntry.payment_attempt_id == attempt["id"],
+            m.LedgerEntry.category == "payment",
+        )))
+        charge = db.get(m.LedgerEntry, charge_id)
+        assert len(rows) == 1
+        assert rows[0].amount_paise == 12500
+        assert rows[0].related_charge_id == charge_id
+        assert rows[0].provider_status == "provider_confirmed"
+        assert charge.status == "paid"
+
+    repeated = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_stayeasy_test_01",
+        "razorpay_signature": signature,
+    })
+    assert repeated.status_code == 200, repeated.text
+    with SessionLocal() as db:
+        assert len(list(db.scalars(select(m.LedgerEntry).where(
+            m.LedgerEntry.payment_attempt_id == attempt["id"],
+            m.LedgerEntry.category == "payment",
+        )))) == 1
+
+
+def test_checkout_callback_without_valid_signature_never_confirms_payment(monkeypatch):
+    charge_id, _, _ = _create_payment_scenario()
+    response, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert response.status_code == 201, response.text
+    attempt = response.json()
+    result = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_stayeasy_fake_01",
+        "razorpay_signature": "0" * 64,
+    })
+    assert result.status_code == 400
+    with SessionLocal() as db:
+        assert db.get(m.PaymentAttempt, attempt["id"]).status == "created"
+        assert db.scalar(select(func.count()).select_from(m.LedgerEntry).where(
+            m.LedgerEntry.category == "payment"
+        )) == 0
+
+
+def test_tenant_cannot_create_order_for_another_customers_charge(monkeypatch):
+    charge_id, _, _ = _create_payment_scenario()
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_public")
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "test-secret-key")
+    called = []
+    monkeypatch.setattr(payment_routes, "create_razorpay_order", lambda *args, **kwargs: called.append(True))
+    set_actor("different-customer", "customer")
+    response = client.post(
+        "/payments/orders",
+        json={"charge_id": charge_id},
+        headers={"Idempotency-Key": "tenant-other-charge-01"},
+    )
+    assert response.status_code == 404
+    assert called == []
+
+
+def test_signed_captured_webhook_is_deduplicated(monkeypatch):
+    import hashlib
+    import hmac
+    import json
+
+    charge_id, _, _ = _create_payment_scenario()
+    response, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert response.status_code == 201, response.text
+    attempt = response.json()
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "test-webhook-secret")
+    payload = {
+        "event": "payment.captured",
+        "payload": {"payment": {"entity": {
+            "id": "pay_webhook_test_01", "order_id": "order_stayeasy_test_01",
+            "amount": 12500, "currency": "INR", "status": "captured",
+            "captured": True, "method": "upi",
+        }}},
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    signature = hmac.new(b"test-webhook-secret", raw, hashlib.sha256).hexdigest()
+    headers = {
+        "Content-Type": "application/json",
+        "X-Razorpay-Signature": signature,
+        "X-Razorpay-Event-Id": "evt_stayeasy_payment_captured_01",
+    }
+    first = client.post("/payments/webhooks/razorpay", content=raw, headers=headers)
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "processed"
+    second = client.post("/payments/webhooks/razorpay", content=raw, headers=headers)
+    assert second.status_code == 200, second.text
+    assert second.json()["duplicate"] is True
+    with SessionLocal() as db:
+        assert db.get(m.PaymentAttempt, attempt["id"]).status == "captured"
+        assert db.scalar(select(func.count()).select_from(m.LedgerEntry).where(
+            m.LedgerEntry.payment_attempt_id == attempt["id"],
+            m.LedgerEntry.category == "payment",
+        )) == 1
+        assert db.scalar(select(func.count()).select_from(m.PaymentWebhookEvent).where(
+            m.PaymentWebhookEvent.event_id == "evt_stayeasy_payment_captured_01"
+        )) == 1
+
+
+def test_invalid_webhook_signature_is_rejected_before_event_storage(monkeypatch):
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "test-webhook-secret")
+    response = client.post(
+        "/payments/webhooks/razorpay",
+        content=b'{"event":"payment.captured","payload":{}}',
+        headers={"X-Razorpay-Signature": "bad", "X-Razorpay-Event-Id": "evt_invalid_signature"},
+    )
+    assert response.status_code == 401
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(m.PaymentWebhookEvent)) == 0
+
+
+def test_finance_refund_is_provider_confirmed_and_auditable(monkeypatch):
+    import hashlib
+    import hmac
+    import json
+
+    charge_id, _, property_id = _create_payment_scenario()
+    order, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert order.status_code == 201, order.text
+    attempt = order.json()
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", lambda payment_id: {
+        "id": payment_id, "order_id": "order_stayeasy_test_01", "amount": 12500,
+        "currency": "INR", "status": "captured", "captured": True, "method": "upi",
+    })
+    signature = hmac.new(
+        b"test-secret-key",
+        b"order_stayeasy_test_01|pay_stayeasy_refund_base",
+        hashlib.sha256,
+    ).hexdigest()
+    verified = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_stayeasy_refund_base",
+        "razorpay_signature": signature,
+    })
+    assert verified.status_code == 200, verified.text
+
+    set_actor("owner-1", "owner")
+    monkeypatch.setattr(payment_routes, "create_razorpay_refund", lambda payment_id, amount_paise, notes: {
+        "id": "rfnd_stayeasy_test_01", "amount": amount_paise, "status": "pending",
+    })
+    requested = client.post(
+        f"/payments/{attempt['id']}/refund",
+        json={"amount_paise": 5000, "reason": "Duplicate rent charge"},
+        headers={"Idempotency-Key": "owner-refund-0001"},
+    )
+    assert requested.status_code == 202, requested.text
+    assert requested.json()["status"] == "pending"
+
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "test-webhook-secret")
+    payload = {
+        "event": "refund.processed",
+        "payload": {"refund": {"entity": {
+            "id": "rfnd_stayeasy_test_01", "payment_id": "pay_stayeasy_refund_base",
+            "amount": 5000, "status": "processed",
+        }}},
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    signature = hmac.new(b"test-webhook-secret", raw, hashlib.sha256).hexdigest()
+    webhook = client.post("/payments/webhooks/razorpay", content=raw, headers={
+        "Content-Type": "application/json",
+        "X-Razorpay-Signature": signature,
+        "X-Razorpay-Event-Id": "evt_stayeasy_refund_processed_01",
+    })
+    assert webhook.status_code == 200, webhook.text
+    summary = client.get(f"/payments/owner/summary?property_id={property_id}")
+    assert summary.status_code == 200, summary.text
+    payment = summary.json()["payments"][0]
+    assert payment["refunds"][0]["status"] == "processed"
+
+
+def test_status_refresh_recovers_capture_after_provider_query_outage(monkeypatch):
+    import hashlib
+    import hmac
+
+    charge_id, _, _ = _create_payment_scenario()
+    order, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert order.status_code == 201, order.text
+    attempt = order.json()
+
+    def unavailable(payment_id):
+        raise payment_routes.GatewayRequestError("provider temporarily unavailable", ambiguous=True)
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", unavailable)
+    signature = hmac.new(
+        b"test-secret-key",
+        b"order_stayeasy_test_01|pay_recover_capture_01",
+        hashlib.sha256,
+    ).hexdigest()
+    interrupted = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_recover_capture_01",
+        "razorpay_signature": signature,
+    })
+    assert interrupted.status_code == 503
+    with SessionLocal() as db:
+        pending = db.get(m.PaymentAttempt, attempt["id"])
+        assert pending.status == "unknown"
+        assert pending.provider_payment_id == "pay_recover_capture_01"
+        assert db.scalar(select(func.count()).select_from(m.LedgerEntry).where(
+            m.LedgerEntry.payment_attempt_id == attempt["id"],
+            m.LedgerEntry.category == "payment",
+        )) == 0
+
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", lambda payment_id: {
+        "id": payment_id, "order_id": "order_stayeasy_test_01", "amount": 12500,
+        "currency": "INR", "status": "captured", "captured": True, "method": "upi",
+    })
+    recovered = client.post(f"/payments/{attempt['id']}/refresh")
+    assert recovered.status_code == 200, recovered.text
+    assert recovered.json()["ledger_posted"] is True
+    assert recovered.json()["payment"]["status"] == "captured"
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(m.LedgerEntry).where(
+            m.LedgerEntry.payment_attempt_id == attempt["id"],
+            m.LedgerEntry.category == "payment",
+        )) == 1
+
+
+def test_captured_payment_does_not_mark_larger_updated_charge_fully_paid(monkeypatch):
+    import hashlib
+    import hmac
+
+    charge_id, _, _ = _create_payment_scenario()
+    order, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert order.status_code == 201, order.text
+    attempt = order.json()
+    with SessionLocal() as db:
+        charge = db.get(m.LedgerEntry, charge_id)
+        charge.amount = 200
+        charge.amount_paise = 20000
+        charge.status = "open"
+        db.commit()
+
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", lambda payment_id: {
+        "id": payment_id, "order_id": "order_stayeasy_test_01", "amount": 12500,
+        "currency": "INR", "status": "captured", "captured": True, "method": "upi",
+    })
+    signature = hmac.new(
+        b"test-secret-key",
+        b"order_stayeasy_test_01|pay_partial_due_01",
+        hashlib.sha256,
+    ).hexdigest()
+    captured = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_partial_due_01",
+        "razorpay_signature": signature,
+    })
+    assert captured.status_code == 200, captured.text
+    with SessionLocal() as db:
+        charge = db.get(m.LedgerEntry, charge_id)
+        assert charge.status == "partial"
+        assert payment_routes._amount_due(db, charge) == 7500
+
+
+def test_processed_refund_writes_ledger_reversal_and_reopens_due(monkeypatch):
+    import hashlib
+    import hmac
+    import json
+
+    charge_id, _, property_id = _create_payment_scenario()
+    order, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert order.status_code == 201, order.text
+    attempt = order.json()
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", lambda payment_id: {
+        "id": payment_id, "order_id": "order_stayeasy_test_01", "amount": 12500,
+        "currency": "INR", "status": "captured", "captured": True, "method": "upi",
+    })
+    signature = hmac.new(
+        b"test-secret-key",
+        b"order_stayeasy_test_01|pay_refund_reopens_due_01",
+        hashlib.sha256,
+    ).hexdigest()
+    verified = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_refund_reopens_due_01",
+        "razorpay_signature": signature,
+    })
+    assert verified.status_code == 200, verified.text
+
+    set_actor("owner-1", "owner")
+    monkeypatch.setattr(payment_routes, "create_razorpay_refund", lambda payment_id, amount_paise, notes: {
+        "id": "rfnd_reopen_due_01", "amount": amount_paise, "status": "pending",
+    })
+    request = client.post(
+        f"/payments/{attempt['id']}/refund",
+        json={"amount_paise": 5000, "reason": "Partial refund for rent"},
+        headers={"Idempotency-Key": "owner-refund-reopen-01"},
+    )
+    assert request.status_code == 202, request.text
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "test-webhook-secret")
+    payload = {"event": "refund.processed", "payload": {"refund": {"entity": {
+        "id": "rfnd_reopen_due_01", "payment_id": "pay_refund_reopens_due_01",
+        "amount": 5000, "status": "processed",
+    }}}}
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    sig = hmac.new(b"test-webhook-secret", raw, hashlib.sha256).hexdigest()
+    webhook = client.post("/payments/webhooks/razorpay", content=raw, headers={
+        "Content-Type": "application/json",
+        "X-Razorpay-Signature": sig,
+        "X-Razorpay-Event-Id": "evt_refund_reopens_due_01",
+    })
+    assert webhook.status_code == 200, webhook.text
+    with SessionLocal() as db:
+        charge = db.get(m.LedgerEntry, charge_id)
+        assert charge.status == "partial"
+        assert payment_routes._amount_due(db, charge) == 5000
+        reversal = list(db.scalars(select(m.LedgerEntry).where(
+            m.LedgerEntry.category == "refund",
+            m.LedgerEntry.related_charge_id == charge_id,
+        )))
+        assert len(reversal) == 1
+        assert reversal[0].amount_paise == 5000
+    summary = client.get(f"/payments/owner/summary?property_id={property_id}")
+    assert summary.status_code == 200, summary.text
+
+
+def test_provider_refunded_state_never_reposts_capture(monkeypatch):
+    import hashlib
+    import hmac
+
+    charge_id, _, _ = _create_payment_scenario()
+    order, _ = _create_test_payment_order(monkeypatch, charge_id)
+    assert order.status_code == 201, order.text
+    attempt = order.json()
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_payment", lambda payment_id: {
+        "id": payment_id, "order_id": "order_stayeasy_test_01", "amount": 12500,
+        "currency": "INR", "status": "refunded", "captured": True, "method": "upi",
+    })
+    signature = hmac.new(
+        b"test-secret-key",
+        b"order_stayeasy_test_01|pay_provider_refunded_01",
+        hashlib.sha256,
+    ).hexdigest()
+    response = client.post("/payments/verify", json={
+        "payment_attempt_id": attempt["id"],
+        "razorpay_payment_id": "pay_provider_refunded_01",
+        "razorpay_signature": signature,
+    })
+    assert response.status_code == 409
+    with SessionLocal() as db:
+        payment_attempt = db.get(m.PaymentAttempt, attempt["id"])
+        assert payment_attempt.status == "unknown"
+        assert payment_attempt.failure_code == "provider_reports_refunded_requires_reconciliation"
+        assert db.scalar(select(func.count()).select_from(m.LedgerEntry).where(
+            m.LedgerEntry.payment_attempt_id == attempt["id"],
+            m.LedgerEntry.category == "payment",
+        )) == 0
