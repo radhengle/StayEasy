@@ -55,6 +55,9 @@ class Property(Base):
     status: Mapped[str] = mapped_column(String(24), default="draft", index=True)  # draft, pending_review, published, paused, rejected
     verification_status: Mapped[str] = mapped_column(String(24), default="unverified", index=True)
     availability_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    data_source: Mapped[str] = mapped_column(String(40), default="owner", server_default=text("'owner'"), nullable=False)
+    external_source_key: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    external_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
     units: Mapped[list["PropertyUnit"]] = relationship(back_populates="property", cascade="all, delete-orphan")
@@ -525,3 +528,5 @@ class PaymentWebhookEvent(Base):
     processing_status: Mapped[str] = mapped_column(String(24), default="received", index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+Index("uq_properties_external_source_key", Property.external_source_key, unique=True)
