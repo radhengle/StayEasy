@@ -12,9 +12,18 @@ From the repository root:
 python tools/start_test_stack.py
 ```
 
-The helper creates a local-only `.env` with random database/JWT/dev-token secrets if one does not exist, then builds and starts PostgreSQL + FastAPI and enables the development seed fixtures. It prints the dev token password once; keep it private. The API is at http://localhost:8000, health is http://localhost:8000/health and interactive API documentation is http://localhost:8000/docs. The service is bound to loopback by default; do not expose this development backend to the public internet.
+The helper creates a local-only `.env` with random database/JWT/dev-token secrets if one does not exist, then builds and starts PostgreSQL + FastAPI, a local Mailpit verification-email inbox, and the development seed fixtures. It prints the dev token password once; keep it private. The API is at http://localhost:8000, health is http://localhost:8000/health and interactive API documentation is http://localhost:8000/docs. The Mailpit inbox is at http://127.0.0.1:8025. The service is bound to loopback by default; do not expose this development backend to the public internet.
 
 Seed data includes three Pune demo listings, room/bed inventory, one active demo tenant stay, and an open rent charge. Rerunning the seed is idempotent. These records are for end-to-end testing only and are not real/live housing supply.
+
+## Register and sign in with real accounts
+
+1. Start the local stack with `python tools/start_test_stack.py`.
+2. In the emulator, open **API connection & sync** and set the base URL to `http://10.0.2.2:8000`.
+3. From the first screen, choose **Tenant / Customer → Register** or **Property Owner → Register** and submit a real email address plus a password of at least 12 characters.
+4. Open `http://127.0.0.1:8025) on the host computer, open the StayEasy verification message, copy its six-digit code into the app, and verify the account. This is a local email-catcher, not a real outbound email service.
+5. Sign in with the newly registered email and password. The account/token are stored in the backend; closing/reopening the app should restore the account session while it remains valid.
+6. Owner sign-up deliberately does **not** grant Owner permissions. It creates a verified customer account with an Owner-access request awaiting admin approval. To test the protected Owner workspace, use a local development admin session to approve it; production Owner access must remain approval-gated.
 
 ## Connect Android to the API
 
@@ -41,6 +50,12 @@ The feed worker records status in the `integration_sync_state` table. Apply Alem
 - Set `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, and `RAZORPAY_WEBHOOK_SECRET` in local `.env` only with **Razorpay test-mode** values. Configure the webhook to the API tunnel's HTTPS `/payments/webhooks/razorpay` route.
 - Without test keys, the backend, charge ledger and payment status/recovery screens can be tested, but no checkout order or provider-confirmed refund can succeed. StayEasy does not include a fake "paid" button.
 - Verify a charge becomes paid only after provider capture is confirmed, interrupted checkout can be refreshed, duplicate webhook events do not double-post, and a refund is not marked processed until provider confirmation.
+
+## Real data: what is available and what is not
+
+The local database is connected to the real PostgreSQL-backed API and supports real account-created owner listings, tenant enquiries, reservations and rent charges. The three preloaded Pune listings are clearly labelled demo fixtures and must not be presented as actual vacant rental inventory. The polling ingestion worker can load live rental records from an external provider only after `PROPERTY_FEED_URL` (and any required `PROPERTY_FEED_TOKEN`) is configured for a feed you are authorised to use. No authorised property-feed URL is supplied in this repository, so a live rental marketplace feed is not yet connected. Do not scrape rental portals or display test fixtures as real available homes.
+
+For now, create a listing through the signed-in Owner workflow (after local admin approval) and verify it appears in the customer listing search via the backend. This tests the complete owner-to-tenant data path using user-entered listing data rather than fabricated “live” supply.
 
 ## Configure a real external property feed
 
