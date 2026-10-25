@@ -2001,17 +2001,27 @@ def delete_tenant_invitation_document(
         raise HTTPException(404, "Invitation document not found.")
     root, _ = _document_storage_config()
     path = _document_path(root, document.storage_key)
+    try:
+        # Remove the blob before deleting its metadata. If storage deletion fails, keep
+        # the database record so the tenant can retry and operations can investigate.
+        path.unlink(missing_ok=True)
+    except OSError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=503,
+            detail="The document could not be safely deleted from private storage. Please retry later.",
+        ) from exc
     old = {"status": document.status, "category": document.category}
-    storage_key = document.storage_key
     db.delete(document)
     audit(db, actor, "invitation_document", document_id, "deleted_before_registration_submission", old=old,
           new={"invitation_id": invitation_id})
-    db.commit()
     try:
-        path.unlink(missing_ok=True)
-    except OSError:
-        # Metadata deletion prevents future reads; orphan cleanup can remove the encrypted blob later.
-        pass
+        db.commit()
+    except Exception:
+        db.rollback()
+        # If the commit fails after blob deletion, the metadata stays for a retry. The
+        # expired-retention job can also remove the missing-blob metadata safely later.
+        raise
     return {"id": document_id, "deleted": True, "message": "Document removed before registration submission."}
 
 
