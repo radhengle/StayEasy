@@ -271,11 +271,13 @@ class LedgerEntry(Base):
     payment_reference: Mapped[str] = mapped_column(String(180), default="")
     provider_status: Mapped[str] = mapped_column(String(24), default="manual_record")
     related_charge_id: Mapped[int | None] = mapped_column(ForeignKey("ledger_entries.id"), nullable=True, index=True)
-    payment_attempt_id: Mapped[int | None] = mapped_column(ForeignKey("payment_attempts.id"), nullable=True, unique=True)
+    payment_attempt_id: Mapped[int | None] = mapped_column(ForeignKey("payment_attempts.id", use_alter=True, name="fk_ledger_payment_attempt_id"), nullable=True)
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(24), default="open", index=True)
     created_by: Mapped[str] = mapped_column(String(36), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+Index("uq_ledger_entries_payment_attempt_id", LedgerEntry.payment_attempt_id, unique=True)
 
 class MaintenanceIssue(Base):
     __tablename__ = "maintenance_issues"
