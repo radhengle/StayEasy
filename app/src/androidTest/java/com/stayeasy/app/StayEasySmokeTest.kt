@@ -103,7 +103,7 @@ class StayEasySmokeTest {
         composeRule.onAllNodesWithText("Login")[0].performScrollTo().performClick()
         composeRule.onNodeWithText("Sign in to StayEasy").assertIsDisplayed()
         composeRule.onNodeWithText("Email address").assertIsDisplayed()
-        composeRule.onNodeWithText("Password (12+ characters for registration)").assertIsDisplayed()
+        composeRule.onNodeWithText("Password (12+ characters for registration)").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -111,7 +111,7 @@ class StayEasySmokeTest {
         composeRule.onAllNodesWithText("Register")[1].performScrollTo().performClick()
         composeRule.onNodeWithText("Create your account").assertIsDisplayed()
         composeRule.onNodeWithText("Email address").assertIsDisplayed()
-        composeRule.onNodeWithText("Owner-access request", substring = true).assertIsDisplayed()
+        composeRule.onNodeWithText("Owner-access request", substring = true).performScrollTo().assertIsDisplayed()
     }
 
     @Test
