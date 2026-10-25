@@ -172,6 +172,10 @@ internal object StayApiClient {
 
     fun health(baseUrl: String): JSONObject = JSONObject(request(baseUrl, "/health"))
 
+    /** Authenticated, secret-free operator diagnostics for feed and payment configuration. */
+    fun integrationStatus(baseUrl: String, token: String): JSONObject =
+        JSONObject(request(baseUrl, "/owner/integrations/status", token))
+
     fun publishedProperties(baseUrl: String, city: String = "Pune"): List<PgListing> {
         val encodedCity = java.net.URLEncoder.encode(city, "UTF-8")
         val result = JSONObject(request(baseUrl, "/properties?city=$encodedCity"))
