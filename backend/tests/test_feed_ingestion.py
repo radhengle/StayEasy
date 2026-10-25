@@ -201,3 +201,51 @@ def test_sync_once_persists_safe_failure_category_without_provider_payload(monke
     finally:
         engine.dispose()
 
+
+
+
+def test_feed_rejects_object_without_items_envelope(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.delenv("PROPERTY_FEED_TOKEN", raising=False)
+    monkeypatch.setattr(
+        feed_ingestion,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(json.dumps({"message": "temporarily unavailable"}).encode()),
+    )
+    with pytest.raises(ValueError, match="array or an object containing an items array"):
+        feed_ingestion._read_feed("https://feed.example.test/listings")
+
+
+def test_sync_once_counts_malformed_rows_and_drops_invalid_coordinates(monkeypatch):
+    engine = _use_isolated_database(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("PROPERTY_FEED_URL", "https://feed.example.test/listings")
+    monkeypatch.setenv("PROPERTY_FEED_SOURCE", "contract-test")
+    monkeypatch.setattr(feed_ingestion, "_read_feed", lambda _url: [
+        {
+            "external_id": "coordinates-1",
+            "name": "Coordinate Test PG",
+            "locality": "Aundh",
+            "city": "Pune",
+            "rent_from": 12500,
+            "latitude": 190,
+            "longitude": -500,
+        },
+        None,
+        "not-a-listing",
+    ])
+    try:
+        result = feed_ingestion.sync_once()
+        assert result == {"received": 3, "created": 1, "updated": 0, "skipped": 2}
+        with feed_ingestion.SessionLocal() as db:
+            prop = db.scalar(select(models.Property).where(
+                models.Property.external_source_key == "contract-test:coordinates-1"
+            ))
+            assert prop is not None
+            assert prop.latitude is None
+            assert prop.longitude is None
+            state = db.get(models.IntegrationSyncState, "property_feed")
+            assert state is not None
+            assert (state.received_count, state.created_count, state.updated_count, state.skipped_count) == (3, 1, 0, 2)
+    finally:
+        engine.dispose()
