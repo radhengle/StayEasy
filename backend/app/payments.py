@@ -423,7 +423,16 @@ def create_payment_order(
         m.PaymentAttempt.status.in_(ACTIVE_ORDER_STATUSES),
     ).with_for_update())
     if active:
-        raise HTTPException(409, "A payment session already exists for this charge. Resume it or reconcile its status first.")
+        # A client may time out after the order was successfully created and retry
+        # with a fresh idempotency key. Reuse the still-open, provider-backed order
+        # rather than forcing a second order or a dead-end 409.
+        if active.status == "created" and active.provider_order_id:
+            return _checkout_payload(active)
+        if active.status == "authorized":
+            raise HTTPException(409, "A payment is authorized and awaiting capture. Check payment history; do not start another payment.")
+        if active.status == "unknown":
+            raise HTTPException(409, "Payment status needs provider reconciliation. Do not start another payment.")
+        raise HTTPException(409, "A payment order is still being created. Retry this request shortly; do not start another payment.")
 
     attempt = m.PaymentAttempt(
         charge_entry_id=charge.id, customer_id=subject, provider="razorpay",
