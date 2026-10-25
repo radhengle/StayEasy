@@ -329,6 +329,7 @@ def _refresh_refund_status(db: Session, refund: m.PaymentRefund, provider_status
     if provider_status == "processed":
         refund.status = "processed"
         refund.processed_at = _utcnow()
+        db.flush()
         attempt = db.get(m.PaymentAttempt, refund.payment_attempt_id)
         if attempt:
             total_refunded = db.scalar(select(func.coalesce(func.sum(m.PaymentRefund.amount_paise), 0)).where(
