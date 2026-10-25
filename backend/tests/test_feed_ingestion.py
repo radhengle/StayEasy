@@ -166,7 +166,7 @@ def test_sync_once_persists_successful_feed_health_and_batch_counts(monkeypatch)
         result = feed_ingestion.sync_once()
         assert result == {"received": 1, "created": 1, "updated": 0, "skipped": 0}
         with feed_ingestion.SessionLocal() as db:
-            state = db.get(m.IntegrationSyncState, "property_feed")
+            state = db.get(models.IntegrationSyncState, "property_feed")
             assert state is not None
             assert state.status == "success"
             assert state.last_attempt_at is not None
@@ -191,7 +191,7 @@ def test_sync_once_persists_safe_failure_category_without_provider_payload(monke
         with pytest.raises(ValueError):
             feed_ingestion.sync_once()
         with feed_ingestion.SessionLocal() as db:
-            state = db.get(m.IntegrationSyncState, "property_feed")
+            state = db.get(models.IntegrationSyncState, "property_feed")
             assert state is not None
             assert state.status == "error"
             assert state.last_attempt_at is not None
