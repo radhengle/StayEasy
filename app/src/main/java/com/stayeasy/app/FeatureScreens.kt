@@ -1443,7 +1443,7 @@ internal fun ApiConnectionScreen(
                 Text("For a development API only. This endpoint should be disabled in production.", color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
                 OutlinedTextField(value = tokenSubject, onValueChange = { tokenSubject = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Session subject / user ID") }, shape = RoundedCornerShape(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("customer", "owner", "manager", "staff", "admin").forEach { role -> FilterChip(selected = tokenRole == role, onClick = { tokenRole = role }, label = { Text(role, fontSize = 10.sp) }) }
+                    listOf("customer", "owner", "manager", "staff", "admin").forEach { role -> FilterChip(selected = tokenRole == role, onClick = { tokenRole = role; if (role == "customer") tokenSubject = "stayeasy-demo-tenant" else if (role == "owner") tokenSubject = "stayeasy-demo-owner" }, label = { Text(role, fontSize = 10.sp) }) }
                 }
                 OutlinedTextField(value = devPassword, onValueChange = { devPassword = it }, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Development token password") }, shape = RoundedCornerShape(12.dp))
                 Button(onClick = {
