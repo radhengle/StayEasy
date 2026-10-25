@@ -246,7 +246,7 @@ def _settle_captured_payment(
     amount = provider_payment.get("amount")
     currency = str(provider_payment.get("currency") or "")
     status_value = str(provider_payment.get("status") or "").lower()
-    is_captured = provider_payment.get("captured") is True or status_value == "captured"
+    is_captured = status_value == "captured" and provider_payment.get("captured") is not False
     if not attempt.provider_order_id or provider_order_id != attempt.provider_order_id:
         raise HTTPException(409, "The payment does not belong to this StayEasy order.")
     if not provider_payment_id or amount != attempt.amount_paise or currency != attempt.currency:
@@ -567,7 +567,13 @@ def verify_checkout_payment(
     if str(provider_payment.get("order_id") or "") != attempt.provider_order_id:
         raise HTTPException(409, "The provider payment does not belong to this StayEasy order.")
     status_value = str(provider_payment.get("status") or "").lower()
-    if provider_payment.get("captured") is True or status_value == "captured":
+    if status_value == "refunded":
+        attempt.status = "unknown"
+        attempt.failure_code = "provider_reports_refunded_requires_reconciliation"
+        attempt.updated_at = _utcnow()
+        db.commit()
+        raise HTTPException(409, "Razorpay reports this payment as refunded. Finance reconciliation is required; it will not be marked paid again.")
+    if status_value == "captured" and provider_payment.get("captured") is not False:
         _settle_captured_payment(db, attempt, provider_payment)
         db.commit()
         db.refresh(attempt)
@@ -744,10 +750,19 @@ def refresh_payment_status(
             db.commit()
             raise HTTPException(409, "The provider payment does not match the stored order amount/currency. Finance review is required.")
 
+    refunded = [item for item in candidates if str(item.get("order_id") or "") == attempt.provider_order_id and str(item.get("status") or "").lower() == "refunded"]
+    if refunded:
+        attempt.status = "unknown"
+        attempt.failure_code = "provider_reports_refunded_requires_reconciliation"
+        attempt.updated_at = _utcnow()
+        db.commit()
+        raise HTTPException(409, "Razorpay reports a refunded payment. Finance reconciliation is required.")
+
     captured = [
         item for item in candidates
         if str(item.get("order_id") or "") == attempt.provider_order_id
-        and (item.get("captured") is True or str(item.get("status") or "").lower() == "captured")
+        and str(item.get("status") or "").lower() == "captured"
+        and item.get("captured") is not False
     ]
     if len(captured) > 1:
         attempt.status = "unknown"
@@ -857,6 +872,11 @@ def _process_refund_webhook(db: Session, event_type: str, payload: dict[str, Any
                 refund.provider_refund_id = provider_refund_id or None
     if refund is None:
         return False
+    expected_payment_id = db.scalar(select(m.PaymentAttempt.provider_payment_id).where(m.PaymentAttempt.id == refund.payment_attempt_id))
+    if not isinstance(amount, int) or amount != refund.amount_paise:
+        raise HTTPException(409, "Refund webhook amount does not match the recorded refund request.")
+    if provider_payment_id and expected_payment_id and provider_payment_id != expected_payment_id:
+        raise HTTPException(409, "Refund webhook payment ID does not match the recorded payment.")
     _refresh_refund_status(db, refund, "processed" if event_type == "refund.processed" else "failed")
     return True
 
