@@ -28,7 +28,7 @@ For a physical phone, use a trusted HTTPS development tunnel to the local API an
 
 ## Inspect integration readiness from the Android app
 
-From **API connection & sync**, use a short-lived owner/admin token and tap **Test connection**. The **Integration readiness** section shows whether a partner feed is configured, the worker's last attempt and last successful sync, the last batch's created/updated/skipped counts, the number of imported feed listings, and whether Razorpay checkout/webhook configuration flags are present.
+From **API connection & sync**, use a short-lived owner/admin token and tap **Test connection**. The **Integration readiness** section shows whether a partner feed is configured, the worker's last attempt and last successful sync, the last successful batch's created/updated/skipped counts, the number of imported feed listings, and whether Razorpay checkout/webhook configuration flags are present.
 
 The authenticated diagnostic endpoint is `GET /owner/integrations/status`. It never returns the property-feed URL, feed bearer token, Razorpay key ID, API secret, or webhook secret. A configured URL does not prove that the worker is running; use the last-success timestamp and batch counts to confirm delivery. `not_run` means the worker has not recorded a sync yet; `error` includes only a safe error category. Razorpay configuration flags are not an end-to-end checkout test.
 
