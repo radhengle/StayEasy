@@ -25,7 +25,7 @@ The app returns key_id, checkout_order_id, checkout_amount, and checkout_currenc
 3. Open Razorpay Standard Checkout in the app using the returned key_id, checkout_order_id, checkout_amount, and checkout_currency.
 4. After checkout, POST /payments/verify with payment_attempt_id, razorpay_payment_id, and razorpay_signature. StayEasy validates the checkout HMAC against the stored order ID, then queries Razorpay for the canonical payment status.
 5. Razorpay calls POST /payments/webhooks/razorpay. StayEasy validates X-Razorpay-Signature on the unmodified raw body, de-duplicates events, and handles captured, failed, authorized and refund events idempotently.
-6. GET /payments/mine returns the tenant's payment history; GET /payments/owner?property_id=<id> returns scoped payment/refund status to property finance operators.
+6. GET /payments/mine returns the tenant's payment history; GET /payments/owner/summary?property_id=<id> returns scoped payment/refund status to property finance operators.
 7. POST /payments/{payment_attempt_id}/refund requests a full or partial provider refund. This endpoint is available only to an owner or finance-authorized manager/staff/admin. A refund is not reported as processed until Razorpay confirms it; unknown provider responses are intentionally held for reconciliation.
 
 ## Idempotency and accounting safeguards
