@@ -180,7 +180,10 @@ internal fun AccountAuthScreen(
                             withContext(Dispatchers.IO) { StayApiClient.logoutAccount(context = context, baseUrl = baseUrl) }
                             onSignedOut()
                         } catch (e: Exception) {
-                            error = e.message ?: "Could not sign out."
+                            // Owner approval invalidates the old token server-side. Even if the
+                            // resulting 401 prevents remote logout, StayApiClient has already
+                            // cleared the device token, so return to the signed-out entry screen.
+                            onSignedOut()
                         } finally {
                             busy = false
                         }
