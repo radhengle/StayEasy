@@ -824,17 +824,21 @@ def list_property_payments(
 ):
     if actor["role"] == "admin":
         properties = None
+        can_refund_properties = None
     elif property_id is not None:
         _require_finance_manager(db, actor, property_id)
         properties = {property_id}
+        can_refund_properties = {property_id}
     elif actor["role"] == "owner":
         properties = set(db.scalars(select(m.Property.id).where(m.Property.owner_id == str(actor["subject"]))))
+        can_refund_properties = properties
     else:
-        assignments = db.scalars(select(m.StaffAssignment).where(
+        assignments = list(db.scalars(select(m.StaffAssignment).where(
             m.StaffAssignment.staff_user_id == str(actor["subject"]),
             m.StaffAssignment.status == "active",
-        ))
+        )))
         properties = {a.property_id for a in assignments if {"finance.view", "finance.manage", "*"}.intersection(a.permissions or [])}
+        can_refund_properties = {a.property_id for a in assignments if {"finance.manage", "*"}.intersection(a.permissions or [])}
     attempts = list(db.scalars(select(m.PaymentAttempt).order_by(m.PaymentAttempt.created_at.desc()).limit(1000)))
     result = []
     for attempt in attempts:
@@ -845,6 +849,7 @@ def list_property_payments(
         result.append({**_attempt_payload(attempt), "property_id": charge.property_id,
                        "property_name": prop.name if prop else f"Property #{charge.property_id}",
                        "charge_status": charge.status,
+                       "can_refund": can_refund_properties is None or charge.property_id in can_refund_properties,
                        "refunds": [_refund_payload(refund) for refund in db.scalars(select(m.PaymentRefund).where(
                            m.PaymentRefund.payment_attempt_id == attempt.id
                        ).order_by(m.PaymentRefund.created_at.desc()))]})
