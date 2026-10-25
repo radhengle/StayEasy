@@ -1,4 +1,4 @@
-"""Purge tenant invitation documents whose configured retention period has ended.
+"""Purge expired tenant invitation documents and aged orphaned encrypted blobs.
 
 Run after applying database migrations:
     python -m backend.scripts.purge_expired_invitation_documents --dry-run
@@ -6,8 +6,8 @@ Run after applying database migrations:
 
 DOCUMENT_STORAGE_ROOT must point at the same private directory used by the API.
 This job never decrypts or prints document content. It removes expired encrypted
-blobs, deletes their database metadata, and sweeps old unreferenced generated blobs
-after a grace period. It writes minimal audit records without document details.
+blobs and metadata, then sweeps old unreferenced generated blobs after a grace
+period. Audit records deliberately omit filenames, purposes and document content.
 """
 import argparse
 import hashlib
@@ -29,9 +29,7 @@ _STORAGE_KEY = re.compile(r"^[0-9a-f]{32}$")
 
 
 def _configured_storage_root(root: str | Path | None = None) -> Path:
-    """Resolve a configured existing storage directory; fail closed on misconfiguration."""
-    import os
-
+    """Resolve an explicitly configured existing storage directory."""
     configured_root = str(root) if root is not None else os.getenv("DOCUMENT_STORAGE_ROOT", "")
     if not configured_root.strip():
         raise ValueError("DOCUMENT_STORAGE_ROOT must point to the configured private document directory.")
@@ -50,19 +48,22 @@ def _blob_path(root: Path, storage_key: str) -> Path:
     if not _STORAGE_KEY.fullmatch(storage_key or ""):
         raise ValueError("Stored document reference is invalid.")
     candidate = root / f"{storage_key}.enc"
-    # Resolve an existing path to detect a storage-key symlink pointing outside the root.
     try:
         resolved = candidate.resolve(strict=False)
     except OSError as exc:
         raise ValueError("Stored document path cannot be resolved.") from exc
     if resolved.parent != root:
-        raise ValueError("Stored document path resolves outside the confidef _eligible_orphan_blobs(
+        raise ValueError("Stored document path resolves outside the configured root.")
+    return candidate
+
+
+def _eligible_orphan_blobs(
     root: Path,
     referenced_keys: set[str],
     cutoff: datetime,
     grace_hours: int,
 ) -> list[Path]:
-    """Return only old, regular generated blobs that have no metadata reference."""
+    """Return old regular generated blobs that no metadata row references."""
     oldest_mtime = cutoff.timestamp() - grace_hours * 60 * 60
     candidates: list[Path] = []
     for path in root.iterdir():
@@ -75,10 +76,9 @@ def _blob_path(root: Path, storage_key: str) -> Path:
         except FileNotFoundError:
             continue
         except OSError:
-            # A candidate that cannot be inspected should not be deleted.
+            # An entry that cannot be inspected should not be deleted.
             continue
-        # Never follow or remove symlinks as part of orphan cleanup. Also ignore
-        # anything that is not a regular encrypted-blob file.
+        # Do not follow/remove symlinks as part of orphan cleanup.
         if stat.S_ISLNK(entry.st_mode) or not stat.S_ISREG(entry.st_mode):
             continue
         if entry.st_mtime <= oldest_mtime:
@@ -98,8 +98,8 @@ def purge_expired_invitation_documents(
     """Delete expired encrypted blobs, expired metadata and old unreferenced blobs.
 
     The orphan grace period protects a file being written before its metadata
-    transaction commits. If removing a referenced blob fails, the database record
-    is retained so a later run can retry. If a referenced blob is already missing,
+    transaction commits. If removing a referenced blob fails, its database record
+    is retained for a later retry. If an expired blob is already missing, its
     metadata can still be removed because expired downloads are denied by the API.
     """
     if not 1 <= batch_size <= 5000:
@@ -156,8 +156,7 @@ def purge_expired_invitation_documents(
                 existed = blob.exists()
                 if existed:
                     blob.unlink()
-                # Build the audit record with only the minimal retention proof. Do not
-                # copy filename, purpose, email, document category or plaintext content.
+                # Store only minimal retention evidence in the audit log.
                 db.add(m.AuditLog(
                     actor_id="system-retention-purge",
                     actor_role="system",
@@ -182,8 +181,7 @@ def purge_expired_invitation_documents(
             except (OSError, ValueError) as exc:
                 blocked_ids.add(document.id)
                 stats["failed"] += 1
-                # Error output is deliberately restricted to a record ID and a generic
-                # reason; never include storage paths, user identifiers or file details.
+                # Do not log storage paths, user identifiers, filenames or file details.
                 stats["errors"].append({
                     "document_id": document.id,
                     "reason": "storage_path_invalid" if isinstance(exc, ValueError) else "blob_delete_failed",
@@ -193,20 +191,18 @@ def purge_expired_invitation_documents(
             db.commit()
         except Exception:
             db.rollback()
-            # If the filesystem deletion succeeded but this commit failed, the expired
-            # record remains. A future run sees a missing blob and safely removes metadata.
+            # If the filesystem unlink succeeded but commit failed, a later run sees
+            # the expired row with a missing blob and can safely remove its metadata.
             raise
 
-    # The pre-registration delete endpoint, older deployments, or interrupted uploads
-    # can leave encrypted files without metadata. Delete only generated .enc filenames
-    # older than the grace period; never follow symlinks or touch arbitrary files.
+    # Interrupted uploads or older delete behavior may leave blobs without metadata.
+    # Only remove generated .enc names older than the configured grace period.
     referenced_keys = set(db.scalars(select(m.InvitationDocument.storage_key)))
     orphan_candidates = _eligible_orphan_blobs(root, referenced_keys, cutoff, orphan_grace_hours)
     stats["orphan_found"] = len(orphan_candidates)
     for blob in orphan_candidates:
         try:
-            # The key is randomly generated. Hash it for a stable audit reference without
-            # exposing the storage key or actual path in the audit row.
+            # Hash the random key for a stable audit reference without recording the key.
             key_hash = hashlib.sha256(blob.stem.encode("ascii")).hexdigest()[:32]
             blob.unlink()
             db.add(m.AuditLog(
@@ -233,25 +229,22 @@ def purge_expired_invitation_documents(
         db.rollback()
         raise
     return stats
-         continue
-
-    return stats
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Remove expired tenant invitation document blobs and metadata."
+        description="Remove expired tenant document blobs, metadata and aged orphaned blobs."
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="Count eligible records without deleting any files or database rows.",
+        help="Count eligible records without deleting files or database rows.",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
         default=500,
-        help="Maximum number of records locked and processed per database transaction (1–5000).",
+        help="Maximum number of expired records processed per transaction (1–5000).",
     )
     parser.add_argument(
         "--orphan-grace-hours",
@@ -278,7 +271,7 @@ def main() -> int:
         )
         if result["errors"]:
             for error in result["errors"]:
-                print(f"Document record {error['document_id']}: {error['reason']}.")
+                print(f"Document record {error.get('document_id', 'unknown')}: {error['reason']}.")
         return 1 if result["failed"] else 0
     except (ValueError, OSError) as exc:
         parser.error(str(exc))
