@@ -2234,3 +2234,93 @@ def test_provider_refunded_state_never_reposts_capture(monkeypatch):
             m.LedgerEntry.payment_attempt_id == attempt["id"],
             m.LedgerEntry.category == "payment",
         )) == 0
+
+def test_owner_integration_status_is_role_protected_and_never_exposes_provider_secrets(monkeypatch):
+    monkeypatch.setenv("PROPERTY_FEED_URL", "https://feed.example.test/private?secret=feed-url-secret")
+    monkeypatch.setenv("PROPERTY_FEED_SOURCE", "contract-test-partner")
+    monkeypatch.setenv("PROPERTY_FEED_TOKEN", "feed-token-secret")
+    monkeypatch.setenv("PROPERTY_FEED_POLL_SECONDS", "75")
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_public_marker")
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "razorpay-api-secret-marker")
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "razorpay-webhook-secret-marker")
+
+    set_actor("tenant-1", "customer")
+    forbidden = client.get("/owner/integrations/status")
+    assert forbidden.status_code == 403
+
+    set_actor("owner-1", "owner")
+    now = datetime.now(timezone.utc)
+    with SessionLocal() as db:
+        db.add(m.IntegrationSyncState(
+            integration_key="property_feed",
+            status="success",
+            last_attempt_at=now,
+            last_success_at=now,
+            received_count=3,
+            created_count=2,
+            updated_count=1,
+            skipped_count=0,
+        ))
+        db.add(m.Property(
+            owner_id="external-feed-owner",
+            name="External Listing",
+            locality="Baner",
+            city="Pune",
+            rent_from=10000,
+            status="published",
+            verification_status="unverified",
+            data_source="contract-test-partner",
+            external_source_key="contract-test-partner:listing-1",
+            external_updated_at=now,
+        ))
+        db.commit()
+
+    response = client.get("/owner/integrations/status")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    feed = payload["property_feed"]
+    assert feed["configured"] is True
+    assert feed["source"] == "contract-test-partner"
+    assert feed["poll_interval_seconds"] == 75
+    assert feed["sync_status"] == "success"
+    assert feed["last_success_at"]
+    assert feed["last_batch"] == {"received": 3, "created": 2, "updated": 1, "skipped": 0}
+    assert feed["imported_listing_count"] == 1
+    payment = payload["razorpay"]
+    assert payment["checkout_state"] == "configured"
+    assert payment["checkout_configured"] is True
+    assert payment["webhook_secret_configured"] is True
+    assert payment["mode_hint"] == "test"
+
+    for secret in (
+        "feed-url-secret",
+        "feed-token-secret",
+        "razorpay-api-secret-marker",
+        "razorpay-webhook-secret-marker",
+        "https://feed.example.test/private",
+        "rzp_test_public_marker",
+    ):
+        assert secret not in response.text
+
+
+def test_owner_integration_status_reports_missing_configuration_without_guessing_sync_health(monkeypatch):
+    for key in (
+        "PROPERTY_FEED_URL",
+        "PROPERTY_FEED_TOKEN",
+        "RAZORPAY_KEY_ID",
+        "RAZORPAY_KEY_SECRET",
+        "RAZORPAY_WEBHOOK_SECRET",
+    ):
+        monkeypatch.delenv(key, raising=False)
+
+    set_actor("owner-1", "owner")
+    response = client.get("/owner/integrations/status")
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["property_feed"]["configured"] is False
+    assert payload["property_feed"]["sync_status"] == "not_run"
+    assert payload["property_feed"]["last_success_at"] is None
+    assert payload["razorpay"]["checkout_state"] == "not_configured"
+    assert payload["razorpay"]["checkout_configured"] is False
+    assert payload["razorpay"]["webhook_secret_configured"] is False
+
