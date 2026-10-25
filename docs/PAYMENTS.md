@@ -18,6 +18,10 @@ Use Razorpay test-mode credentials in development/staging. Test mode must be con
 
 The app returns key_id, checkout_order_id, checkout_amount, and checkout_currency from POST /payments/orders for the Android Checkout SDK. The key ID is public and is not a secret; never embed RAZORPAY_KEY_SECRET or RAZORPAY_WEBHOOK_SECRET in the Android app.
 
+## Readiness diagnostics
+
+An owner/admin can request `GET /owner/integrations/status` or use **API connection & sync → Integration readiness** in Android. The response reports whether checkout and webhook secrets are configured and provides a test/live mode hint from the key ID prefix; it does not return any key or secret values. This is configuration visibility only. A successful order, verified capture, signed webhook and refund flow still require Razorpay test-mode acceptance against a configured staging webhook.
+
 ## API flow
 
 1. GET /payments/charges (customer) lists charges that belong to the signed-in tenant and still have an outstanding balance.
