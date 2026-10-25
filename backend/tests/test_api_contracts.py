@@ -1740,3 +1740,51 @@ def test_retention_purge_fails_closed_without_document_storage_root(monkeypatch)
         else:
             raise AssertionError("Retention purge must refuse to run without an explicit storage root.")
 
+def test_pre_registration_document_delete_keeps_metadata_when_blob_unlink_fails(monkeypatch, tmp_path):
+    owner_id = "delete-failure-owner"
+    tenant_id = "delete-failure-tenant"
+    email = "delete-failure-tenant@example.test"
+    _prop, _unit, invitation, purpose = _create_tenant_document_invitation(owner_id, tenant_id, email)
+    storage_root = tmp_path / "encrypted-documents"
+    storage_root.mkdir(mode=0o700)
+    key = "f" * 32
+    blob = storage_root / f"{key}.enc"
+    blob.write_bytes(b"SE1encrypted-private-document")
+    blob.chmod(0o600)
+    monkeypatch.setenv("DOCUMENT_STORAGE_ROOT", str(storage_root))
+    encryption_key = base64.urlsafe_b64encode(b"stayeasy-document-test-key-00001").decode("ascii").rstrip("=")
+    monkeypatch.setenv("DOCUMENT_ENCRYPTION_KEY", encryption_key)
+
+    with SessionLocal() as db:
+        document = m.InvitationDocument(
+            invitation_id=invitation["id"],
+            uploaded_by=tenant_id,
+            category="government_id",
+            purpose=purpose,
+            storage_key=key,
+            original_filename="private.pdf",
+            media_type="application/pdf",
+            size_bytes=128,
+            consent_at=datetime.now(timezone.utc),
+            status="submitted",
+            retention_until=datetime.now(timezone.utc) + timedelta(days=30),
+        )
+        db.add(document)
+        db.commit()
+        document_id = document.id
+
+    original_unlink = Path.unlink
+
+    def fail_document_unlink(path, *args, **kwargs):
+        if path == blob:
+            raise PermissionError("simulated private storage failure")
+        return original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_document_unlink)
+    set_actor(tenant_id, "customer")
+    response = client.delete(f"/tenant/invitations/{invitation['id']}/documents/{document_id}")
+    assert response.status_code == 503, response.text
+    assert blob.exists()
+    with SessionLocal() as db:
+        assert db.get(m.InvitationDocument, document_id) is not None
+
