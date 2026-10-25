@@ -283,7 +283,8 @@ internal data class PgListing(
     val expectedVacancy: String = "Available now",
     val nearbyPlaces: String = "",
     val serverPropertyId: Long? = null,
-    val serverUnits: List<RemoteUnit> = emptyList()
+    val serverUnits: List<RemoteUnit> = emptyList(),
+    val dataSource: String = if (isDemo) "preview" else "owner"
 )
 
 private val demoListings = listOf(
