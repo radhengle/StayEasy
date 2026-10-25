@@ -6,7 +6,8 @@ Run after applying database migrations:
 
 DOCUMENT_STORAGE_ROOT must point at the same private directory used by the API.
 This job never decrypts or prints document content. It removes expired encrypted
-blobs, deletes their database metadata, and writes a minimal audit record.
+blobs, deletes their database metadata, and sweeps old unreferenced generated blobs
+after a grace period. It writes minimal audit records without document details.
 """
 import argparse
 import hashlib
