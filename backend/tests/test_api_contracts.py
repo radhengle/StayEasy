@@ -2284,7 +2284,7 @@ def test_owner_integration_status_is_role_protected_and_never_exposes_provider_s
     assert feed["poll_interval_seconds"] == 75
     assert feed["sync_status"] == "success"
     assert feed["last_success_at"]
-    assert feed["last_batch"] == {"received": 3, "created": 2, "updated": 1, "skipped": 0}
+    assert feed["last_successful_batch"] == {"received": 3, "created": 2, "updated": 1, "skipped": 0}
     assert feed["imported_listing_count"] == 1
     payment = payload["razorpay"]
     assert payment["checkout_state"] == "configured"
