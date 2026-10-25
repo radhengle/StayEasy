@@ -25,6 +25,11 @@ services:
       JWT_ISSUER: ${JWT_ISSUER:-stayeasy-api}
       ACCESS_TOKEN_MINUTES: ${ACCESS_TOKEN_MINUTES:-120}
       DEV_TOKEN_PASSWORD: ${DEV_TOKEN_PASSWORD:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_EMAIL: ${SMTP_FROM_EMAIL:-}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080,http://127.0.0.1:8080}
       SEED_DEMO_DATA: ${SEED_DEMO_DATA:-true}
       PROPERTY_FEED_URL: ${PROPERTY_FEED_URL:-}
@@ -41,6 +46,13 @@ services:
       db:
         condition: service_healthy
     networks: [stayeasy-internal, stayeasy-egress]
+  mailpit:
+    image: axllent/mailpit:v1.27.8
+    profiles: ["devmail"]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8025:8025"
+    networks: [stayeasy-internal]
   feed-sync:
     build: ./backend
     profiles: ["ingestion"]
