@@ -1,9 +1,6 @@
 package com.stayeasy.app
 
-import android.content.Context
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -79,6 +76,7 @@ internal fun AccountAuthScreen(
     var error by rememberSaveable { mutableStateOf("") }
     var message by rememberSaveable { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
     val colors = MaterialTheme.colorScheme
 
     LaunchedEffect(startMode, initialWorkspace) {
@@ -179,7 +177,7 @@ internal fun AccountAuthScreen(
                     busy = true
                     scope.launch {
                         try {
-                            withContext(Dispatchers.IO) { StayApiClient.logoutAccount(context = androidx.compose.ui.platform.LocalContext.current, baseUrl = baseUrl) }
+                            withContext(Dispatchers.IO) { StayApiClient.logoutAccount(context = context, baseUrl = baseUrl) }
                             onSignedOut()
                         } catch (e: Exception) {
                             error = e.message ?: "Could not sign out."
@@ -202,7 +200,7 @@ internal fun AccountAuthScreen(
                         scope.launch {
                             try {
                                 withContext(Dispatchers.IO) { StayApiClient.verifyAccountEmail(baseUrl, email, verificationCode) }
-                                val result = withContext(Dispatchers.IO) { StayApiClient.loginAccount(androidx.compose.ui.platform.LocalContext.current, baseUrl, email, password) }
+                                val result = withContext(Dispatchers.IO) { StayApiClient.loginAccount(context, baseUrl, email, password) }
                                 verificationPending = false
                                 val user = result.optJSONObject("user") ?: JSONObject()
                                 onLoginSucceeded(user)
