@@ -27,7 +27,7 @@ from .security import require_roles
 
 router = APIRouter(tags=["payments"])
 ACTIVE_ORDER_STATUSES = ("creating", "created", "authorized", "unknown")
-PAID_LEDGER_STATUSES = ("paid", "settled", "closed")
+PAID_LEDGER_STATUSES = ("paid", "settled", "closed", "recorded")
 BILLABLE_CATEGORIES = ("rent_charge", "deposit", "food", "utility", "late_fee")
 RAZORPAY_API = "https://api.razorpay.com/v1"
 
