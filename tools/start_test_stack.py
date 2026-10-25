@@ -29,8 +29,14 @@ def ensure_env() -> dict[str, str]:
         "PROPERTY_FEED_TOKEN":"", "PROPERTY_FEED_POLL_SECONDS":"300"
     }
     changed = False
+    stock_values = {
+        "POSTGRES_PASSWORD": {"stayeasy-local-dev-change-me", "REPLACE_WITH_LONG_HEX_PASSWORD"},
+        "JWT_SECRET": {"local-development-secret-change-this-to-a-random-value-over-32-chars", "REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS"},
+        "DEV_TOKEN_PASSWORD": {"stayeasy-local-only-change-me", "SET_A_LOCAL_ONLY_PASSWORD"},
+    }
     for key, value in defaults.items():
-        if key not in values or (not values[key] and value):
+        current = values.get(key, "")
+        if not current or current in stock_values.get(key, set()):
             values[key] = value
             changed = True
     if changed or not ENV_FILE.exists():
