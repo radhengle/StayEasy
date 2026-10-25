@@ -383,7 +383,7 @@ internal data class RazorpayCheckoutEvent(
 )
 
 class MainActivity : ComponentActivity(), PaymentResultWithDataListener {
-    var checkoutEvent by mutableStateOf<RazorpayCheckoutEvent?>(null)
+    internal var checkoutEvent by mutableStateOf<RazorpayCheckoutEvent?>(null)
         private set
     private var pendingPaymentAttemptId: Long = 0L
     private val paymentPreferences by lazy {
@@ -437,7 +437,7 @@ class MainActivity : ComponentActivity(), PaymentResultWithDataListener {
         )
     }
 
-    override fun onPaymentError(errorCode: Int, response: String?) {
+    override fun onPaymentError(errorCode: Int, response: String?, paymentData: PaymentData?) {
         val attemptId = pendingPaymentAttemptId.takeIf { it > 0L }
             ?: paymentPreferences.getLong("pending_attempt_id", 0L)
         checkoutEvent = RazorpayCheckoutEvent(
