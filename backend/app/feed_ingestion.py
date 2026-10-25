@@ -24,7 +24,7 @@ log = logging.getLogger("stayeasy.feed")
 MAX_FEED_BYTES = 2 * 1024 * 1024
 
 
-def _read_feed(url: str) -> list[dict]:
+def _read_feed(url: str) -> list[object]:
     if not url:
         raise RuntimeError("PROPERTY_FEED_URL is empty. Configure an authorised provider JSON feed.")
     if not url.lower().startswith(("https://", "http://")):
@@ -41,12 +41,19 @@ def _read_feed(url: str) -> list[dict]:
     if len(body) > MAX_FEED_BYTES:
         raise ValueError("Property feed exceeded the 2 MiB limit.")
     parsed = json.loads(body.decode("utf-8"))
-    items = parsed.get("items", []) if isinstance(parsed, dict) else parsed
+    if isinstance(parsed, dict) and "items" in parsed:
+        items = parsed["items"]
+    elif isinstance(parsed, list):
+        items = parsed
+    else:
+        raise ValueError("Feed must be a JSON array or an object containing an items array.")
     if not isinstance(items, list):
         raise ValueError("Feed must be a JSON array or an object containing an items array.")
     if len(items) > 1000:
         raise ValueError("Feed exceeds the 1,000 listing batch limit.")
-    return [item for item in items if isinstance(item, dict)]
+    # Keep non-object rows so sync_once can count them as skipped rather than
+    # silently removing them and reporting an inaccurate received count.
+    return items
 
 
 def _sync_error_category(error: Exception) -> str:
@@ -99,6 +106,15 @@ def _write_sync_state(
         db.close()
 
 
+def _validated_coordinate(value: object, minimum: float, maximum: float) -> float | None:
+    """Ignore malformed coordinates instead of publishing impossible map points."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not minimum <= value <= maximum:
+        return None
+    return float(value)
+
+
 def sync_once() -> dict[str, int]:
     url = os.getenv("PROPERTY_FEED_URL", "").strip()
     source = os.getenv("PROPERTY_FEED_SOURCE", "partner-feed").strip()[:39] or "partner-feed"
@@ -117,6 +133,9 @@ def sync_once() -> dict[str, int]:
         db = SessionLocal()
         try:
             for item in items:
+                if not isinstance(item, dict):
+                    skipped += 1
+                    continue
                 external_id = str(item.get("external_id", "")).strip()[:120]
                 name = str(item.get("name", "")).strip()[:180]
                 locality = str(item.get("locality", "")).strip()[:120]
@@ -142,8 +161,8 @@ def sync_once() -> dict[str, int]:
                     "locality": locality,
                     "city": city,
                     "pin_code": str(item.get("pin_code", "")).strip()[:10],
-                    "latitude": item.get("latitude") if isinstance(item.get("latitude"), (int, float)) else None,
-                    "longitude": item.get("longitude") if isinstance(item.get("longitude"), (int, float)) else None,
+                    "latitude": _validated_coordinate(item.get("latitude"), -90, 90),
+                    "longitude": _validated_coordinate(item.get("longitude"), -180, 180),
                     "eligibility": item.get("eligibility", "Mixed") if item.get("eligibility") in {"Boys only", "Girls only", "Mixed", "All genders"} else "Mixed",
                     "couples_welcome": bool(item.get("couples_welcome", False)),
                     "furnishing": str(item.get("furnishing", "Furnished"))[:30],
