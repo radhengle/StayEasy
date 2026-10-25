@@ -1373,9 +1373,9 @@ internal fun ApiConnectionScreen(
     onListingsLoaded: (List<PgListing>) -> Unit,
     onBack: () -> Unit
 ) {
-    var baseUrl by remember { mutableStateOf(initialBaseUrl) }
+    var baseUrl by remember { mutableStateOf(initialBaseUrl.ifBlank { "http://10.0.2.2:8000" }) }
     var token by remember { mutableStateOf("") }
-    var tokenSubject by remember { mutableStateOf("stayeasy-owner-demo") }
+    var tokenSubject by remember { mutableStateOf("stayeasy-demo-owner") }
     var tokenRole by remember { mutableStateOf("owner") }
     var devPassword by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
@@ -1383,6 +1383,7 @@ internal fun ApiConnectionScreen(
     var healthText by remember { mutableStateOf("") }
     var dashboardText by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
+    LaunchedEffect(baseUrl) { onBaseUrlChanged(baseUrl.trimEnd('/')) }
     fun runCheck(loadListings: Boolean) {
         if (busy) return
         if (baseUrl.isBlank()) { status = "Enter your deployed HTTPS API URL first."; return }
@@ -1425,7 +1426,7 @@ internal fun ApiConnectionScreen(
                     baseUrl = nextBaseUrl
                     onBaseUrlChanged(nextBaseUrl)
                 }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("https://api.your-domain.com") }, shape = RoundedCornerShape(12.dp))
-                Text("Use HTTPS for remote services. For the API scaffold, see backend/README.md. Demo data remains available if no API is configured.", color = SE.Muted, fontSize = 10.sp, lineHeight = 15.sp)
+                Text("Emulator default: http://10.0.2.2:8000. For a physical phone use a trusted HTTPS tunnel. The test API uses seeded DEMO DATA; real external listings need an authorised feed.", color = SE.Muted, fontSize = 10.sp, lineHeight = 15.sp)
                 Spacer(Modifier.height(12.dp)); Text("API session token", color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                 OutlinedTextField(value = token, onValueChange = { token = it; if (it.isBlank()) StayApiClient.clearSessionToken() }, modifier = Modifier.fillMaxWidth(), singleLine = true, placeholder = { Text("Paste a short-lived bearer token") }, shape = RoundedCornerShape(12.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
