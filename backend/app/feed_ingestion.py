@@ -78,7 +78,8 @@ def _write_sync_state(
             state = m.IntegrationSyncState(integration_key="property_feed", status=status)
             db.add(state)
         state.status = status
-        state.last_attempt_at = now
+        if status == "running" or state.last_attempt_at is None:
+            state.last_attempt_at = now
         state.updated_at = now
         if status == "success":
             state.last_success_at = now
