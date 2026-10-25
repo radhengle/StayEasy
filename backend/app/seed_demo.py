@@ -9,8 +9,8 @@ import os
 from datetime import date, timedelta
 
 from sqlalchemy import select
-from app.database import Base, SessionLocal, engine
-from app import models as m
+from .database import Base, SessionLocal, engine
+from . import models as m
 
 
 OWNER_ID = "stayeasy-demo-owner"
