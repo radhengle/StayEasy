@@ -224,7 +224,7 @@ internal fun AccountAuthScreen(
                 if (mode == "signup") {
                     OutlinedTextField(value = phone, onValueChange = { phone = it.take(40); error = "" }, label = { Text("Phone (optional)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                 }
-                OutlinedTextField(value = password, onValueChange = { password = it.take(128); error = "" }, label = { Text("Password (12+ characters for registration)") }, leadingIcon = { Icon(Icons.Filled.Lock, null) }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(value = password, onValueChange = { password = it.take(128); error = "" }, label = { Text(if (mode == "signup") "Password (12+ characters)" else "Password") }, leadingIcon = { Icon(Icons.Filled.Lock, null) }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
                 if (mode == "signup") {
                     Text(if (workspace == "owner") "We'll create your account and submit an Owner-access request. Owner tools unlock only after approval." else "You can complete optional profile details later.", fontSize = 11.sp, lineHeight = 16.sp, color = colors.onSurfaceVariant)
                 }
