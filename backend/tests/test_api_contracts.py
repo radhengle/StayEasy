@@ -2324,3 +2324,55 @@ def test_owner_integration_status_reports_missing_configuration_without_guessing
     assert payload["razorpay"]["checkout_configured"] is False
     assert payload["razorpay"]["webhook_secret_configured"] is False
 
+
+
+
+def test_security_code_sender_supports_explicit_local_plain_smtp(monkeypatch):
+    delivered = {}
+
+    class FakeSmtp:
+        def __init__(self, host, port, timeout):
+            delivered["host"] = host
+            delivered["port"] = port
+            delivered["timeout"] = timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def ehlo(self):
+            delivered["ehlo"] = delivered.get("ehlo", 0) + 1
+
+        def starttls(self, **_kwargs):
+            delivered["starttls"] = True
+
+        def login(self, _username, _password):
+            delivered["login"] = True
+
+        def send_message(self, message):
+            delivered["to"] = message["To"]
+            delivered["from"] = message["From"]
+            delivered["body"] = message.get_content()
+
+    monkeypatch.setenv("SMTP_HOST", "mailpit")
+    monkeypatch.setenv("SMTP_PORT", "1025")
+    monkeypatch.setenv("SMTP_STARTTLS", "false")
+    monkeypatch.setenv("SMTP_FROM_EMAIL", "no-reply@stayeasy.local")
+    monkeypatch.setenv("SMTP_USERNAME", "")
+    monkeypatch.setattr(auth_routes.smtplib, "SMTP", FakeSmtp)
+
+    auth_routes.send_security_code(
+        "tenant@example.test",
+        "Verify your StayEasy account",
+        "123456",
+        "Your code is 123456.",
+    )
+
+    assert delivered["host"] == "mailpit"
+    assert delivered["port"] == 1025
+    assert delivered["to"] == "tenant@example.test"
+    assert delivered["from"] == "no-reply@stayeasy.local"
+    assert "123456" in delivered["body"]
+    assert "starttls" not in delivered
