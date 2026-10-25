@@ -28,9 +28,10 @@ def _configured_storage_root(root: str | Path | None = None) -> Path:
     """Resolve a configured existing storage directory; fail closed on misconfiguration."""
     import os
 
-    candidate = Path(root if root is not None else os.getenv("DOCUMENT_STORAGE_ROOT", "")).expanduser()
-    if not str(candidate).strip():
+    configured_root = str(root) if root is not None else os.getenv("DOCUMENT_STORAGE_ROOT", "")
+    if not configured_root.strip():
         raise ValueError("DOCUMENT_STORAGE_ROOT must point to the configured private document directory.")
+    candidate = Path(configured_root).expanduser()
     try:
         resolved = candidate.resolve(strict=True)
     except OSError as exc:
