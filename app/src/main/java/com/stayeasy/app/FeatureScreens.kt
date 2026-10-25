@@ -1453,7 +1453,8 @@ internal fun ApiConnectionScreen(
                     scope.launch {
                         try {
                             token = withContext(Dispatchers.IO) { StayApiClient.requestDevelopmentToken(baseUrl, tokenSubject, tokenRole, devPassword) }
-                            status = "Development token issued for role '$tokenRole'. It is held in memory only."
+                            StayApiClient.setSessionToken(token, baseUrl)
+                            status = "Development token issued and enabled for role '$tokenRole'. It is held in memory only."
                         } catch (e: Exception) { status = "Token request failed: ${e.message ?: "Unknown error"}" }
                         finally { busy = false }
                     }
