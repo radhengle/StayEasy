@@ -57,6 +57,8 @@ Entity responsibilities:
 
 The SQLAlchemy models are in `backend/app/models.py`; ordered schema changes are in `backend/alembic/versions/`. Do not use `Base.metadata.create_all()` as the production migration mechanism. CI verifies Alembic upgrades against a clean database.
 
+**Important schema caveat:** the ER diagram shows domain relationships; several legacy identifier columns (including `properties.owner_id`, `enquiries.customer_id`, and `reservations.customer_id`) are currently plain IDs rather than declared PostgreSQL foreign keys. Authorization is enforced in the API, but referential integrity is not yet database-enforced for every logical relationship. Before importing production data, run an orphan/duplicate audit, define a backfill policy for legacy/dev-token records, then add staged foreign-key constraints in a dedicated migration. Do not silently auto-create privileged accounts to satisfy missing references.
+
 ## 3. Authentication and account lifecycle
 
 ```mermaid
