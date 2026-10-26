@@ -56,17 +56,18 @@ class OwnerSettlementAccountLinkRequest(BaseModel):
 
 def _settlement_mode() -> str:
     app_env = os.getenv("APP_ENV", "development").strip().lower()
+    guarded_environment = app_env in {"stage", "staging", "prod", "production"}
     raw = os.getenv("PAYMENT_SETTLEMENT_MODE", "").strip().lower()
     if raw:
         mode = raw
     else:
         # Production defaults to owner routing so rent cannot accidentally remain
         # in StayEasy's primary merchant balance without an explicit decision.
-        mode = "owner_route" if app_env in {"staging", "production"} else "platform"
+        mode = "owner_route" if guarded_environment else "platform"
     if mode not in {"platform", "owner_route"}:
         raise HTTPException(503, "Payment settlement mode is invalid. Payments are disabled until it is corrected.")
     platform_approved = os.getenv("ALLOW_PLATFORM_SETTLEMENT_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
-    if app_env in {"staging", "production"} and mode == "platform" and not platform_approved:
+    if guarded_environment and mode == "platform" and not platform_approved:
         raise HTTPException(503, "Platform-only settlement is not explicitly approved in this environment. Configure owner_route or obtain the required settlement approval.")
     return mode
 
