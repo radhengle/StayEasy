@@ -402,6 +402,11 @@ def link_owner_settlement_account(
     if existing_for_provider:
         raise HTTPException(409, "This Razorpay linked account is already assigned to another owner.")
     row = db.scalar(select(m.OwnerSettlementAccount).where(m.OwnerSettlementAccount.owner_id == owner_id).with_for_update())
+    old_values = {
+        "linked_account_id": row.linked_account_id,
+        "status": row.status,
+    } if row is not None else {}
+    action = "owner_settlement_account_updated" if row is not None else "owner_settlement_account_linked"
     if row is None:
         row = m.OwnerSettlementAccount(
             owner_id=owner_id,
@@ -424,6 +429,18 @@ def link_owner_settlement_account(
         row.linked_by = str(actor["subject"])
         row.linked_at = _utcnow() if body.status == "active" else None
         row.updated_at = _utcnow()
+    db.add(m.AuditLog(
+        actor_id=str(actor["subject"]),
+        actor_role=str(actor["role"]),
+        entity_type="owner_settlement_account",
+        entity_id=owner_id,
+        action=action,
+        old_value=old_values,
+        new_value={
+            "linked_account_id": row.linked_account_id,
+            "status": row.status,
+        },
+    ))
     try:
         db.commit()
         db.refresh(row)
