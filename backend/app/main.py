@@ -1455,6 +1455,82 @@ def list_owner_invitations(property_id: int | None = None,
     return [invitation_payload(db, row, include_private=True) for row in rows]
 
 
+def tenant_invitation_history_payload(db: Session, invitation: m.PropertyInvitation) -> dict[str, Any]:
+    """Return a tenant-safe invitation row with its current reservation decision."""
+    reservation = db.get(m.Reservation, invitation.reservation_id) if invitation.reservation_id else None
+    reservation_status = reservation.status if reservation else ""
+
+    if invitation.status == "pending":
+        registration_status = "awaiting_tenant"
+        status_label = "Invitation awaiting your response"
+        status_message = "Review the proposed bed and first-period rent, then submit your registration."
+    elif invitation.status == "reassignment_pending":
+        registration_status = "action_required"
+        status_label = "Updated bed needs review"
+        status_message = "The owner proposed a different bed. Review the updated assignment before proceeding."
+    elif invitation.status == "revoked":
+        registration_status = "withdrawn"
+        status_label = "Invitation withdrawn"
+        status_message = "The owner withdrew this invitation. Contact the property owner if you still need a bed."
+    elif invitation.status == "expired" or reservation_status == "expired":
+        registration_status = "expired"
+        status_label = "Invitation or reservation expired"
+        status_message = "This invitation or reservation has expired. Ask the owner to send a new invitation."
+    elif invitation.status == "accepted":
+        if reservation_status == "pending":
+            registration_status = "under_review"
+            status_label = "Under owner review"
+            status_message = "Your registration was submitted. The owner has not made a decision yet."
+        elif reservation_status in {"confirmed", "checked_in"}:
+            registration_status = "approved"
+            status_label = "Approved by owner" if reservation_status == "confirmed" else "Approved · checked in"
+            status_message = "The owner approved your reservation. Your agreed rent terms remain available below."
+        elif reservation_status == "cancelled":
+            registration_status = "rejected"
+            status_label = "Not approved"
+            status_message = "The reservation was declined or cancelled. Any unpaid registration rent charge has been voided."
+        elif reservation_status == "completed":
+            registration_status = "completed"
+            status_label = "Stay completed"
+            status_message = "This reservation has been marked completed."
+        else:
+            registration_status = "submitted"
+            status_label = "Registration submitted"
+            status_message = "Your registration was submitted. Contact the owner if its status does not update."
+    else:
+        registration_status = invitation.status or "unknown"
+        status_label = {
+            "expired": "Invitation expired",
+            "revoked": "Invitation withdrawn",
+        }.get(invitation.status, invitation.status.replace("_", " ").capitalize() or "Status unavailable")
+        status_message = "Contact the property owner if you need help with this invitation."
+
+    quote_date = date.today()
+    if reservation and isinstance(reservation.terms_snapshot, dict):
+        saved_date = reservation.terms_snapshot.get("billable_start_date")
+        try:
+            if saved_date:
+                quote_date = date.fromisoformat(str(saved_date))
+        except ValueError:
+            # Keep the history visible even if an old row lacks a valid date.
+            pass
+
+    payload = {
+        **invitation_payload(db, invitation, include_private=False),
+        "registration_status": registration_status,
+        "registration_status_label": status_label,
+        "registration_status_message": status_message,
+        "reservation_id": reservation.id if reservation else None,
+        "reservation_status": reservation_status or None,
+        "owner_note": reservation.cancellation_reason.strip() if reservation and reservation.cancellation_reason else "",
+        "billable_quote": make_proration_quote(reservation.rent_snapshot if reservation else invitation.rent_snapshot, quote_date),
+        "requires_explicit_billable_terms_acknowledgement": invitation.status == "pending",
+        "required_document_categories": invitation.required_document_categories or [],
+        "document_request_reason": invitation.document_request_reason,
+    }
+    return payload
+
+
 @app.get("/tenant/invitations")
 def list_tenant_invitations(actor: dict = Depends(require_roles("customer")), db: Session = Depends(get_db)):
     user = db.get(m.User, actor_user_id(actor))
@@ -1464,17 +1540,19 @@ def list_tenant_invitations(actor: dict = Depends(require_roles("customer")), db
     rows = list(db.scalars(select(m.PropertyInvitation).where(
         or_(
             m.PropertyInvitation.recipient_user_id == user.id,
-            m.PropertyInvitation.recipient_email == email,
+            func.lower(m.PropertyInvitation.recipient_email) == email,
         ),
-        m.PropertyInvitation.status == "pending",
     ).order_by(m.PropertyInvitation.created_at.desc()).limit(100)))
-    return [{
-        **invitation_payload(db, row, include_private=False),
-        "billable_quote": make_proration_quote(row.rent_snapshot, date.today()),
-        "requires_explicit_billable_terms_acknowledgement": True,
-        "required_document_categories": row.required_document_categories or [],
-        "document_request_reason": row.document_request_reason,
-    } for row in rows]
+    now = datetime.now(timezone.utc)
+    changed = False
+    for row in rows:
+        expiry = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
+        if row.status == "pending" and expiry <= now:
+            row.status = "expired"
+            changed = True
+    if changed:
+        db.commit()
+    return [tenant_invitation_history_payload(db, row) for row in rows]
 
 
 @app.get("/invitations/resolve")
