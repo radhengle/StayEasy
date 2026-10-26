@@ -549,6 +549,10 @@ def owner_integration_status(
     settlement_mode = os.getenv("PAYMENT_SETTLEMENT_MODE", "").strip().lower()
     if not settlement_mode:
         settlement_mode = "owner_route" if APP_ENV in {"staging", "production"} else "platform"
+    platform_mode_approved = os.getenv("ALLOW_PLATFORM_SETTLEMENT_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
+    platform_mode_blocked = APP_ENV in {"staging", "production"} and settlement_mode == "platform" and not platform_mode_approved
+    if platform_mode_blocked:
+        settlement_mode = "owner_route"
     route_enabled = os.getenv("RAZORPAY_ROUTE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
     if actor["role"] == "owner":
         own_account = db.scalar(select(m.OwnerSettlementAccount).where(
@@ -607,6 +611,7 @@ def owner_integration_status(
         },
         "owner_settlement": {
             "mode": settlement_mode,
+            "platform_mode_blocked": platform_mode_blocked,
             "route_enabled": route_enabled,
             "ready_for_owner_routed_payments": settlement_mode == "owner_route" and route_enabled and active_owner_account_count > 0,
             "current_owner_account_status": current_account_status,
