@@ -547,10 +547,11 @@ def owner_integration_status(
         checkout_state = "not_configured"
 
     settlement_mode = os.getenv("PAYMENT_SETTLEMENT_MODE", "").strip().lower()
+    guarded_environment = APP_ENV in {"stage", "staging", "prod", "production"}
     if not settlement_mode:
-        settlement_mode = "owner_route" if APP_ENV in {"staging", "production"} else "platform"
+        settlement_mode = "owner_route" if guarded_environment else "platform"
     platform_mode_approved = os.getenv("ALLOW_PLATFORM_SETTLEMENT_IN_PRODUCTION", "").strip().lower() in {"1", "true", "yes", "on"}
-    platform_mode_blocked = APP_ENV in {"staging", "production"} and settlement_mode == "platform" and not platform_mode_approved
+    platform_mode_blocked = guarded_environment and settlement_mode == "platform" and not platform_mode_approved
     if platform_mode_blocked:
         settlement_mode = "owner_route"
     route_enabled = os.getenv("RAZORPAY_ROUTE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
