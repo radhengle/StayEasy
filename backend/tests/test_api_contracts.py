@@ -1860,6 +1860,84 @@ def test_online_payment_order_uses_server_amount_and_is_idempotent(monkeypatch):
     assert len(calls) == 1
 
 
+def test_indeterminate_order_creation_recovers_by_receipt_without_duplicate_order(monkeypatch):
+    charge_id, _, _ = _create_payment_scenario()
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_public")
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "test-secret-key")
+    created_calls = []
+
+    def indeterminate_create(amount_paise, receipt, notes):
+        created_calls.append((amount_paise, receipt, notes))
+        raise payment_routes.GatewayRequestError("request outcome indeterminate", ambiguous=True)
+
+    monkeypatch.setattr(payment_routes, "create_razorpay_order", indeterminate_create)
+    headers = {"Idempotency-Key": "tenant-order-recovery-01"}
+    first = client.post("/payments/orders", json={"charge_id": charge_id}, headers=headers)
+    assert first.status_code == 503, first.text
+    assert len(created_calls) == 1
+
+    with SessionLocal() as db:
+        attempt = db.scalar(select(m.PaymentAttempt).where(
+            m.PaymentAttempt.idempotency_key == "tenant-order-recovery-01"
+        ))
+        assert attempt is not None
+        assert attempt.status == "unknown"
+        assert attempt.provider_order_id is None
+        attempt_id = attempt.id
+        expected_receipt = f"se-{attempt.id}"
+
+    def recover_orders(receipt):
+        assert receipt == expected_receipt
+        return {"items": [{
+            "id": "order_recovered_stayeasy_01",
+            "receipt": receipt,
+            "amount": 12500,
+            "currency": "INR",
+            "amount_paid": 0,
+            "status": "created",
+        }]}
+
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_orders_by_receipt", recover_orders)
+    retry = client.post("/payments/orders", json={"charge_id": charge_id}, headers=headers)
+    assert retry.status_code == 201, retry.text
+    assert retry.json()["id"] == attempt_id
+    assert retry.json()["checkout_order_id"] == "order_recovered_stayeasy_01"
+    assert len(created_calls) == 1
+
+    with SessionLocal() as db:
+        attempt = db.get(m.PaymentAttempt, attempt_id)
+        assert attempt.status == "created"
+        assert attempt.provider_order_id == "order_recovered_stayeasy_01"
+
+
+def test_indeterminate_order_creation_stays_blocked_when_receipt_is_not_found(monkeypatch):
+    charge_id, _, _ = _create_payment_scenario()
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_public")
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "test-secret-key")
+    created_calls = []
+
+    def indeterminate_create(*args, **kwargs):
+        created_calls.append(True)
+        raise payment_routes.GatewayRequestError("request outcome indeterminate", ambiguous=True)
+
+    monkeypatch.setattr(payment_routes, "create_razorpay_order", indeterminate_create)
+    headers = {"Idempotency-Key": "tenant-order-recovery-missing-01"}
+    first = client.post("/payments/orders", json={"charge_id": charge_id}, headers=headers)
+    assert first.status_code == 503, first.text
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_orders_by_receipt", lambda _receipt: {"items": []})
+
+    retry = client.post("/payments/orders", json={"charge_id": charge_id}, headers=headers)
+    assert retry.status_code == 409, retry.text
+    assert len(created_calls) == 1
+    with SessionLocal() as db:
+        attempt = db.scalar(select(m.PaymentAttempt).where(
+            m.PaymentAttempt.idempotency_key == "tenant-order-recovery-missing-01"
+        ))
+        assert attempt is not None
+        assert attempt.status == "unknown"
+        assert attempt.provider_order_id is None
+
+
 def test_checkout_verification_fetches_provider_capture_and_posts_ledger_once(monkeypatch):
     import hashlib
     import hmac
