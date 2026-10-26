@@ -2813,7 +2813,7 @@ def test_route_payment_full_refund_requests_linked_account_transfer_reversal(mon
     assert refund.json()["status"] in {"requested", "pending", "unknown"}
 
 
-def test_route_partial_refund_is_blocked_before_provider_call(monkeypatch):
+def test_route_partial_refund_reverses_exact_amount_before_refunding(monkeypatch):
     response, _calls, _charge_id, _reservation_id, _property_id = _create_route_test_order(monkeypatch)
     assert response.status_code == 201, response.text
     attempt_id = response.json()["id"]
@@ -2823,25 +2823,76 @@ def test_route_partial_refund_is_blocked_before_provider_call(monkeypatch):
         attempt.status = "captured"
         attempt.provider_payment_id = "pay_stayeasy_route_partial_refund_01"
         attempt.captured_at = datetime.now(timezone.utc)
+        transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt_id))
+        assert transfer is not None
+        transfer_id = transfer.provider_transfer_id
+        assert transfer_id
         db.commit()
 
-    provider_calls = []
-    monkeypatch.setattr(payment_routes, "create_razorpay_refund",
-                        lambda *args, **kwargs: provider_calls.append(True))
+    reversal_calls = []
+    refund_calls = []
+    def fake_reversal(provider_transfer_id, amount_paise, notes):
+        reversal_calls.append((provider_transfer_id, amount_paise, notes))
+        return {"id": "rvrsl_stayeasy_route_partial_01", "transfer_id": provider_transfer_id, "amount": amount_paise}
+    def fake_refund(payment_id, amount_paise, notes, reverse_all=False):
+        refund_calls.append((payment_id, amount_paise, notes, reverse_all))
+        return {"id": "rfnd_stayeasy_route_partial_01", "amount": amount_paise, "status": "pending"}
+    monkeypatch.setattr(payment_routes, "create_razorpay_transfer_reversal", fake_reversal)
+    monkeypatch.setattr(payment_routes, "create_razorpay_refund", fake_refund)
     set_actor("owner-1", "owner")
     response = client.post(
         f"/payments/{attempt_id}/refund",
         json={"amount_paise": 5000, "reason": "Route partial refund test"},
         headers={"Idempotency-Key": "owner-route-partial-refund-01"},
     )
-    assert response.status_code == 409, response.text
-    assert "partial" in response.json()["detail"].lower()
-    assert provider_calls == []
-    with SessionLocal() as db:
-        assert db.scalar(select(func.count()).select_from(m.PaymentRefund).where(
-            m.PaymentRefund.payment_attempt_id == attempt_id
-        )) == 0
+    assert response.status_code == 202, response.text
+    assert len(reversal_calls) == 1
+    assert reversal_calls[0][0] == transfer_id
+    assert reversal_calls[0][1] == 5000
+    assert reversal_calls[0][2]["stayeasy_refund_id"] == str(response.json()["id"])
+    assert len(refund_calls) == 1
+    assert refund_calls[0][0] == "pay_stayeasy_route_partial_refund_01"
+    assert refund_calls[0][1] == 5000
+    assert refund_calls[0][3] is False
+    assert response.json()["provider_transfer_reversal_id"] == "rvrsl_stayeasy_route_partial_01"
+    assert response.json()["transfer_reversal_status"] == "created"
+    assert response.json()["status"] in {"requested", "pending", "unknown"}
 
+
+def test_route_partial_refund_stops_when_transfer_reversal_is_rejected(monkeypatch):
+    response, _calls, _charge_id, _reservation_id, _property_id = _create_route_test_order(monkeypatch)
+    assert response.status_code == 201, response.text
+    attempt_id = response.json()["id"]
+    with SessionLocal() as db:
+        attempt = db.get(m.PaymentAttempt, attempt_id)
+        assert attempt is not None
+        attempt.status = "captured"
+        attempt.provider_payment_id = "pay_stayeasy_route_reversal_rejected_01"
+        attempt.captured_at = datetime.now(timezone.utc)
+        db.commit()
+
+    refund_calls = []
+    def reject_reversal(*_args, **_kwargs):
+        raise payment_routes.GatewayRequestError("provider rejected reversal", ambiguous=False)
+    monkeypatch.setattr(payment_routes, "create_razorpay_transfer_reversal", reject_reversal)
+    monkeypatch.setattr(payment_routes, "create_razorpay_refund",
+                        lambda *args, **kwargs: refund_calls.append(True))
+    set_actor("owner-1", "owner")
+    response = client.post(
+        f"/payments/{attempt_id}/refund",
+        json={"amount_paise": 5000, "reason": "Route reversal rejection test"},
+        headers={"Idempotency-Key": "owner-route-reversal-rejected-01"},
+    )
+    assert response.status_code == 502, response.text
+    assert refund_calls == []
+    with SessionLocal() as db:
+        refund = db.scalar(select(m.PaymentRefund).where(
+            m.PaymentRefund.payment_attempt_id == attempt_id
+        ))
+        assert refund is not None
+        assert refund.status == "failed"
+        assert refund.transfer_reversal_status == "failed"
+        assert refund.provider_refund_id is None
 
 
 def test_admin_route_account_link_is_role_protected_and_audited(monkeypatch):
