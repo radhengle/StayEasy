@@ -34,6 +34,14 @@ def upgrade() -> None:
         if name not in account_indexes:
             op.create_index(name, "owner_settlement_accounts", columns, unique=False)
 
+    if inspect(bind).has_table("payment_attempts"):
+        attempt_columns = {column["name"] for column in inspect(bind).get_columns("payment_attempts")}
+        if "settlement_mode" not in attempt_columns:
+            op.add_column(
+                "payment_attempts",
+                sa.Column("settlement_mode", sa.String(length=24), nullable=False, server_default=sa.text("'platform'")),
+            )
+
     if not inspect(bind).has_table("payment_transfers"):
         op.create_table(
             "payment_transfers",
