@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request as FastAPIRequest
@@ -94,6 +95,11 @@ def create_razorpay_order(amount_paise: int, receipt: str, notes: dict[str, str]
         "partial_payment": False,
         "notes": notes,
     })
+
+
+def fetch_razorpay_orders_by_receipt(receipt: str) -> dict[str, Any]:
+    """Find an order after POST /orders timed out before its ID was persisted."""
+    return _gateway_request("GET", f"/orders?receipt={quote(receipt, safe='')}&count=100")
 
 
 def fetch_razorpay_payment(payment_id: str) -> dict[str, Any]:
@@ -229,6 +235,75 @@ def _find_attempt_for_customer(db: Session, attempt_id: int, customer_id: str) -
     if not attempt or attempt.customer_id != customer_id:
         raise HTTPException(404, "Payment attempt not found")
     return attempt
+
+
+def _recover_indeterminate_order_creation(db: Session, attempt: m.PaymentAttempt) -> bool:
+    """Resolve a timed-out order creation by its stable, unique Razorpay receipt.
+
+    Returns True only when a matching, still-created order is safe to launch in
+    Checkout. If the order exists in another state, persist its ID and require
+    payment-status reconciliation instead of silently creating a second order.
+    """
+    receipt = f"se-{attempt.id}"
+    try:
+        collection = fetch_razorpay_orders_by_receipt(receipt)
+    except GatewayRequestError as exc:
+        attempt.status = "unknown"
+        attempt.failure_code = "provider_order_lookup_unavailable"
+        attempt.updated_at = _utcnow()
+        db.commit()
+        raise HTTPException(
+            503,
+            "Razorpay order reconciliation is temporarily unavailable. Keep this payment attempt and retry status checking; do not start another payment.",
+        ) from exc
+
+    items = collection.get("items")
+    if not isinstance(items, list):
+        attempt.status = "unknown"
+        attempt.failure_code = "provider_order_lookup_invalid_response"
+        attempt.updated_at = _utcnow()
+        db.commit()
+        raise HTTPException(503, "Razorpay returned an invalid order lookup response. Do not start another payment.")
+
+    matching = [
+        item for item in items
+        if isinstance(item, dict) and str(item.get("receipt") or "") == receipt
+    ]
+    if len(matching) > 1:
+        attempt.status = "unknown"
+        attempt.failure_code = "multiple_provider_orders_for_receipt"
+        attempt.updated_at = _utcnow()
+        db.commit()
+        raise HTTPException(409, "Multiple Razorpay orders share this receipt. Finance reconciliation is required.")
+
+    if not matching:
+        # Absence from one lookup is not sufficient to prove the original create
+        # request failed; preserve the attempt and block any new order.
+        return False
+
+    order = matching[0]
+    provider_order_id = str(order.get("id") or "")
+    if (not provider_order_id or order.get("amount") != attempt.amount_paise
+            or str(order.get("currency") or "") != attempt.currency):
+        attempt.status = "unknown"
+        attempt.failure_code = "provider_order_amount_or_currency_mismatch"
+        attempt.updated_at = _utcnow()
+        db.commit()
+        raise HTTPException(409, "The located Razorpay order does not match the stored amount/currency. Finance reconciliation is required.")
+
+    attempt.provider_order_id = provider_order_id
+    if str(order.get("status") or "").lower() == "created":
+        attempt.status = "created"
+        attempt.failure_code = ""
+        checkout_ready = True
+    else:
+        attempt.status = "unknown"
+        attempt.failure_code = "provider_order_state_requires_reconciliation"
+        checkout_ready = False
+    attempt.updated_at = _utcnow()
+    db.commit()
+    db.refresh(attempt)
+    return checkout_ready
 
 
 def _set_charge_paid_if_settled(db: Session, charge: m.LedgerEntry) -> None:
@@ -448,8 +523,16 @@ def create_payment_order(
             raise HTTPException(409, "This idempotency key was already used for a different charge.")
         if existing.status in {"created", "authorized"}:
             return _checkout_payload(existing)
-        if existing.status in {"creating", "unknown"}:
-            raise HTTPException(409, "Payment order creation needs reconciliation; do not retry with a new key.")
+        if existing.status == "unknown":
+            if not existing.provider_order_id:
+                if _recover_indeterminate_order_creation(db, existing):
+                    return _checkout_payload(existing)
+                if existing.provider_order_id:
+                    raise HTTPException(409, "The existing Razorpay order was found but is not safe to relaunch. Check payment status; do not start another payment.")
+                raise HTTPException(409, "Razorpay has not yet returned a matching order for this attempt. Keep using the same request key and do not create another payment.")
+            raise HTTPException(409, "Payment status needs provider reconciliation. Check payment history; do not start another payment.")
+        if existing.status == "creating":
+            raise HTTPException(409, "Payment order creation is still in progress. Retry this same request shortly; do not start another payment.")
         raise HTTPException(409, "This request already has a terminal result. Use a new idempotency key to retry.")
 
     charge = db.scalar(select(m.LedgerEntry).where(m.LedgerEntry.id == charge_id).with_for_update())
