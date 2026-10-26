@@ -243,13 +243,23 @@ internal fun OwnerOnlinePaymentsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("${ownerPaymentText(selected, "property_name", "Property")} · Payment #${selected.optLong("id")}", color = SE.Muted, fontSize = 12.sp)
                     Text("Captured: ${ownerPaymentMoney(selected.optLong("amount_paise"))}", color = SE.Ink, fontWeight = FontWeight.Bold)
-                    OutlinedTextField(
-                        value = refundAmountRupees,
-                        onValueChange = { value -> refundAmountRupees = value.filter { it.isDigit() || it == '.' }.take(12) },
-                        label = { Text("Refund amount in ₹ (blank = full remaining amount)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    val routedPayment = selected.optJSONObject("owner_settlement")?.optString("mode") == "owner_route"
+                    if (routedPayment) {
+                        Text(
+                            "Owner-routed payments currently support one full refund only. Partial or follow-up refunds are blocked until amount-specific transfer reversal is available.",
+                            color = SE.Orange,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                    } else {
+                        OutlinedTextField(
+                            value = refundAmountRupees,
+                            onValueChange = { value -> refundAmountRupees = value.filter { it.isDigit() || it == '.' }.take(12) },
+                            label = { Text("Refund amount in ₹ (blank = full remaining amount)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                     OutlinedTextField(
                         value = refundReason,
                         onValueChange = { refundReason = it.take(500) },
