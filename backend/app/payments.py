@@ -49,6 +49,27 @@ class RefundRequest(BaseModel):
     amount_paise: int | None = Field(default=None, gt=0)
     reason: str = Field(default="", max_length=500)
 
+class OwnerSettlementAccountLinkRequest(BaseModel):
+    linked_account_id: str = Field(min_length=8, max_length=100, pattern=r"^acc_[A-Za-z0-9]+$")
+    status: str = Field(default="active", pattern=r"^(pending|active|suspended)$")
+
+
+def _settlement_mode() -> str:
+    raw = os.getenv("PAYMENT_SETTLEMENT_MODE", "").strip().lower()
+    if raw:
+        mode = raw
+    else:
+        # Production defaults to owner routing so rent cannot accidentally remain
+        # in StayEasy's primary merchant balance without an explicit decision.
+        mode = "owner_route" if os.getenv("APP_ENV", "development").strip().lower() in {"staging", "production"} else "platform"
+    if mode not in {"platform", "owner_route"}:
+        raise HTTPException(503, "Payment settlement mode is invalid. Payments are disabled until it is corrected.")
+    return mode
+
+
+def _razorpay_route_enabled() -> bool:
+    return os.getenv("RAZORPAY_ROUTE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
 
 def _credentials() -> tuple[str, str]:
     key_id = os.getenv("RAZORPAY_KEY_ID", "").strip()
@@ -97,6 +118,27 @@ def create_razorpay_order(amount_paise: int, receipt: str, notes: dict[str, str]
     })
 
 
+def create_razorpay_order_with_transfer(
+    amount_paise: int,
+    receipt: str,
+    notes: dict[str, str],
+    transfer: dict[str, Any],
+) -> dict[str, Any]:
+    """Create an INR order with one predeclared Route transfer to the verified owner account."""
+    return _gateway_request("POST", "/orders", {
+        "amount": amount_paise,
+        "currency": "INR",
+        "receipt": receipt[:40],
+        "partial_payment": False,
+        "notes": notes,
+        "transfers": [transfer],
+    })
+
+
+def fetch_razorpay_order(order_id: str) -> dict[str, Any]:
+    return _gateway_request("GET", f"/orders/{quote(order_id, safe='')}")
+
+
 def fetch_razorpay_orders_by_receipt(receipt: str) -> dict[str, Any]:
     """Find an order after POST /orders timed out before its ID was persisted."""
     return _gateway_request("GET", f"/orders?receipt={quote(receipt, safe='')}&count=100")
@@ -111,11 +153,18 @@ def fetch_razorpay_order_payments(order_id: str) -> dict[str, Any]:
     return _gateway_request("GET", f"/orders/{order_id}/payments")
 
 
-def create_razorpay_refund(payment_id: str, amount_paise: int, notes: dict[str, str]) -> dict[str, Any]:
-    return _gateway_request("POST", f"/payments/{payment_id}/refund", {
-        "amount": amount_paise,
-        "notes": notes,
-    })
+def create_razorpay_refund(
+    payment_id: str,
+    amount_paise: int,
+    notes: dict[str, str],
+    reverse_all: bool = False,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"amount": amount_paise, "notes": notes}
+    if reverse_all:
+        # Route supports automatic linked-account transfer reversal before the
+        # refund for a payment sent to a single linked account.
+        payload["reverse_all"] = True
+    return _gateway_request("POST", f"/payments/{payment_id}/refund", payload)
 
 
 def _utcnow() -> datetime:
@@ -199,6 +248,69 @@ def _require_finance_manager(db: Session, actor: dict[str, Any], property_id: in
     return prop
 
 
+def _owner_route_account_for_charge(db: Session, charge: m.LedgerEntry) -> m.OwnerSettlementAccount | None:
+    if _settlement_mode() != "owner_route":
+        return None
+    if not _razorpay_route_enabled():
+        raise HTTPException(503, "Owner settlement routing is not enabled with Razorpay. Online rent payments are paused.")
+    prop = db.get(m.Property, charge.property_id)
+    if prop is None:
+        raise HTTPException(404, "Property for this charge was not found.")
+    account = db.scalar(select(m.OwnerSettlementAccount).where(
+        m.OwnerSettlementAccount.owner_id == prop.owner_id,
+        m.OwnerSettlementAccount.status == "active",
+    ))
+    if account is None:
+        raise HTTPException(503, "This property's owner has not completed approved payment settlement setup. No payment order was created.")
+    return account
+
+
+def _assert_existing_settlement_mode(db: Session, attempt: m.PaymentAttempt) -> None:
+    mode = _settlement_mode()
+    transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt.id))
+    if mode == "owner_route":
+        if not _razorpay_route_enabled() or transfer is None:
+            raise HTTPException(409, "Settlement configuration changed after this order was created. Contact support; do not start another payment.")
+        if transfer.status not in {"created", "processed", "pending"}:
+            raise HTTPException(409, "Owner settlement is not confirmed for this order. Finance reconciliation is required.")
+    elif transfer is not None:
+        raise HTTPException(409, "This order was created with owner settlement routing. Restore its original settlement configuration before retrying.")
+
+
+def _record_route_transfer_from_order(
+    db: Session,
+    attempt: m.PaymentAttempt,
+    order: dict[str, Any],
+) -> bool:
+    transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt.id))
+    if transfer is None:
+        return True
+    provider_order_id = str(order.get("id") or "")
+    items = order.get("transfers")
+    if not provider_order_id or not isinstance(items, list) or len(items) != 1:
+        return False
+    item = items[0]
+    if not isinstance(item, dict):
+        return False
+    transfer_id = str(item.get("id") or "")
+    recipient = str(item.get("recipient") or item.get("account") or "")
+    if (
+        not transfer_id.startswith("trf_")
+        or recipient != transfer.linked_account_id
+        or item.get("amount") != transfer.amount_paise
+        or str(item.get("currency") or "") != transfer.currency
+        or str(item.get("status") or "").lower() != "created"
+    ):
+        return False
+    transfer.provider_order_id = provider_order_id
+    transfer.provider_transfer_id = transfer_id
+    transfer.status = "created"
+    transfer.settlement_status = str(item.get("settlement_status") or "pending")[:24]
+    transfer.failure_code = ""
+    transfer.updated_at = _utcnow()
+    return True
+
+
 def _attempt_payload(attempt: m.PaymentAttempt) -> dict[str, Any]:
     return {
         "id": attempt.id,
@@ -227,6 +339,91 @@ def _checkout_payload(attempt: m.PaymentAttempt) -> dict[str, Any]:
         "checkout_order_id": attempt.provider_order_id,
         "checkout_amount": attempt.amount_paise,
         "checkout_currency": attempt.currency,
+    }
+
+
+@router.get("/payments/owner/settlement-status")
+def owner_settlement_status(
+    actor: dict = Depends(require_roles("owner")),
+    db: Session = Depends(get_db),
+):
+    account = db.scalar(select(m.OwnerSettlementAccount).where(m.OwnerSettlementAccount.owner_id == str(actor["subject"])))
+    return {
+        "mode": _settlement_mode(),
+        "route_enabled": _razorpay_route_enabled(),
+        "account_status": account.status if account else "not_configured",
+        "linked_account_configured": bool(account and account.status == "active"),
+        "note": "Route accounts must be onboarded and KYC-approved in Razorpay before an administrator links the account here.",
+    }
+
+
+@router.get("/payments/admin/owner-settlement-accounts")
+def list_owner_settlement_accounts(
+    actor: dict = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    rows = list(db.scalars(select(m.OwnerSettlementAccount).order_by(m.OwnerSettlementAccount.owner_id.asc())))
+    return {"accounts": [{
+        "owner_id": row.owner_id,
+        "linked_account_id": row.linked_account_id,
+        "status": row.status,
+        "linked_by": row.linked_by,
+        "linked_at": row.linked_at.isoformat() if row.linked_at else None,
+    } for row in rows]}
+
+
+@router.put("/payments/admin/owner-settlement-accounts/{owner_id}")
+def link_owner_settlement_account(
+    owner_id: str,
+    body: OwnerSettlementAccountLinkRequest,
+    actor: dict = Depends(require_roles("admin")),
+    db: Session = Depends(get_db),
+):
+    owner = db.get(m.User, owner_id)
+    if owner is None or owner.role != "owner" or not owner.is_active:
+        raise HTTPException(404, "Active approved owner account not found.")
+    if body.status == "active" and not _razorpay_route_enabled():
+        raise HTTPException(503, "Enable Razorpay Route only after the provider has approved the Route feature and linked account.")
+    existing_for_provider = db.scalar(select(m.OwnerSettlementAccount).where(
+        m.OwnerSettlementAccount.linked_account_id == body.linked_account_id,
+        m.OwnerSettlementAccount.owner_id != owner_id,
+    ))
+    if existing_for_provider:
+        raise HTTPException(409, "This Razorpay linked account is already assigned to another owner.")
+    row = db.scalar(select(m.OwnerSettlementAccount).where(m.OwnerSettlementAccount.owner_id == owner_id).with_for_update())
+    if row is None:
+        row = m.OwnerSettlementAccount(
+            owner_id=owner_id,
+            linked_account_id=body.linked_account_id,
+            status=body.status,
+            linked_by=str(actor["subject"]),
+            linked_at=_utcnow() if body.status == "active" else None,
+        )
+        db.add(row)
+    else:
+        if row.linked_account_id != body.linked_account_id:
+            active_transfer = db.scalar(select(m.PaymentTransfer).where(
+                m.PaymentTransfer.owner_id == owner_id,
+                m.PaymentTransfer.status.in_(("creating", "created", "pending", "unknown")),
+            ))
+            if active_transfer:
+                raise HTTPException(409, "Owner has unsettled transfer records. Reconcile them before changing the linked account.")
+        row.linked_account_id = body.linked_account_id
+        row.status = body.status
+        row.linked_by = str(actor["subject"])
+        row.linked_at = _utcnow() if body.status == "active" else None
+        row.updated_at = _utcnow()
+    try:
+        db.commit()
+        db.refresh(row)
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(409, "Owner settlement account conflicts with an existing provider account link.") from exc
+    return {
+        "owner_id": row.owner_id,
+        "linked_account_id": row.linked_account_id,
+        "status": row.status,
+        "linked_at": row.linked_at.isoformat() if row.linked_at else None,
     }
 
 
