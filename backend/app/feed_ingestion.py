@@ -61,7 +61,10 @@ def _coordinate(value: object, minimum: float, maximum: float) -> float | None:
     """Accept finite numeric coordinates only; bool is an int subclass in Python."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    coordinate = float(value)
+    try:
+        coordinate = float(value)
+    except (OverflowError, ValueError):
+        return None
     if not math.isfinite(coordinate) or not minimum <= coordinate <= maximum:
         return None
     return coordinate
