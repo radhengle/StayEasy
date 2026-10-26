@@ -29,7 +29,6 @@ def upgrade() -> None:
         )
     account_indexes = {index["name"] for index in inspect(bind).get_indexes("owner_settlement_accounts")}
     for name, columns in (
-        ("ix_owner_settlement_accounts_owner_id", ["owner_id"]),
         ("ix_owner_settlement_accounts_status", ["status"]),
     ):
         if name not in account_indexes:
@@ -57,7 +56,6 @@ def upgrade() -> None:
         )
     transfer_indexes = {index["name"] for index in inspect(bind).get_indexes("payment_transfers")}
     for name, columns in (
-        ("ix_payment_transfers_payment_attempt_id", ["payment_attempt_id"]),
         ("ix_payment_transfers_owner_id", ["owner_id"]),
         ("ix_payment_transfers_provider_order_id", ["provider_order_id"]),
         ("ix_payment_transfers_status", ["status"]),
