@@ -1076,6 +1076,18 @@ def request_payment_refund(
     if amount < 100 or amount > available:
         raise HTTPException(422, "Refund must be at least INR 1.00 and no greater than the unrefunded captured amount.")
 
+    owner_transfer = db.scalar(select(m.PaymentTransfer).where(
+        m.PaymentTransfer.payment_attempt_id == attempt.id
+    ))
+    if owner_transfer is not None and (reserved > 0 or amount != attempt.amount_paise):
+        # reverse_all reverses the Route transfer(s) in full, not a proportionally
+        # calculated partial share. Never partially refund a routed payment and
+        # accidentally pull the owner's entire rent transfer back.
+        raise HTTPException(
+            409,
+            "Partial or subsequent refunds for owner-routed payments are blocked until amount-specific Route transfer reversal is available. This request did not reach Razorpay.",
+        )
+
     refund = m.PaymentRefund(
         payment_attempt_id=attempt.id,
         amount_paise=amount,
@@ -1097,7 +1109,6 @@ def request_payment_refund(
             "stayeasy_payment_attempt_id": str(attempt.id),
             "stayeasy_refund_id": str(refund.id),
         }
-        owner_transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt.id))
         if owner_transfer is not None:
             # This payment was routed to a single owner linked account. Have Razorpay
             # reverse the linked-account transfer before returning money to the tenant.
