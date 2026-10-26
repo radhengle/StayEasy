@@ -1455,6 +1455,104 @@ def list_owner_invitations(property_id: int | None = None,
     return [invitation_payload(db, row, include_private=True) for row in rows]
 
 
+def tenant_invitation_history_payload(db: Session, invitation: m.PropertyInvitation) -> dict[str, Any]:
+    """Return a tenant-safe invitation row with its current reservation decision."""
+    reservation = db.get(m.Reservation, invitation.reservation_id) if invitation.reservation_id else None
+    reservation_status = reservation.status if reservation else ""
+
+    if invitation.status == "pending":
+        registration_status = "awaiting_tenant"
+        status_label = "Invitation awaiting your response"
+        status_message = "Review the proposed bed and first-period rent, then submit your registration."
+    elif invitation.status == "reassignment_pending":
+        registration_status = "action_required"
+        status_label = "Updated bed needs review"
+        status_message = "The owner proposed a different bed. Review the updated assignment before proceeding."
+    elif invitation.status == "revoked":
+        registration_status = "withdrawn"
+        status_label = "Invitation withdrawn"
+        status_message = "The owner withdrew this invitation. Contact the property owner if you still need a bed."
+    elif invitation.status == "expired" or reservation_status == "expired":
+        registration_status = "expired"
+        status_label = "Invitation or reservation expired"
+        status_message = "This invitation or reservation has expired. Ask the owner to send a new invitation."
+    elif invitation.status == "accepted":
+        if reservation_status == "pending":
+            registration_status = "under_review"
+            status_label = "Under owner review"
+            status_message = "Your registration was submitted. The owner has not made a decision yet."
+        elif reservation_status in {"confirmed", "checked_in"}:
+            registration_status = "approved"
+            status_label = "Approved by owner" if reservation_status == "confirmed" else "Approved · checked in"
+            status_message = "The owner approved your reservation. Your agreed rent terms remain available below."
+        elif reservation_status == "cancelled":
+            terms = reservation.terms_snapshot if isinstance(reservation.terms_snapshot, dict) else {}
+            if terms.get("owner_decision") == "rejected":
+                registration_status = "rejected"
+                status_label = "Not approved"
+                status_message = "The owner declined this registration. Any unpaid registration rent charge has been voided."
+            else:
+                registration_status = "cancelled"
+                status_label = "Reservation cancelled"
+                status_message = "This reservation was cancelled after review. Check the owner note or contact the property owner for details."
+        elif reservation_status == "completed":
+            registration_status = "completed"
+            status_label = "Stay completed"
+            status_message = "This reservation has been marked completed."
+        else:
+            registration_status = "submitted"
+            status_label = "Registration submitted"
+            status_message = "Your registration was submitted. Contact the owner if its status does not update."
+    else:
+        registration_status = invitation.status or "unknown"
+        status_label = {
+            "expired": "Invitation expired",
+            "revoked": "Invitation withdrawn",
+        }.get(invitation.status, invitation.status.replace("_", " ").capitalize() or "Status unavailable")
+        status_message = "Contact the property owner if you need help with this invitation."
+
+    quote_date = date.today()
+    if reservation and isinstance(reservation.terms_snapshot, dict):
+        saved_date = reservation.terms_snapshot.get("billable_start_date")
+        try:
+            if saved_date:
+                quote_date = date.fromisoformat(str(saved_date))
+        except ValueError:
+            # Keep the history visible even if an old row lacks a valid date.
+            pass
+
+    payload = {
+        **invitation_payload(db, invitation, include_private=False),
+        "registration_status": registration_status,
+        "registration_status_label": status_label,
+        "registration_status_message": status_message,
+        "reservation_id": reservation.id if reservation else None,
+        "reservation_status": reservation_status or None,
+        "owner_note": reservation.cancellation_reason.strip() if reservation and reservation.cancellation_reason else "",
+        "billable_quote": make_proration_quote(reservation.rent_snapshot if reservation else invitation.rent_snapshot, quote_date),
+        "requires_explicit_billable_terms_acknowledgement": invitation.status == "pending",
+        "required_document_categories": invitation.required_document_categories or [],
+        "document_request_reason": invitation.document_request_reason,
+    }
+    # After reassignment, the accepted reservation is the authoritative source
+    # for the bed and price shown in tenant history; the original invitation row
+    # intentionally retains the originally proposed unit.
+    if reservation and reservation.unit_id:
+        assigned_unit = db.get(m.PropertyUnit, reservation.unit_id)
+        if assigned_unit:
+            payload.update({
+                "unit_id": assigned_unit.id,
+                "floor_label": assigned_unit.floor_label,
+                "room_code": assigned_unit.room_code,
+                "unit_code": assigned_unit.unit_code,
+                "unit_status": invitation_unit_state(db, assigned_unit),
+                "monthly_rent": reservation.rent_snapshot,
+                "deposit": reservation.deposit_snapshot,
+                "move_in_date": reservation.move_in_date.isoformat(),
+            })
+    return payload
+
+
 @app.get("/tenant/invitations")
 def list_tenant_invitations(actor: dict = Depends(require_roles("customer")), db: Session = Depends(get_db)):
     user = db.get(m.User, actor_user_id(actor))
@@ -1464,17 +1562,19 @@ def list_tenant_invitations(actor: dict = Depends(require_roles("customer")), db
     rows = list(db.scalars(select(m.PropertyInvitation).where(
         or_(
             m.PropertyInvitation.recipient_user_id == user.id,
-            m.PropertyInvitation.recipient_email == email,
+            func.lower(m.PropertyInvitation.recipient_email) == email,
         ),
-        m.PropertyInvitation.status == "pending",
     ).order_by(m.PropertyInvitation.created_at.desc()).limit(100)))
-    return [{
-        **invitation_payload(db, row, include_private=False),
-        "billable_quote": make_proration_quote(row.rent_snapshot, date.today()),
-        "requires_explicit_billable_terms_acknowledgement": True,
-        "required_document_categories": row.required_document_categories or [],
-        "document_request_reason": row.document_request_reason,
-    } for row in rows]
+    now = datetime.now(timezone.utc)
+    changed = False
+    for row in rows:
+        expiry = row.expires_at if row.expires_at.tzinfo else row.expires_at.replace(tzinfo=timezone.utc)
+        if row.status == "pending" and expiry <= now:
+            row.status = "expired"
+            changed = True
+    if changed:
+        db.commit()
+    return [tenant_invitation_history_payload(db, row) for row in rows]
 
 
 @app.get("/invitations/resolve")
@@ -1488,14 +1588,12 @@ def resolve_tenant_invitation(token: str = Query(min_length=20, max_length=200),
     if invitation.status == "pending" and expires_at <= now:
         invitation.status = "expired"
         db.commit()
-    quote = make_proration_quote(invitation.rent_snapshot, date.today())
     return {
-        **invitation_payload(db, invitation, include_private=False),
+        **tenant_invitation_history_payload(db, invitation),
         "recipient_email": invitation.recipient_email,
         "recipient_name": invitation.recipient_name,
-        "billable_quote": quote,
         "requires_email_match": True,
-        "requires_explicit_billable_terms_acknowledgement": True,
+        "requires_explicit_billable_terms_acknowledgement": invitation.status == "pending",
     }
 
 
@@ -2222,7 +2320,31 @@ def update_reservation(reservation_id: int, body: ReservationStatus, actor: dict
     if body.status != item.status and body.status not in allowed_transitions.get(item.status, set()):
         raise HTTPException(409, f"Cannot move reservation from {item.status} to {body.status}")
     old = {"status": item.status, "expires_at": item.expires_at.isoformat() if item.expires_at else None}
+    previous_status = item.status
     item.status = body.status
+    # Keep the explicit decision for tenant-facing history. "cancelled" from a
+    # pending reservation is the owner's decline; cancellation after approval is
+    # a different outcome and must not be shown as a rejection.
+    linked_invitation_id = db.scalar(select(m.PropertyInvitation.id).where(
+        m.PropertyInvitation.reservation_id == item.id
+    ).limit(1))
+    if linked_invitation_id:
+        terms = dict(item.terms_snapshot or {})
+        decision = None
+        if body.status == "confirmed":
+            decision = "approved"
+        elif body.status == "cancelled" and previous_status == "pending":
+            decision = "rejected"
+        elif body.status == "cancelled" and previous_status == "confirmed":
+            decision = "cancelled_after_approval"
+        elif body.status == "expired":
+            decision = "expired"
+        if decision:
+            terms["owner_decision"] = decision
+            terms["owner_decision_at"] = datetime.now(timezone.utc).isoformat()
+            if body.cancellation_reason.strip():
+                terms["owner_decision_note"] = body.cancellation_reason.strip()
+            item.terms_snapshot = terms
     # A confirmed or closed request is no longer a 24-hour pending hold.
     item.expires_at = body.expires_at
     item.cancellation_reason = body.cancellation_reason

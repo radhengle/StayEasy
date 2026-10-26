@@ -132,8 +132,13 @@ internal fun TenantInvitationRegistrationScreen(
         } else {
             runCatching {
                 withContext(Dispatchers.IO) { StayApiClient.tenantInvitations(baseUrl, sessionToken!!) }
-            }.onSuccess { invitations = it }
-             .onFailure { error = it.message ?: "Could not load invitations for this account." }
+            }.onSuccess { rows ->
+                invitations = rows
+                val currentId = invitation?.optLong("id") ?: 0L
+                if (currentId > 0L) {
+                    rows.firstOrNull { it.optLong("id") == currentId }?.let { invitation = it }
+                }
+            }.onFailure { error = it.message ?: "Could not load invitations for this account." }
         }
     }
 
@@ -219,9 +224,13 @@ internal fun TenantInvitationRegistrationScreen(
     val quote = current?.optJSONObject("billable_quote")
     val monthlyRent = current?.optLong("monthly_rent") ?: 0L
     val deposit = current?.optLong("deposit") ?: 0L
-    val canSubmit = !submitting && current != null && !sessionToken.isNullOrBlank() &&
+    val canStartRegistration = current != null &&
+        current.optString("status") == "pending" &&
+        current.optBoolean("can_accept", true)
+    val currentRegistrationStatus = invitationText(current, "registration_status")
+    val canSubmit = !submitting && canStartRegistration && !sessionToken.isNullOrBlank() &&
         phone.filter(Char::isDigit).length >= 8 && profileAcknowledged && rentAcknowledged &&
-        missingDocs.isEmpty() && current.optBoolean("can_accept", current.optString("status") == "pending")
+        missingDocs.isEmpty()
 
     Column(Modifier.fillMaxSize().background(SE.Background).padding(horizontal = 16.dp)) {
         Row(
@@ -233,7 +242,7 @@ internal fun TenantInvitationRegistrationScreen(
             Spacer(Modifier.size(10.dp))
             Column(Modifier.weight(1f)) {
                 Text("Your registration invitation", color = SE.Ink, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                Text("Confirm your profile, bed and first rent amount before submitting.", color = SE.Muted, fontSize = 11.sp)
+                Text("Complete registration or track the owner's decision.", color = SE.Muted, fontSize = 11.sp)
             }
             TextButton(onClick = { refresh++ }) {
                 Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
@@ -278,12 +287,19 @@ internal fun TenantInvitationRegistrationScreen(
                                     .clickable { selectAccountInvitation(row) }.padding(10.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(Icons.Filled.Description, null, tint = SE.Blue)
+                                val rowStatus = invitationText(row, "registration_status")
+                                Icon(Icons.Filled.Description, null,
+                                    tint = if (rowStatus in setOf("approved", "completed")) SE.Blue else if (rowStatus in setOf("rejected", "cancelled", "expired", "withdrawn")) SE.Red else SE.Orange)
                                 Spacer(Modifier.size(8.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(invitationText(row, "property_name", "Property invitation"), color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
                                     Text("Room ${invitationText(row, "room_code")} · ${invitationText(row, "unit_code")} · Move-in ${invitationText(row, "move_in_date")}",
                                         color = SE.Muted, fontSize = 10.sp)
+                                    Text(
+                                        invitationText(row, "registration_status_label", "Status unavailable"),
+                                        color = if (rowStatus in setOf("approved", "completed")) SE.Blue else if (rowStatus in setOf("rejected", "cancelled", "expired", "withdrawn")) SE.Red else SE.Orange,
+                                        fontSize = 10.sp, fontWeight = FontWeight.SemiBold
+                                    )
                                 }
                                 Text("Open", color = SE.Blue, fontWeight = FontWeight.Bold, fontSize = 11.sp)
                             }
@@ -322,12 +338,13 @@ internal fun TenantInvitationRegistrationScreen(
                                 Text("₹${String.format(Locale.US, "%,d", deposit)}", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 17.sp)
                             }
                         }
-                        if (invitationText(current, "unit_status") != "available") {
+                        if (current.optString("status") == "pending" && invitationText(current, "unit_status") != "available") {
                             Text("This bed is no longer available. Do not submit; contact the owner for another assignment.", color = SE.Red, fontSize = 12.sp)
                         }
                     }
                 }
 
+                if (canStartRegistration) {
                 Card(shape = SE.cardShape(18.dp), colors = CardDefaults.cardColors(containerColor = SE.Surface)) {
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("Your tenant profile", color = SE.Ink, fontWeight = FontWeight.Bold, fontSize = 15.sp)
@@ -469,6 +486,51 @@ internal fun TenantInvitationRegistrationScreen(
                     }
                 }, modifier = Modifier.fillMaxWidth()) {
                     Text(if (submitting) "Submitting registration…" else "Confirm and submit registration")
+                }
+                } else {
+                    val statusLabel = invitationText(current, "registration_status_label", "Status unavailable")
+                    val statusMessage = invitationText(current, "registration_status_message", "Contact the property owner for an update.")
+                    val isPositive = currentRegistrationStatus in setOf("approved", "completed")
+                    val isNegative = currentRegistrationStatus in setOf("rejected", "cancelled", "expired", "withdrawn")
+                    Card(
+                        shape = SE.cardShape(18.dp),
+                        colors = CardDefaults.cardColors(containerColor = SE.Surface),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                            Text(statusLabel, color = if (isPositive) SE.Blue else if (isNegative) SE.Red else SE.Orange,
+                                fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                            Text(statusMessage, color = SE.Ink, fontSize = 12.sp, lineHeight = 18.sp)
+                            val reservationId = current.optLong("reservation_id")
+                            val reservationStatus = invitationText(current, "reservation_status")
+                            if (reservationId > 0L) {
+                                Text("Registration #${current.optLong("id")} · Reservation #$reservationId",
+                                    color = SE.Muted, fontSize = 11.sp)
+                            }
+                            if (reservationStatus.isNotBlank()) {
+                                Text("Reservation status: ${reservationStatus.replace('_', ' ')}",
+                                    color = SE.Muted, fontSize = 11.sp)
+                            }
+                            if (quote != null && invitationText(quote, "billable_start_date").isNotBlank()) {
+                                HorizontalDivider(color = SE.Border)
+                                Text("Agreed billable start: ${invitationText(quote, "billable_start_date")}",
+                                    color = SE.Ink, fontSize = 12.sp)
+                                Text("First-period rent: ₹${invitationText(quote, "first_period_rent")} · Monthly rent: ₹${invitationText(quote, "monthly_rent")}",
+                                    color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                                Text("This is a ledger record, not proof that payment was collected.",
+                                    color = SE.Muted, fontSize = 10.sp, lineHeight = 14.sp)
+                            }
+                            if (invitationText(current, "owner_note").isNotBlank()) {
+                                Text("Owner note: ${invitationText(current, "owner_note")}",
+                                    color = SE.Orange, fontSize = 11.sp, lineHeight = 16.sp)
+                            }
+                            OutlinedButton(onClick = { refresh++ }, modifier = Modifier.fillMaxWidth()) {
+                                Icon(Icons.Filled.Refresh, contentDescription = null)
+                                Spacer(Modifier.size(7.dp))
+                                Text("Refresh registration status")
+                            }
+                        }
+                    }
                 }
             }
 

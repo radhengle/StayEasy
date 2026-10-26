@@ -706,7 +706,9 @@ def test_owner_invites_specific_tenant_and_acceptance_reserves_only_once_with_ac
     set_actor("invite-tenant-1", "customer")
     invitation_list = client.get("/tenant/invitations")
     assert invitation_list.status_code == 200, invitation_list.text
-    assert any(item["id"] == first_body["id"] for item in invitation_list.json())
+    initial_row = next(item for item in invitation_list.json() if item["id"] == first_body["id"])
+    assert initial_row["registration_status"] == "awaiting_tenant"
+    assert initial_row["registration_status_label"] == "Invitation awaiting your response"
     assert all("invitation_url" not in item for item in invitation_list.json())
 
     resolved = client.get("/invitations/resolve", params={"token": token})
@@ -738,6 +740,17 @@ def test_owner_invites_specific_tenant_and_acceptance_reserves_only_once_with_ac
     assert accepted_body["charge_created"] is True
     assert accepted_body["charge_amount_paise"] == quote["first_period_rent_paise"]
     assert accepted_body["billable_quote"]["first_period_rent_paise"] == quote["first_period_rent_paise"]
+    submitted_history = client.get("/tenant/invitations")
+    assert submitted_history.status_code == 200, submitted_history.text
+    submitted_row = next(item for item in submitted_history.json() if item["id"] == first_body["id"])
+    assert submitted_row["registration_status"] == "under_review"
+    assert submitted_row["reservation_status"] == "pending"
+    assert submitted_row["reservation_id"] == accepted_body["reservation_id"]
+    assert submitted_row["billable_quote"]["billable_start_date"] == quote["billable_start_date"]
+    resolved_after_submission = client.get("/invitations/resolve", params={"token": token})
+    assert resolved_after_submission.status_code == 200, resolved_after_submission.text
+    assert resolved_after_submission.json()["registration_status"] == "under_review"
+    assert resolved_after_submission.json()["billable_quote"]["billable_start_date"] == quote["billable_start_date"]
 
     # Simulate the server committing registration while the HTTP response is lost.
     # A retry the following day must return the original billable terms and must
@@ -789,6 +802,22 @@ def test_owner_invites_specific_tenant_and_acceptance_reserves_only_once_with_ac
     assert competing_acceptance.status_code == 409, competing_acceptance.text
 
     set_actor("owner-1", "owner")
+    approved = client.post(
+        f"/owner/reservations/{accepted_body['reservation_id']}/status",
+        json={"status": "confirmed"},
+    )
+    assert approved.status_code == 200, approved.text
+
+    set_actor("invite-tenant-1", "customer")
+    approved_history = client.get("/tenant/invitations")
+    assert approved_history.status_code == 200, approved_history.text
+    approved_row = next(item for item in approved_history.json() if item["id"] == first_body["id"])
+    assert approved_row["registration_status"] == "approved"
+    assert approved_row["registration_status_label"] == "Approved by owner"
+    assert approved_row["reservation_status"] == "confirmed"
+    assert approved_row["billable_quote"]["billable_start_date"] == quote["billable_start_date"]
+
+    set_actor("owner-1", "owner")
     notifications = client.get("/notifications")
     assert notifications.status_code == 200, notifications.text
     assert any("Tenant registration submitted" in row["title"] for row in notifications.json())
@@ -822,6 +851,15 @@ def test_cancelling_unpaid_invitation_reservation_voids_rent_charge():
     invoice = next(row for row in ledger.json() if row["reservation_id"] == reservation_id and row["category"] == "rent_charge")
     assert invoice["status"] == "cancelled"
     assert cancelled.json()["cancelled_rent_charge_ids"] == [invoice["id"]]
+    set_actor("cancel-tenant-1", "customer")
+    history = client.get("/tenant/invitations")
+    assert history.status_code == 200, history.text
+    rejected_row = next(row for row in history.json() if row["id"] == invitation.json()["id"])
+    assert rejected_row["registration_status"] == "rejected"
+    assert rejected_row["registration_status_label"] == "Not approved"
+    assert rejected_row["reservation_status"] == "cancelled"
+    assert "declined" in rejected_row["registration_status_message"].lower()
+    set_actor("owner-1", "owner")
     units = client.get("/owner/units", params={"property_id": prop["id"]})
     assert next(row for row in units.json() if row["id"] == unit["id"])["status"] == "available"
 
