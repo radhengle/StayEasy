@@ -24,6 +24,9 @@ def ensure_env() -> dict[str, str]:
         "ACCESS_TOKEN_MINUTES":"120", "DEV_TOKEN_PASSWORD":secrets.token_urlsafe(20),
         "API_PORT":"8000", "API_BIND_HOST":"127.0.0.1", "SEED_DEMO_DATA":"true",
         "CORS_ORIGINS":"http://localhost:8080,http://127.0.0.1:8080",
+        "SMTP_HOST":"mailpit", "SMTP_PORT":"1025", "SMTP_STARTTLS":"false",
+        "SMTP_USERNAME":"", "SMTP_PASSWORD":"",
+        "SMTP_FROM_EMAIL":"no-reply@stayeasy.local",
         "RAZORPAY_KEY_ID":"", "RAZORPAY_KEY_SECRET":"", "RAZORPAY_WEBHOOK_SECRET":"",
         "PROPERTY_FEED_URL":"", "PROPERTY_FEED_SOURCE":"partner-feed",
         "PROPERTY_FEED_TOKEN":"", "PROPERTY_FEED_POLL_SECONDS":"300"
@@ -52,7 +55,9 @@ def main() -> int:
     if args.with_feed and not env.get("PROPERTY_FEED_URL"):
         print("Set an authorised PROPERTY_FEED_URL in .env before using --with-feed.", file=sys.stderr)
         return 2
-    command = ["docker", "compose"]
+    # Mailpit captures verification/reset emails locally, making real account
+    # registration testable without exposing codes through API responses.
+    command = ["docker", "compose", "--profile", "devmail"]
     if args.with_feed:
         command += ["--profile", "ingestion"]
     command += ["up", "--build", "-d"]
@@ -73,6 +78,8 @@ def main() -> int:
                     print("API: " + health_url)
                     print("API docs: http://127.0.0.1:" + port + "/docs")
                     print("Android emulator URL: http://10.0.2.2:" + port)
+                    if env.get("SMTP_HOST") == "mailpit":
+                        print("Local verification email inbox: http://127.0.0.1:8025")
                     print("Demo property/stay/rent rows are test fixtures, not real rental inventory.")
                     print("Development-token password (enter in API connection screen):")
                     print(env["DEV_TOKEN_PASSWORD"])

@@ -90,8 +90,14 @@ def send_security_code(recipient: str, subject: str, code: str, body_text: str) 
         else:
             with smtplib.SMTP(host, port, timeout=10) as server:
                 server.ehlo()
-                server.starttls(context=ssl.create_default_context())
-                server.ehlo()
+                # STARTTLS remains the default. Local Mailpit can explicitly disable it
+                # because the inbox is isolated on the development-only Compose network.
+                starttls_enabled = os.getenv("SMTP_STARTTLS", "true").strip().lower() not in {"0", "false", "no", "off"}
+                if not starttls_enabled and os.getenv("APP_ENV", "development").strip().lower() != "development":
+                    raise HTTPException(status_code=503, detail="Non-TLS SMTP is allowed only in local development")
+                if starttls_enabled:
+                    server.starttls(context=ssl.create_default_context())
+                    server.ehlo()
                 if username:
                     server.login(username, password)
                 server.send_message(message)
@@ -140,7 +146,17 @@ def register_account(body: AccountRegister, db: Session = Depends(get_db)):
         verification_code_hash=hash_one_time_code(user_id, code, "email-verification"),
         verification_expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
     )
+    # Flush the parent user row first. PostgreSQL enforces tenant_profiles and
+    # user_credentials foreign keys; relying on an unordered batch flush can raise
+    # a child-before-parent FK error that SQLite contract tests do not expose.
     db.add(user)
+    try:
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        # The unique email constraint is the expected race at this stage.
+        raise HTTPException(status_code=409, detail="An account with this email already exists") from exc
+
     db.add(credential)
     db.add(m.TenantProfile(
         user_id=user_id,
@@ -151,11 +167,13 @@ def register_account(body: AccountRegister, db: Session = Depends(get_db)):
     try:
         db.flush()
         send_security_code(email, "Verify your StayEasy account", code,
-                           f"Your StayEasy verification code is {code}. It expires in 15 minutes. If you did not request this, ignore this email.")
+                           f"Your StayEasy verification code is {code}. It expires in 15 minutes. If you did not request this, ignore the email.")
         db.commit()
-    except IntegrityError as exc:
+    except Exception:
+        # Do not leave a half-created, unverifiable account after an SMTP/database
+        # error. Re-raise HTTPException details from the mail boundary unchanged.
         db.rollback()
-        raise HTTPException(status_code=409, detail="An account with this email already exists") from exc
+        raise
     return {"message": "Verification code sent. Verify your email before signing in.", "email": email}
 
 

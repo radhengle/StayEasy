@@ -99,28 +99,19 @@ class StayEasySmokeTest {
     }
 
     @Test
-    fun tenantLoginActionOpensApiSetupWhenBackendIsNotConfigured() {
-        val context = InstrumentationRegistry.getInstrumentation().targetContext
-        try {
-            composeRule.onAllNodesWithText("Login")[0].performScrollTo().performClick()
-            composeRule.onNodeWithText("Connect your StayEasy API first").assertIsDisplayed()
-            composeRule.onNodeWithText("Configure API connection").performClick()
-            composeRule.onNodeWithText("API connection & sync").assertIsDisplayed()
-            composeRule.onNodeWithText("Integration readiness").performScrollTo().assertIsDisplayed()
-            composeRule.onNodeWithText("Use an owner/admin token and tap Test connection", substring = true)
-                .performScrollTo().assertIsDisplayed()
-        } finally {
-            // Opening API setup seeds the emulator's default URL. Reset it so this test
-            // cannot change the expectations of the other auth tests that require no URL.
-            StayPreferenceStore.save(context, StayPreferenceStore.load(context).copy(apiBaseUrl = ""))
-        }
+    fun tenantLoginActionOpensRealEmailPasswordForm() {
+        composeRule.onAllNodesWithText("Login")[0].performScrollTo().performClick()
+        composeRule.onNodeWithText("Welcome back").assertIsDisplayed()
+        composeRule.onNodeWithText("Email address").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Password").performScrollTo().assertIsDisplayed()
     }
 
     @Test
-    fun ownerRegisterActionOpensApiSetupWhenBackendIsNotConfigured() {
+    fun ownerRegisterActionOpensRealRegistrationFormWithApprovalDisclosure() {
         composeRule.onAllNodesWithText("Register")[1].performScrollTo().performClick()
-        composeRule.onNodeWithText("Connect your StayEasy API first").assertIsDisplayed()
-        composeRule.onNodeWithText("Configure API connection").assertIsDisplayed()
+        composeRule.onNodeWithText("Create your account").assertIsDisplayed()
+        composeRule.onNodeWithText("Email address").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Owner access requires approval", substring = true).performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -208,8 +199,9 @@ class StayEasySmokeTest {
         composeRule.onNodeWithText("Your profile").assertIsDisplayed()
         clickControlContaining("Sign in / Create account")
         composeRule.onNodeWithText("StayEasy account").assertIsDisplayed()
-        composeRule.onNodeWithText("Connect your StayEasy API first").assertIsDisplayed()
-        composeRule.onNodeWithText("Configure API connection").assertIsDisplayed()
+        composeRule.onNodeWithText("Welcome back").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Email address").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Password").performScrollTo().assertIsDisplayed()
     }
 
     @Test
