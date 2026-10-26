@@ -242,7 +242,7 @@ internal fun TenantInvitationRegistrationScreen(
             Spacer(Modifier.size(10.dp))
             Column(Modifier.weight(1f)) {
                 Text("Your registration invitation", color = SE.Ink, fontSize = 21.sp, fontWeight = FontWeight.Bold)
-                Text("Confirm your profile, bed and first rent amount before submitting.", color = SE.Muted, fontSize = 11.sp)
+                Text("Complete registration or track the owner's decision.", color = SE.Muted, fontSize = 11.sp)
             }
             TextButton(onClick = { refresh++ }) {
                 Icon(Icons.Filled.Refresh, contentDescription = "Refresh")
@@ -289,7 +289,7 @@ internal fun TenantInvitationRegistrationScreen(
                             ) {
                                 val rowStatus = invitationText(row, "registration_status")
                                 Icon(Icons.Filled.Description, null,
-                                    tint = if (rowStatus in setOf("approved", "completed")) SE.Blue else if (rowStatus in setOf("rejected", "expired", "withdrawn")) SE.Red else SE.Orange)
+                                    tint = if (rowStatus in setOf("approved", "completed")) SE.Blue else if (rowStatus in setOf("rejected", "cancelled", "expired", "withdrawn")) SE.Red else SE.Orange)
                                 Spacer(Modifier.size(8.dp))
                                 Column(Modifier.weight(1f)) {
                                     Text(invitationText(row, "property_name", "Property invitation"), color = SE.Ink, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
@@ -491,7 +491,7 @@ internal fun TenantInvitationRegistrationScreen(
                     val statusLabel = invitationText(current, "registration_status_label", "Status unavailable")
                     val statusMessage = invitationText(current, "registration_status_message", "Contact the property owner for an update.")
                     val isPositive = currentRegistrationStatus in setOf("approved", "completed")
-                    val isNegative = currentRegistrationStatus in setOf("rejected", "expired", "withdrawn")
+                    val isNegative = currentRegistrationStatus in setOf("rejected", "cancelled", "expired", "withdrawn")
                     Card(
                         shape = SE.cardShape(18.dp),
                         colors = CardDefaults.cardColors(containerColor = SE.Surface),
