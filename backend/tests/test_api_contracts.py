@@ -747,6 +747,10 @@ def test_owner_invites_specific_tenant_and_acceptance_reserves_only_once_with_ac
     assert submitted_row["reservation_status"] == "pending"
     assert submitted_row["reservation_id"] == accepted_body["reservation_id"]
     assert submitted_row["billable_quote"]["billable_start_date"] == quote["billable_start_date"]
+    resolved_after_submission = client.get("/invitations/resolve", params={"token": token})
+    assert resolved_after_submission.status_code == 200, resolved_after_submission.text
+    assert resolved_after_submission.json()["registration_status"] == "under_review"
+    assert resolved_after_submission.json()["billable_quote"]["billable_start_date"] == quote["billable_start_date"]
 
     # Simulate the server committing registration while the HTTP response is lost.
     # A retry the following day must return the original billable terms and must
@@ -855,6 +859,7 @@ def test_cancelling_unpaid_invitation_reservation_voids_rent_charge():
     assert rejected_row["registration_status_label"] == "Not approved"
     assert rejected_row["reservation_status"] == "cancelled"
     assert "declined" in rejected_row["registration_status_message"].lower()
+    set_actor("owner-1", "owner")
     units = client.get("/owner/units", params={"property_id": prop["id"]})
     assert next(row for row in units.json() if row["id"] == unit["id"])["status"] == "available"
 
