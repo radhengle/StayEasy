@@ -1035,7 +1035,7 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     },
                     onBack = { route = workspaceReturnRoute }
                 )
-                "account_auth" -> BackendAccountAuthScreen(
+                "account_auth" -> AccountAuthScreen(
                     baseUrl = preferences.apiBaseUrl,
                     account = signedInAccount,
                     startMode = authStartMode,
