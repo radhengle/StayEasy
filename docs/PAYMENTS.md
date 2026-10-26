@@ -12,7 +12,7 @@ Set these as deployment secrets, never commit live values:
 
 - RAZORPAY_KEY_ID: public checkout key ID from the Razorpay dashboard.
 - RAZORPAY_KEY_SECRET: server-only API and checkout-signature secret.
-- RAZORPAY_WEBHOOK_SECRET: a separate webhook signing secret configured on the Razorpay webhook for payment.authorized, payment.captured, payment.failed, refund.processed, refund.failed, and the Route transfer events.
+- RAZORPAY_WEBHOOK_SECRET: a separate webhook signing secret configured on the Razorpay webhook for payment.authorized, payment.captured, payment.failed, refund.processed, refund.failed, Route transfer events, and `settlement.processed`.
 
 Use Razorpay test-mode credentials in development/staging. Test mode must be confirmed from the provider dashboard. Production live mode must not be enabled until the legal entity, bank settlement account, account verification, payment disclosures, refund/cancellation terms, privacy notice and support contact have been approved. Configure the webhook URL as https://<api-host>/payments/webhooks/razorpay; use HTTPS only. Webhook signatures are checked against the raw request bytes and the separate webhook secret.
 
@@ -36,7 +36,7 @@ An owner/admin can request `GET /owner/integrations/status` or use **API connect
 
 For a local non-routed development flow, use `PAYMENT_SETTLEMENT_MODE=platform`; that is a payment into the StayEasy merchant account, **not** a promise of automatic payment to the owner. A production platform-collection model must be explicitly approved and must not be inferred from a missing Route configuration.
 
-The provider dashboard/KYC work and real transactions cannot be completed by source code alone. After enabling Route, run a staging acceptance cycle that verifies the created order's `transfers` collection, a captured test payment, transfer webhooks, settlement reporting, partial/full refund reversal, duplicate webhook replay and retry/recovery before any live keys are used.
+The provider dashboard/KYC work and real transactions cannot be completed by source code alone. The present Route order transfers the full server-calculated rent amount to the owner; this assumes the platform has enough available balance to cover Razorpay gateway fees, Route transfer fees and tax. Razorpay documents that insufficient balance can fail a transfer; agree who bears fees, confirm actual merchant pricing, and test the full rent flow before launch. After enabling Route, run a staging acceptance cycle that verifies the created order's `transfers` collection, a captured test payment, transfer webhooks, settlement reporting, partial/full refund reversal, duplicate webhook replay and retry/recovery before any live keys are used.
 
 ## API flow
 
