@@ -1057,10 +1057,19 @@ def request_payment_refund(
         raise HTTPException(409, "A refund with this idempotency key or amount is already being processed.") from exc
 
     try:
-        gateway_refund = create_razorpay_refund(attempt.provider_payment_id, amount, {
+        refund_notes = {
             "stayeasy_payment_attempt_id": str(attempt.id),
             "stayeasy_refund_id": str(refund.id),
-        })
+        }
+        owner_transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt.id))
+        if owner_transfer is not None:
+            # This payment was routed to a single owner linked account. Have Razorpay
+            # reverse the linked-account transfer before returning money to the tenant.
+            gateway_refund = create_razorpay_refund(
+                attempt.provider_payment_id, amount, refund_notes, reverse_all=True
+            )
+        else:
+            gateway_refund = create_razorpay_refund(attempt.provider_payment_id, amount, refund_notes)
         provider_refund_id = str(gateway_refund.get("id") or "")
         if not provider_refund_id:
             raise GatewayRequestError("The provider did not confirm a refund reference.", ambiguous=True)
@@ -1227,9 +1236,24 @@ def list_property_payments(
         if not charge or (properties is not None and charge.property_id not in properties):
             continue
         prop = db.get(m.Property, charge.property_id)
+        transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt.id))
+        settlement = {
+            "mode": "owner_route",
+            "status": transfer.status if transfer else "missing_transfer_record",
+            "settlement_status": transfer.settlement_status if transfer else "unknown",
+            "amount_paise": transfer.amount_paise if transfer else 0,
+            "failure_code": transfer.failure_code if transfer else "missing_transfer_record",
+        } if transfer is not None else {
+            "mode": "platform",
+            "status": "not_routed",
+            "settlement_status": "not_applicable",
+            "amount_paise": 0,
+            "failure_code": "",
+        }
         result.append({**_attempt_payload(attempt), "property_id": charge.property_id,
                        "property_name": prop.name if prop else f"Property #{charge.property_id}",
                        "charge_status": charge.status,
+                       "owner_settlement": settlement,
                        "can_refund": can_refund_properties is None or charge.property_id in can_refund_properties,
                        "refunds": [_refund_payload(refund) for refund in db.scalars(select(m.PaymentRefund).where(
                            m.PaymentRefund.payment_attempt_id == attempt.id
@@ -1337,6 +1361,65 @@ async def razorpay_webhook(
             body_payload = body.get("payload", {})
             matched = _process_refund_webhook(db, event_type, body_payload if isinstance(body_payload, dict) else {})
             event.processing_status = "processed" if matched else "ignored"
+        elif event_type.startswith("transfer."):
+            transfer_entity = body.get("payload", {}).get("transfer", {}).get("entity", {})
+            if not isinstance(transfer_entity, dict):
+                raise HTTPException(400, "Owner transfer webhook entity is missing.")
+            provider_transfer_id = str(transfer_entity.get("id") or "")
+            source_id = str(transfer_entity.get("source") or "")
+            notes = transfer_entity.get("notes") if isinstance(transfer_entity.get("notes"), dict) else {}
+            attempt_text = str(notes.get("stayeasy_payment_attempt_id") or "")
+            attempt = None
+            if attempt_text.isdigit():
+                attempt = db.get(m.PaymentAttempt, int(attempt_text))
+            if attempt is None and source_id:
+                attempt = db.scalar(select(m.PaymentAttempt).where(
+                    m.PaymentAttempt.provider_order_id == source_id
+                ))
+            route_transfer = db.scalar(select(m.PaymentTransfer).where(
+                m.PaymentTransfer.provider_transfer_id == provider_transfer_id
+            )) if provider_transfer_id else None
+            if route_transfer is None and attempt is not None:
+                route_transfer = db.scalar(select(m.PaymentTransfer).where(
+                    m.PaymentTransfer.payment_attempt_id == attempt.id
+                ).with_for_update())
+            if route_transfer is None:
+                event.processing_status = "ignored"
+            else:
+                recipient = str(transfer_entity.get("recipient") or "")
+                transfer_amount = transfer_entity.get("amount")
+                transfer_currency = str(transfer_entity.get("currency") or "")
+                if (not provider_transfer_id.startswith("trf_")
+                        or recipient != route_transfer.linked_account_id
+                        or transfer_amount != route_transfer.amount_paise
+                        or transfer_currency != route_transfer.currency):
+                    raise HTTPException(409, "Owner transfer webhook does not match the stored recipient, amount and currency.")
+                event_status = {
+                    "transfer.created": "created",
+                    "transfer.processed": "processed",
+                    "transfer.failed": "failed",
+                    "transfer.reversed": "reversed",
+                }.get(event_type)
+                status_from_provider = str(transfer_entity.get("status") or "").lower()
+                if event_status is None or status_from_provider not in {
+                    "created", "pending", "processed", "failed", "reversed", "partially_reversed"
+                }:
+                    event.processing_status = "ignored"
+                else:
+                    route_transfer.provider_transfer_id = provider_transfer_id
+                    route_transfer.provider_order_id = source_id or route_transfer.provider_order_id
+                    route_transfer.status = status_from_provider
+                    settlement_status = str(transfer_entity.get("settlement_status") or "").lower()
+                    if settlement_status in {"pending", "on_hold", "settled"}:
+                        route_transfer.settlement_status = settlement_status
+                    route_transfer.failure_code = "provider_transfer_failed" if status_from_provider == "failed" else ""
+                    if status_from_provider == "processed":
+                        route_transfer.processed_at = _utcnow()
+                        # Do not imply bank settlement unless Razorpay explicitly reports it.
+                        if settlement_status not in {"settled", "on_hold"}:
+                            route_transfer.settlement_status = "pending"
+                    route_transfer.updated_at = _utcnow()
+                    event.processing_status = "processed"
         else:
             event.processing_status = "ignored"
         event.processed_at = _utcnow()
