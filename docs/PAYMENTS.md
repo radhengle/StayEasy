@@ -35,7 +35,9 @@ An owner/admin can request `GET /owner/integrations/status` or use **API connect
 ## Idempotency and accounting safeguards
 
 - Every order request must carry an Idempotency-Key; reusing it for a different charge is rejected.
-- A partial unique index allows one active order per charge. Indeterminate API outcomes remain blocked as unknown rather than risking duplicate charges.
+- A partial unique index allows one active order per charge. Each provider order uses a stable unique receipt derived from the stored payment-attempt ID.
+- If order creation times out before its response is persisted, retrying the same Idempotency-Key triggers a server-side Razorpay order lookup by receipt. StayEasy relaunches Checkout only when exactly one order is found with the expected amount/currency and `created` state.
+- No result, ambiguous provider lookup, multiple matches, mismatched amount/currency, or a non-created order leaves the attempt blocked for reconciliation. Do not issue a new Idempotency-Key to get around an unresolved attempt; use the existing payment-status flow or finance/provider reconciliation.
 - Provider order IDs, payment IDs, refund IDs, client idempotency keys and webhook event IDs are unique at database level.
 - The provider callback cannot mark a payment complete by itself: its signature is checked and the canonical provider payment is fetched server-to-server.
 - Webhook HMAC is verified over the raw body before JSON processing. Raw webhook bodies are not stored. Event ID + payload SHA-256 are retained for replay detection and audit.
