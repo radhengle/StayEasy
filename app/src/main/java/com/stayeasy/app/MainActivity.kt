@@ -944,9 +944,15 @@ private fun StayEasyApp(preferences: StayPreferences, onPreferencesChanged: (Sta
                     refreshToken = paymentRefreshToken,
                     onCheckout = { order ->
                         val checkoutActivity = activity
-                        if (checkoutActivity == null) notify("Secure checkout is unavailable in this app session.")
-                        else runCatching { checkoutActivity.launchRazorpayCheckout(order) }
-                            .onFailure { notify(it.message ?: "Could not open secure checkout.") }
+                        if (checkoutActivity == null) {
+                            notify("Secure checkout is unavailable in this app session.")
+                            paymentRefreshToken++
+                        } else runCatching { checkoutActivity.launchRazorpayCheckout(order) }
+                            .onFailure {
+                                notify(it.message ?: "Could not open secure checkout.")
+                                // Reset the payment screen's busy state and reload server status.
+                                paymentRefreshToken++
+                            }
                     },
                     onBack = { route = "stay" },
                     notify = notify
