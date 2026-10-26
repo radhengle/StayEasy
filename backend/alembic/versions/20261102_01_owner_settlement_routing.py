@@ -43,6 +43,7 @@ def upgrade() -> None:
             sa.Column("linked_account_id", sa.String(length=100), nullable=False),
             sa.Column("provider_order_id", sa.String(length=100), nullable=False),
             sa.Column("provider_transfer_id", sa.String(length=100), nullable=True),
+            sa.Column("recipient_settlement_id", sa.String(length=100), nullable=True),
             sa.Column("amount_paise", sa.Integer(), nullable=False),
             sa.Column("currency", sa.String(length=3), nullable=False, server_default="INR"),
             sa.Column("status", sa.String(length=30), nullable=False, server_default="creating"),
@@ -58,6 +59,7 @@ def upgrade() -> None:
     for name, columns in (
         ("ix_payment_transfers_owner_id", ["owner_id"]),
         ("ix_payment_transfers_provider_order_id", ["provider_order_id"]),
+        ("ix_payment_transfers_recipient_settlement_id", ["recipient_settlement_id"]),
         ("ix_payment_transfers_status", ["status"]),
     ):
         if name not in transfer_indexes:
