@@ -235,6 +235,32 @@ def test_sync_once_persists_successful_feed_health_and_batch_counts(monkeypatch)
         engine.dispose()
 
 
+def test_malformed_envelope_persists_feed_error_diagnostics(monkeypatch):
+    engine = _use_isolated_database(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("PROPERTY_FEED_URL", "https://feed.example.test/listings")
+    monkeypatch.setenv("PROPERTY_FEED_SOURCE", "malformed-envelope")
+    monkeypatch.delenv("PROPERTY_FEED_TOKEN", raising=False)
+    monkeypatch.setattr(
+        feed_ingestion,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(json.dumps({"metadata": {"count": 5}}).encode()),
+    )
+    try:
+        with pytest.raises(ValueError, match="items array"):
+            feed_ingestion.sync_once()
+        with feed_ingestion.SessionLocal() as db:
+            state = db.get(models.IntegrationSyncState, "property_feed")
+            assert state is not None
+            assert state.status == "error"
+            assert state.last_error_category == "invalid_feed"
+            assert state.last_attempt_at is not None
+            assert state.last_success_at is None
+            assert "feed.example.test" not in state.last_error_category
+    finally:
+        engine.dispose()
+
+
 def test_sync_once_persists_safe_failure_category_without_provider_payload(monkeypatch):
     engine = _use_isolated_database(monkeypatch)
     monkeypatch.setenv("APP_ENV", "development")
