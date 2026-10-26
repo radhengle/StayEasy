@@ -183,7 +183,7 @@ internal fun OwnerOnlinePaymentsScreen(
                                     settlementMode == "platform" -> "Platform collection · NOT automatically routed to owner"
                                     transferStatus in setOf("failed", "unknown", "reversed", "partially_reversed", "missing_transfer_record") ->
                                         "Owner transfer needs reconciliation · $transferStatus"
-                                    bankStatus == "settled" -> "Owner transfer settled · \${ownerPaymentMoney(settlementAmount)}"
+                                    bankStatus == "settled" -> "Owner transfer settled · ${ownerPaymentMoney(settlementAmount)}"
                                     transferStatus == "processed" -> "Owner transfer processed · bank settlement $bankStatus"
                                     transferStatus == "created" -> "Owner transfer created · waiting for payment capture"
                                     else -> "Owner transfer · $transferStatus · bank settlement $bankStatus"
