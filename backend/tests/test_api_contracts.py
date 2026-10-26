@@ -755,10 +755,14 @@ def test_owner_invites_specific_tenant_and_acceptance_reserves_only_once_with_ac
     assert "No additional reservation" in replayed_body["message"]
     with SessionLocal() as db:
         assert db.scalar(select(func.count()).select_from(m.Reservation).where(
-            m.Reservation.id == accepted_body["reservation_id"],
+            m.Reservation.customer_id == "invite-tenant-1",
+            m.Reservation.unit_id == unit["id"],
         )) == 1
-        assert db.scalar(select(func.count()).select_from(m.LedgerEntry).where(
-            m.LedgerEntry.reservation_id == accepted_body["reservation_id"],
+        assert db.scalar(select(func.count()).select_from(m.LedgerEntry).join(
+            m.Reservation, m.LedgerEntry.reservation_id == m.Reservation.id,
+        ).where(
+            m.Reservation.customer_id == "invite-tenant-1",
+            m.Reservation.unit_id == unit["id"],
             m.LedgerEntry.category == "rent_charge",
         )) == 1
 
