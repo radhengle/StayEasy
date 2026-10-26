@@ -176,6 +176,18 @@ def create_razorpay_refund(
         payload["reverse_all"] = True
     return _gateway_request("POST", f"/payments/{payment_id}/refund", payload)
 
+def create_razorpay_transfer_reversal(
+    transfer_id: str,
+    amount_paise: int,
+    notes: dict[str, str],
+) -> dict[str, Any]:
+    """Reverse exactly the requested amount of a single Route transfer."""
+    return _gateway_request(
+        "POST",
+        f"/transfers/{quote(transfer_id, safe='')}/reversals",
+        {"amount": amount_paise, "notes": notes},
+    )
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -675,6 +687,9 @@ def _refund_payload(refund: m.PaymentRefund) -> dict[str, Any]:
         "amount_paise": refund.amount_paise,
         "status": refund.status,
         "provider_refund_id": refund.provider_refund_id,
+        "provider_transfer_reversal_id": refund.provider_transfer_reversal_id,
+        "transfer_reversal_amount_paise": refund.transfer_reversal_amount_paise,
+        "transfer_reversal_status": refund.transfer_reversal_status or "not_required",
         "reason": refund.reason,
         "failure_code": refund.failure_code,
         "created_at": refund.created_at.isoformat() if refund.created_at else None,
@@ -1080,14 +1095,16 @@ def request_payment_refund(
     owner_transfer = db.scalar(select(m.PaymentTransfer).where(
         m.PaymentTransfer.payment_attempt_id == attempt.id
     ))
-    if owner_transfer is not None and (reserved > 0 or amount != attempt.amount_paise):
-        # reverse_all reverses the Route transfer(s) in full, not a proportionally
-        # calculated partial share. Never partially refund a routed payment and
-        # accidentally pull the owner's entire rent transfer back.
-        raise HTTPException(
-            409,
-            "Partial or subsequent refunds for owner-routed payments are blocked until amount-specific Route transfer reversal is available. This request did not reach Razorpay.",
-        )
+    # A first-time full refund can use Razorpay's reverse_all shortcut. Partial
+    # and subsequent refunds need a separate reversal for exactly the refund amount.
+    needs_manual_route_reversal = owner_transfer is not None and not (
+        reserved == 0 and amount == attempt.amount_paise
+    )
+    if owner_transfer is not None:
+        if not owner_transfer.provider_transfer_id:
+            raise HTTPException(409, "The owner transfer has no verified provider transfer ID; refund is blocked for reconciliation.")
+        if owner_transfer.status not in {"created", "pending", "processed", "partially_reversed"}:
+            raise HTTPException(409, "The owner transfer is not in a reversible state; reconcile with Razorpay before refunding.")
 
     refund = m.PaymentRefund(
         payment_attempt_id=attempt.id,
@@ -1105,22 +1122,72 @@ def request_payment_refund(
         db.rollback()
         raise HTTPException(409, "A refund with this idempotency key or amount is already being processed.") from exc
 
+    refund_notes = {
+        "stayeasy_payment_attempt_id": str(attempt.id),
+        "stayeasy_refund_id": str(refund.id),
+    }
+
+    if needs_manual_route_reversal:
+        refund.transfer_reversal_amount_paise = amount
+        refund.transfer_reversal_status = "requested"
+        db.commit()
+        try:
+            gateway_reversal = create_razorpay_transfer_reversal(
+                owner_transfer.provider_transfer_id, amount,
+                {**refund_notes, "stayeasy_transfer_id": owner_transfer.provider_transfer_id},
+            )
+            reversal_id = str(gateway_reversal.get("id") or "")
+            reversal_transfer_id = str(gateway_reversal.get("transfer_id") or "")
+            if (
+                not reversal_id.startswith("rvrsl_")
+                or reversal_transfer_id != owner_transfer.provider_transfer_id
+                or gateway_reversal.get("amount") != amount
+            ):
+                raise GatewayRequestError(
+                    "The provider did not confirm the expected transfer reversal.",
+                    ambiguous=True,
+                )
+            refund.provider_transfer_reversal_id = reversal_id
+            refund.transfer_reversal_status = "created"
+            db.commit()
+        except GatewayRequestError as exc:
+            db.rollback()
+            current = db.get(m.PaymentRefund, refund.id)
+            if current:
+                current.status = "unknown" if exc.ambiguous else "failed"
+                current.transfer_reversal_status = "unknown" if exc.ambiguous else "failed"
+                current.failure_code = (
+                    "route_transfer_reversal_indeterminate"
+                    if exc.ambiguous else "route_transfer_reversal_rejected"
+                )
+                db.commit()
+            if exc.ambiguous:
+                raise HTTPException(
+                    503,
+                    "The Route transfer reversal result is indeterminate. No customer refund was submitted; finance must reconcile the provider reversal before retrying.",
+                ) from exc
+            raise HTTPException(502, "Razorpay rejected the Route transfer reversal. No customer refund was submitted.") from exc
+
     try:
-        refund_notes = {
-            "stayeasy_payment_attempt_id": str(attempt.id),
-            "stayeasy_refund_id": str(refund.id),
-        }
-        if owner_transfer is not None:
-            # This payment was routed to a single owner linked account. Have Razorpay
-            # reverse the linked-account transfer before returning money to the tenant.
+        if owner_transfer is not None and not needs_manual_route_reversal:
+            # First-time full refund: Razorpay reverses the entire transfer with the refund.
             gateway_refund = create_razorpay_refund(
                 attempt.provider_payment_id, amount, refund_notes, reverse_all=True
             )
+        elif owner_transfer is not None:
+            # Partial/subsequent refund: reversal was confirmed and persisted first.
+            gateway_refund = create_razorpay_refund(
+                attempt.provider_payment_id, amount, refund_notes, reverse_all=False
+            )
         else:
-            gateway_refund = create_razorpay_refund(attempt.provider_payment_id, amount, refund_notes)
+            gateway_refund = create_razorpay_refund(
+                attempt.provider_payment_id, amount, refund_notes
+            )
         provider_refund_id = str(gateway_refund.get("id") or "")
         if not provider_refund_id:
             raise GatewayRequestError("The provider did not confirm a refund reference.", ambiguous=True)
+        if gateway_refund.get("amount") is not None and gateway_refund.get("amount") != amount:
+            raise GatewayRequestError("The provider returned a mismatched refund amount.", ambiguous=True)
         refund.provider_refund_id = provider_refund_id
         provider_status = str(gateway_refund.get("status") or "pending").lower()
         _refresh_refund_status(db, refund, provider_status)
@@ -1130,8 +1197,16 @@ def request_payment_refund(
         db.rollback()
         current = db.get(m.PaymentRefund, refund.id)
         if current:
-            current.status = "unknown" if exc.ambiguous else "failed"
-            current.failure_code = "gateway_refund_indeterminate" if exc.ambiguous else "gateway_refund_rejected"
+            if needs_manual_route_reversal and current.provider_transfer_reversal_id:
+                # Owner funds have been reversed; reserve the refund for reconciliation.
+                current.status = "unknown"
+                current.failure_code = (
+                    "route_refund_after_reversal_indeterminate"
+                    if exc.ambiguous else "route_refund_after_reversal_rejected"
+                )
+            else:
+                current.status = "unknown" if exc.ambiguous else "failed"
+                current.failure_code = "gateway_refund_indeterminate" if exc.ambiguous else "gateway_refund_rejected"
             db.commit()
         if exc.ambiguous:
             raise HTTPException(503, "The refund result is indeterminate. Do not submit it again with a new key; reconcile with the provider.") from exc
