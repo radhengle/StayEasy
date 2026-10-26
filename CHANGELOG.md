@@ -5,6 +5,7 @@ User-facing and release-relevant changes are recorded here. Unreleased entries d
 ## Unreleased
 
 ### Added
+- Gated Razorpay Route owner settlement: admin-linked provider accounts with audit records, owner-routed order transfers, transfer/settlement reconciliation, owner-visible transfer states, and linked-account transfer reversal on refunds. This remains blocked until provider approval, account onboarding/KYC, and end-to-end test-mode acceptance are complete.
 - Server-backed owner resident assignment: select an existing verified customer, assign an available server room/bed, record rent, deposit and joining date, and refresh occupancy after API confirmation.
 - Owner Residents/Stays history reads from property-scoped server records, including resident, property, room/unit, rent, deposit, notice and move-out details.
 - Tenant **My Stay** reads current and previous stays from the authenticated customer endpoint, with loading, refresh, error and empty states.
