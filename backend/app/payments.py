@@ -271,10 +271,13 @@ def _owner_route_account_for_charge(db: Session, charge: m.LedgerEntry) -> m.Own
 
 def _assert_existing_settlement_mode(db: Session, attempt: m.PaymentAttempt) -> None:
     mode = _settlement_mode()
+    recorded_mode = str(attempt.settlement_mode or "platform")
+    if recorded_mode != mode:
+        raise HTTPException(409, "Settlement configuration changed after this order was created. Contact support; do not start another payment.")
     transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt.id))
-    if mode == "owner_route":
+    if recorded_mode == "owner_route":
         if not _razorpay_route_enabled() or transfer is None:
-            raise HTTPException(409, "Settlement configuration changed after this order was created. Contact support; do not start another payment.")
+            raise HTTPException(409, "Owner settlement setup is missing or disabled for this existing order. Finance reconciliation is required.")
         if transfer.status not in {"created", "processed", "pending"}:
             raise HTTPException(409, "Owner settlement is not confirmed for this order. Finance reconciliation is required.")
         account = db.scalar(select(m.OwnerSettlementAccount).where(m.OwnerSettlementAccount.owner_id == transfer.owner_id))
@@ -329,6 +332,7 @@ def _attempt_payload(attempt: m.PaymentAttempt) -> dict[str, Any]:
         "amount_paise": attempt.amount_paise,
         "currency": attempt.currency,
         "provider": attempt.provider,
+        "settlement_mode": attempt.settlement_mode or "platform",
         "status": attempt.status,
         "provider_order_id": attempt.provider_order_id,
         "provider_payment_id": attempt.provider_payment_id,
@@ -831,9 +835,11 @@ def create_payment_order(
             raise HTTPException(409, "Payment status needs provider reconciliation. Do not start another payment.")
         raise HTTPException(409, "A payment order is still being created. Retry this request shortly; do not start another payment.")
 
+    settlement_mode = _settlement_mode()
     settlement_account = _owner_route_account_for_charge(db, charge)
     attempt = m.PaymentAttempt(
         charge_entry_id=charge.id, customer_id=subject, provider="razorpay",
+        settlement_mode=settlement_mode,
         idempotency_key=idempotency_key, amount_paise=due, currency="INR",
         status="creating",
     )
@@ -1262,19 +1268,23 @@ def list_property_payments(
             continue
         prop = db.get(m.Property, charge.property_id)
         transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt.id))
-        settlement = {
-            "mode": "owner_route",
-            "status": transfer.status if transfer else "missing_transfer_record",
-            "settlement_status": transfer.settlement_status if transfer else "unknown",
-            "amount_paise": transfer.amount_paise if transfer else 0,
-            "failure_code": transfer.failure_code if transfer else "missing_transfer_record",
-        } if transfer is not None else {
-            "mode": "platform",
-            "status": "not_routed",
-            "settlement_status": "not_applicable",
-            "amount_paise": 0,
-            "failure_code": "",
-        }
+        recorded_settlement_mode = str(attempt.settlement_mode or "platform")
+        if recorded_settlement_mode == "owner_route":
+            settlement = {
+                "mode": "owner_route",
+                "status": transfer.status if transfer else "missing_transfer_record",
+                "settlement_status": transfer.settlement_status if transfer else "unknown",
+                "amount_paise": transfer.amount_paise if transfer else 0,
+                "failure_code": transfer.failure_code if transfer else "missing_transfer_record",
+            }
+        else:
+            settlement = {
+                "mode": "platform",
+                "status": "not_routed",
+                "settlement_status": "not_applicable",
+                "amount_paise": 0,
+                "failure_code": "",
+            }
         result.append({**_attempt_payload(attempt), "property_id": charge.property_id,
                        "property_name": prop.name if prop else f"Property #{charge.property_id}",
                        "charge_status": charge.status,
@@ -1440,20 +1450,19 @@ async def razorpay_webhook(
                         or transfer_amount != route_transfer.amount_paise
                         or transfer_currency != route_transfer.currency):
                     raise HTTPException(409, "Owner transfer webhook does not match the stored recipient, amount and currency.")
-                event_status = {
-                    "transfer.created": "created",
-                    "transfer.processed": "processed",
-                    "transfer.failed": "failed",
-                    "transfer.reversed": "reversed",
-                }.get(event_type)
+                expected_statuses = {
+                    "transfer.created": {"created"},
+                    "transfer.processed": {"processed"},
+                    "transfer.failed": {"failed"},
+                    "transfer.reversed": {"reversed", "partially_reversed"},
+                }.get(event_type, set())
                 status_from_provider = str(transfer_entity.get("transfer_status") or transfer_entity.get("status") or "").lower()
-                if event_status is None or status_from_provider not in {
-                    "created", "pending", "processed", "failed", "reversed", "partially_reversed"
-                }:
+                if not expected_statuses or status_from_provider not in expected_statuses:
                     event.processing_status = "ignored"
                 else:
                     route_transfer.provider_transfer_id = provider_transfer_id
-                    route_transfer.provider_order_id = source_id or route_transfer.provider_order_id
+                    if source_id.startswith("order_"):
+                        route_transfer.provider_order_id = source_id
                     recipient_settlement_id = str(transfer_entity.get("recipient_settlement_id") or "")
                     route_transfer.recipient_settlement_id = recipient_settlement_id or route_transfer.recipient_settlement_id
                     route_transfer.status = status_from_provider
