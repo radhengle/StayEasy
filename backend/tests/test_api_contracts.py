@@ -2977,3 +2977,15 @@ def test_early_route_settlement_webhook_recovers_transfer_from_provider(monkeypa
         assert transfer.recipient_settlement_id == "setl_early_route_test_01"
         assert transfer.status == "processed"
         assert transfer.settlement_status == "settled"
+
+
+def test_abbreviated_prod_environment_blocks_platform_only_settlement(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("PAYMENT_SETTLEMENT_MODE", "platform")
+    monkeypatch.setenv("ALLOW_PLATFORM_SETTLEMENT_IN_PRODUCTION", "false")
+    with pytest.raises(HTTPException) as exc:
+        payment_routes._settlement_mode()
+    assert exc.value.status_code == 503
