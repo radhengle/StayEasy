@@ -739,6 +739,33 @@ def test_owner_invites_specific_tenant_and_acceptance_reserves_only_once_with_ac
     assert accepted_body["charge_amount_paise"] == quote["first_period_rent_paise"]
     assert accepted_body["billable_quote"]["first_period_rent_paise"] == quote["first_period_rent_paise"]
 
+    # Simulate the server committing registration while the HTTP response is lost.
+    # A retry the following day must return the original billable terms and must
+    # not create a second reservation, rent charge, or notification.
+    replayed = client.post("/invitations/accept", json={
+        "token": token, "phone": "9876543210", "profile_completion_acknowledged": True,
+        "billable_start_date": (date.today() - timedelta(days=1)).isoformat(),
+        "billable_terms_acknowledged": True,
+    })
+    assert replayed.status_code == 201, replayed.text
+    replayed_body = replayed.json()
+    assert replayed_body["reservation_id"] == accepted_body["reservation_id"]
+    assert replayed_body["billable_quote"]["billable_start_date"] == quote["billable_start_date"]
+    assert replayed_body["charge_amount_paise"] == accepted_body["charge_amount_paise"]
+    assert "No additional reservation" in replayed_body["message"]
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(m.Reservation).where(
+            m.Reservation.customer_id == "invite-tenant-1",
+            m.Reservation.unit_id == unit["id"],
+        )) == 1
+        assert db.scalar(select(func.count()).select_from(m.LedgerEntry).join(
+            m.Reservation, m.LedgerEntry.reservation_id == m.Reservation.id,
+        ).where(
+            m.Reservation.customer_id == "invite-tenant-1",
+            m.Reservation.unit_id == unit["id"],
+            m.LedgerEntry.category == "rent_charge",
+        )) == 1
+
     set_actor("owner-1", "owner")
     ledger = client.get("/owner/ledger", params={"property_id": prop["id"]})
     assert ledger.status_code == 200, ledger.text

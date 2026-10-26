@@ -1574,8 +1574,6 @@ def accept_tenant_invitation(body: TenantInvitationAccept,
         raise HTTPException(422, "Review and confirm your tenant profile before submitting registration.")
     if not body.billable_terms_acknowledged:
         raise HTTPException(422, "Review and acknowledge the billable start date and first-period rent before submitting registration.")
-    if body.billable_start_date != date.today():
-        raise HTTPException(409, "The billable-date quote has changed. Refresh the invitation and acknowledge today's date before submitting.")
     user = db.get(m.User, actor_user_id(actor))
     if not user or user.role != "customer" or not user.is_active:
         raise HTTPException(403, "An active tenant account is required to accept this invitation.")
@@ -1592,6 +1590,57 @@ def accept_tenant_invitation(body: TenantInvitationAccept,
         raise HTTPException(403, "Sign in with the email address the owner invited.")
     if invitation.recipient_user_id and invitation.recipient_user_id != user.id:
         raise HTTPException(403, "This invitation is linked to a different account. Use the existing invited account.")
+
+    # The request may have committed on the server but timed out before Android
+    # received its response. Replay the committed result instead of rejecting the
+    # retry or creating a second reservation/rent charge. Use the original terms
+    # snapshot, not today's quote, so a later retry cannot change the agreed date.
+    if invitation.status == "accepted":
+        if not invitation.reservation_id:
+            raise HTTPException(409, "This invitation was accepted but its reservation link is missing. Contact support; do not submit another registration.")
+        reservation = db.get(m.Reservation, invitation.reservation_id)
+        if not reservation or reservation.customer_id != user.id:
+            raise HTTPException(409, "This registration was already submitted but its reservation could not be reconciled. Contact support.")
+        rent_charge = db.scalar(select(m.LedgerEntry).where(
+            m.LedgerEntry.reservation_id == reservation.id,
+            m.LedgerEntry.category == "rent_charge",
+        ).order_by(m.LedgerEntry.id.desc()))
+        if not rent_charge:
+            raise HTTPException(409, "This registration was already submitted but its rent record could not be reconciled. Contact support; do not submit again.")
+        terms = reservation.terms_snapshot if isinstance(reservation.terms_snapshot, dict) else {}
+        try:
+            accepted_start_date = date.fromisoformat(str(terms.get("billable_start_date") or ""))
+        except ValueError as exc:
+            raise HTTPException(409, "The saved billable start date is invalid. Contact support; no new charge was created.") from exc
+        quote = make_proration_quote(reservation.rent_snapshot, accepted_start_date)
+        recorded_amount_paise = int(
+            rent_charge.amount_paise if rent_charge.amount_paise is not None else rent_charge.amount * 100
+        )
+        if recorded_amount_paise != int(quote["first_period_rent_paise"]):
+            raise HTTPException(409, "The saved rent record does not match the acknowledged quote. Finance reconciliation is required.")
+        prop = db.get(m.Property, reservation.property_id)
+        unit = db.get(m.PropertyUnit, reservation.unit_id) if reservation.unit_id else None
+        if not prop or not unit:
+            raise HTTPException(409, "This registration was already submitted, but its property/bed record is unavailable. Contact support.")
+        charge_voided = rent_charge.status in {"cancelled", "void", "voided"}
+        return {
+            "invitation_id": invitation.id,
+            "reservation_id": reservation.id,
+            "status": reservation.status,
+            "property_name": prop.name,
+            "room_code": unit.room_code,
+            "unit_code": unit.unit_code,
+            "monthly_rent": reservation.rent_snapshot,
+            "deposit": reservation.deposit_snapshot,
+            "billable_quote": quote,
+            "billing_status": "rent_charge_voided_after_cancellation" if charge_voided else "rent_due_recorded_registration_completed",
+            "charge_created": True,
+            "charge_amount_paise": recorded_amount_paise,
+            "message": "This registration was already submitted with the saved billable terms. No additional reservation, rent charge, or payment was created.",
+        }
+
+    if body.billable_start_date != date.today():
+        raise HTTPException(409, "The billable-date quote has changed. Refresh the invitation and acknowledge today's date before submitting.")
     now = datetime.now(timezone.utc)
     expiry = invitation.expires_at if invitation.expires_at.tzinfo else invitation.expires_at.replace(tzinfo=timezone.utc)
     if invitation.status != "pending" or expiry <= now:
