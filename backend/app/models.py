@@ -551,7 +551,7 @@ class OwnerSettlementAccount(Base):
     """
     __tablename__ = "owner_settlement_accounts"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), unique=True)
     linked_account_id: Mapped[str] = mapped_column(String(100), unique=True)
     status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
     linked_by: Mapped[str] = mapped_column(String(36), default="")
@@ -564,7 +564,7 @@ class PaymentTransfer(Base):
     """Expected/actual owner settlement transfer created as part of a Razorpay Route order."""
     __tablename__ = "payment_transfers"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    payment_attempt_id: Mapped[int] = mapped_column(ForeignKey("payment_attempts.id"), unique=True, index=True)
+    payment_attempt_id: Mapped[int] = mapped_column(ForeignKey("payment_attempts.id"), unique=True)
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     linked_account_id: Mapped[str] = mapped_column(String(100))
     provider_order_id: Mapped[str] = mapped_column(String(100), index=True)
