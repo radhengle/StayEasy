@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import time
 from datetime import datetime, timezone
@@ -24,7 +25,7 @@ log = logging.getLogger("stayeasy.feed")
 MAX_FEED_BYTES = 2 * 1024 * 1024
 
 
-def _read_feed(url: str) -> list[dict]:
+def _read_feed(url: str) -> list[object]:
     if not url:
         raise RuntimeError("PROPERTY_FEED_URL is empty. Configure an authorised provider JSON feed.")
     if not url.lower().startswith(("https://", "http://")):
@@ -41,12 +42,32 @@ def _read_feed(url: str) -> list[dict]:
     if len(body) > MAX_FEED_BYTES:
         raise ValueError("Property feed exceeded the 2 MiB limit.")
     parsed = json.loads(body.decode("utf-8"))
-    items = parsed.get("items", []) if isinstance(parsed, dict) else parsed
-    if not isinstance(items, list):
+    if isinstance(parsed, list):
+        items = parsed
+    elif isinstance(parsed, dict):
+        if "items" not in parsed or not isinstance(parsed["items"], list):
+            raise ValueError("Feed object must contain an items array.")
+        items = parsed["items"]
+    else:
         raise ValueError("Feed must be a JSON array or an object containing an items array.")
     if len(items) > 1000:
         raise ValueError("Feed exceeds the 1,000 listing batch limit.")
-    return [item for item in items if isinstance(item, dict)]
+    # Keep malformed rows for the ingestion layer so batch received/skipped metrics
+    # describe what the provider actually returned instead of under-reporting it.
+    return items
+
+
+def _coordinate(value: object, minimum: float, maximum: float) -> float | None:
+    """Accept finite numeric coordinates only; bool is an int subclass in Python."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        coordinate = float(value)
+    except (OverflowError, ValueError):
+        return None
+    if not math.isfinite(coordinate) or not minimum <= coordinate <= maximum:
+        return None
+    return coordinate
 
 
 def _sync_error_category(error: Exception) -> str:
@@ -117,6 +138,9 @@ def sync_once() -> dict[str, int]:
         db = SessionLocal()
         try:
             for item in items:
+                if not isinstance(item, dict):
+                    skipped += 1
+                    continue
                 external_id = str(item.get("external_id", "")).strip()[:120]
                 name = str(item.get("name", "")).strip()[:180]
                 locality = str(item.get("locality", "")).strip()[:120]
@@ -132,6 +156,12 @@ def sync_once() -> dict[str, int]:
                 if not external_id or len(name) < 2 or not locality or not city or rent < 0 or deposit < 0:
                     skipped += 1
                     continue
+                latitude = _coordinate(item.get("latitude"), -90.0, 90.0)
+                longitude = _coordinate(item.get("longitude"), -180.0, 180.0)
+                # A map point is a pair; don't persist a partial or invalid point.
+                if latitude is None or longitude is None:
+                    latitude = longitude = None
+
                 source_key = f"{source}:{external_id}"
                 prop = db.scalar(select(m.Property).where(m.Property.external_source_key == source_key))
                 fields = {
@@ -142,8 +172,8 @@ def sync_once() -> dict[str, int]:
                     "locality": locality,
                     "city": city,
                     "pin_code": str(item.get("pin_code", "")).strip()[:10],
-                    "latitude": item.get("latitude") if isinstance(item.get("latitude"), (int, float)) else None,
-                    "longitude": item.get("longitude") if isinstance(item.get("longitude"), (int, float)) else None,
+                    "latitude": latitude,
+                    "longitude": longitude,
                     "eligibility": item.get("eligibility", "Mixed") if item.get("eligibility") in {"Boys only", "Girls only", "Mixed", "All genders"} else "Mixed",
                     "couples_welcome": bool(item.get("couples_welcome", False)),
                     "furnishing": str(item.get("furnishing", "Furnished"))[:30],

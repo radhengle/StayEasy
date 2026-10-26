@@ -68,6 +68,38 @@ def test_feed_accepts_top_level_json_array(monkeypatch):
     assert feed_ingestion._read_feed("https://feed.example.test/listings") == payload
 
 
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"metadata": {"count": 10}}, "items array"),
+        ({"items": {"external_id": "not-an-array"}}, "items array"),
+        (None, "JSON array"),
+    ],
+)
+def test_feed_rejects_malformed_envelopes_instead_of_reporting_empty_sync(monkeypatch, payload, message):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.delenv("PROPERTY_FEED_TOKEN", raising=False)
+    monkeypatch.setattr(
+        feed_ingestion,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(json.dumps(payload).encode()),
+    )
+    with pytest.raises(ValueError, match=message):
+        feed_ingestion._read_feed("https://feed.example.test/listings")
+
+
+def test_feed_preserves_malformed_rows_for_ingestion_metrics(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.delenv("PROPERTY_FEED_TOKEN", raising=False)
+    payload = [{"external_id": "pune-2"}, "malformed-row", None, 42]
+    monkeypatch.setattr(
+        feed_ingestion,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(json.dumps(payload).encode()),
+    )
+    assert feed_ingestion._read_feed("https://feed.example.test/listings") == payload
+
+
 def test_http_feed_blocked_outside_development(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     with pytest.raises(ValueError, match="HTTPS"):
@@ -130,16 +162,16 @@ def test_sync_once_upserts_existing_provider_listing_and_skips_invalid_rows(monk
         "locality": "Baner",
         "city": "Pune",
         "rent_from": "not-a-number",
-    }]
+    }, "not-an-object-row", None]
     monkeypatch.setattr(feed_ingestion, "_read_feed", lambda _url: payload)
 
     try:
         first = feed_ingestion.sync_once()
-        assert first == {"received": 2, "created": 1, "updated": 0, "skipped": 1}
+        assert first == {"received": 4, "created": 1, "updated": 0, "skipped": 3}
         payload[0]["name"] = "Updated Name"
         payload[0]["rent_from"] = 9700
         second = feed_ingestion.sync_once()
-        assert second == {"received": 2, "created": 0, "updated": 1, "skipped": 1}
+        assert second == {"received": 4, "created": 0, "updated": 1, "skipped": 3}
 
         with feed_ingestion.SessionLocal() as db:
             rows = db.scalars(select(models.Property).where(models.Property.data_source == "authorised-partner")).all()
@@ -148,6 +180,44 @@ def test_sync_once_upserts_existing_provider_listing_and_skips_invalid_rows(monk
             assert rows[0].rent_from == 9700
     finally:
         engine.dispose()
+
+def test_sync_once_ignores_boolean_and_out_of_range_coordinates(monkeypatch):
+    engine = _use_isolated_database(monkeypatch)
+    monkeypatch.setenv("PROPERTY_FEED_URL", "https://feed.example.test/listings")
+    monkeypatch.setenv("PROPERTY_FEED_SOURCE", "coordinate-partner")
+    payload = [
+        {
+            "external_id": "valid-point", "name": "Valid Point", "locality": "Baner", "city": "Pune",
+            "rent_from": 10000, "latitude": 18.5, "longitude": 73.8,
+        },
+        {
+            "external_id": "boolean-point", "name": "Boolean Point", "locality": "Baner", "city": "Pune",
+            "rent_from": 10000, "latitude": True, "longitude": 73.8,
+        },
+        {
+            "external_id": "out-of-range-point", "name": "Out of Range Point",
+            "locality": "Baner", "city": "Pune", "rent_from": 10000,
+            "latitude": 95, "longitude": 200,
+        },
+    ]
+    monkeypatch.setattr(feed_ingestion, "_read_feed", lambda _url: payload)
+    try:
+        result = feed_ingestion.sync_once()
+        assert result == {"received": 3, "created": 3, "updated": 0, "skipped": 0}
+        with feed_ingestion.SessionLocal() as db:
+            rows = db.scalars(select(models.Property).where(
+                models.Property.data_source == "coordinate-partner"
+            )).all()
+            by_key = {row.external_source_key.rsplit(":", 1)[-1]: row for row in rows}
+            assert by_key["valid-point"].latitude == 18.5
+            assert by_key["valid-point"].longitude == 73.8
+            assert by_key["boolean-point"].latitude is None
+            assert by_key["boolean-point"].longitude is None
+            assert by_key["out-of-range-point"].latitude is None
+            assert by_key["out-of-range-point"].longitude is None
+    finally:
+        engine.dispose()
+
 
 def test_sync_once_persists_successful_feed_health_and_batch_counts(monkeypatch):
     engine = _use_isolated_database(monkeypatch)
@@ -173,6 +243,32 @@ def test_sync_once_persists_successful_feed_health_and_batch_counts(monkeypatch)
             assert state.last_success_at is not None
             assert state.last_error_category == ""
             assert (state.received_count, state.created_count, state.updated_count, state.skipped_count) == (1, 1, 0, 0)
+    finally:
+        engine.dispose()
+
+
+def test_malformed_envelope_persists_feed_error_diagnostics(monkeypatch):
+    engine = _use_isolated_database(monkeypatch)
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.setenv("PROPERTY_FEED_URL", "https://feed.example.test/listings")
+    monkeypatch.setenv("PROPERTY_FEED_SOURCE", "malformed-envelope")
+    monkeypatch.delenv("PROPERTY_FEED_TOKEN", raising=False)
+    monkeypatch.setattr(
+        feed_ingestion,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(json.dumps({"metadata": {"count": 5}}).encode()),
+    )
+    try:
+        with pytest.raises(ValueError, match="items array"):
+            feed_ingestion.sync_once()
+        with feed_ingestion.SessionLocal() as db:
+            state = db.get(models.IntegrationSyncState, "property_feed")
+            assert state is not None
+            assert state.status == "error"
+            assert state.last_error_category == "invalid_feed"
+            assert state.last_attempt_at is not None
+            assert state.last_success_at is None
+            assert "feed.example.test" not in state.last_error_category
     finally:
         engine.dispose()
 
