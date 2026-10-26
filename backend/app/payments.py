@@ -301,18 +301,22 @@ def _record_route_transfer_from_order(
         return False
     transfer_id = str(item.get("id") or "")
     recipient = str(item.get("recipient") or item.get("account") or "")
+    transfer_status = str(item.get("transfer_status") or item.get("status") or "").lower()
     if (
         not transfer_id.startswith("trf_")
         or recipient != transfer.linked_account_id
         or item.get("amount") != transfer.amount_paise
         or str(item.get("currency") or "") != transfer.currency
-        or str(item.get("status") or "").lower() != "created"
+        or transfer_status != "created"
     ):
         return False
     transfer.provider_order_id = provider_order_id
     transfer.provider_transfer_id = transfer_id
-    transfer.status = "created"
-    transfer.settlement_status = str(item.get("settlement_status") or "pending")[:24]
+    recipient_settlement_id = str(item.get("recipient_settlement_id") or "")
+    transfer.recipient_settlement_id = recipient_settlement_id or None
+    transfer.status = transfer_status
+    settlement_status = str(item.get("settlement_status") or "pending").lower()
+    transfer.settlement_status = settlement_status if settlement_status in {"pending", "on_hold", "settled"} else "pending"
     transfer.failure_code = ""
     transfer.updated_at = _utcnow()
     return True
@@ -1365,6 +1369,27 @@ async def razorpay_webhook(
             body_payload = body.get("payload", {})
             matched = _process_refund_webhook(db, event_type, body_payload if isinstance(body_payload, dict) else {})
             event.processing_status = "processed" if matched else "ignored"
+        elif event_type == "settlement.processed":
+            settlement_entity = body.get("payload", {}).get("settlement", {}).get("entity", {})
+            if not isinstance(settlement_entity, dict):
+                raise HTTPException(400, "Route settlement webhook entity is missing.")
+            settlement_id = str(settlement_entity.get("id") or "")
+            if not settlement_id.startswith("setl_"):
+                raise HTTPException(400, "Route settlement webhook has no valid settlement ID.")
+            settlement_amount = settlement_entity.get("amount")
+            if not isinstance(settlement_amount, int) or settlement_amount < 0:
+                raise HTTPException(400, "Route settlement amount is invalid.")
+            route_transfers = list(db.scalars(select(m.PaymentTransfer).where(
+                m.PaymentTransfer.recipient_settlement_id == settlement_id
+            ).with_for_update()))
+            if not route_transfers:
+                # Keep this event retryable instead of permanently ignoring a
+                # settlement event that arrived before transfer rows were linked.
+                raise HTTPException(503, "Route settlement has no matching recorded transfers yet.")
+            for route_transfer in route_transfers:
+                route_transfer.settlement_status = "settled"
+                route_transfer.updated_at = _utcnow()
+            event.processing_status = "processed"
         elif event_type.startswith("transfer."):
             transfer_entity = body.get("payload", {}).get("transfer", {}).get("entity", {})
             if not isinstance(transfer_entity, dict):
@@ -1404,7 +1429,7 @@ async def razorpay_webhook(
                     "transfer.failed": "failed",
                     "transfer.reversed": "reversed",
                 }.get(event_type)
-                status_from_provider = str(transfer_entity.get("status") or "").lower()
+                status_from_provider = str(transfer_entity.get("transfer_status") or transfer_entity.get("status") or "").lower()
                 if event_status is None or status_from_provider not in {
                     "created", "pending", "processed", "failed", "reversed", "partially_reversed"
                 }:
@@ -1412,6 +1437,8 @@ async def razorpay_webhook(
                 else:
                     route_transfer.provider_transfer_id = provider_transfer_id
                     route_transfer.provider_order_id = source_id or route_transfer.provider_order_id
+                    recipient_settlement_id = str(transfer_entity.get("recipient_settlement_id") or "")
+                    route_transfer.recipient_settlement_id = recipient_settlement_id or route_transfer.recipient_settlement_id
                     route_transfer.status = status_from_provider
                     settlement_status = str(transfer_entity.get("settlement_status") or "").lower()
                     if settlement_status in {"pending", "on_hold", "settled"}:
