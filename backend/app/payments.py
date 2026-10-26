@@ -550,6 +550,15 @@ def create_payment_order(
         m.PaymentAttempt.status.in_(ACTIVE_ORDER_STATUSES),
     ).with_for_update())
     if active:
+        # A client can lose its in-memory idempotency key after an app restart.
+        # Recover an ambiguous order by its stable provider receipt before deciding
+        # whether a new request can safely launch Checkout.
+        if active.status == "unknown" and not active.provider_order_id:
+            if _recover_indeterminate_order_creation(db, active):
+                return _checkout_payload(active)
+            if active.provider_order_id:
+                raise HTTPException(409, "The existing Razorpay order was found but is not safe to relaunch. Check payment status; do not start another payment.")
+            raise HTTPException(409, "Razorpay has not yet returned a matching order for this attempt. Keep using this charge and do not create another payment.")
         # A client may time out after the order was successfully created and retry
         # with a fresh idempotency key. Reuse the still-open, provider-backed order
         # rather than forcing a second order or a dead-end 409.
