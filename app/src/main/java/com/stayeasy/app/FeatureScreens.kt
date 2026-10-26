@@ -1390,6 +1390,12 @@ private fun summarizeIntegrationReadiness(payload: JSONObject?): String {
         .replace('_', ' ')
     val webhookState = if (payment.optBoolean("webhook_secret_configured", false)) "Configured" else "Not configured"
     val mode = payment.optString("mode_hint", "unknown")
+    val settlement = payload.optJSONObject("owner_settlement") ?: JSONObject()
+    val settlementMode = settlement.optString("mode", "unknown")
+    val routeEnabled = settlement.optBoolean("route_enabled", false)
+    val accountStatus = settlement.optString("current_owner_account_status", "unknown")
+    val transferCount = settlement.optInt("tracked_transfer_count")
+    val transferExceptions = settlement.optInt("transfer_exception_count")
     return buildString {
         append("PROPERTY FEED\n")
         append("Provider: ").append(feed.optString("source", "partner-feed")).append('\n')
@@ -1409,6 +1415,19 @@ private fun summarizeIntegrationReadiness(payload: JSONObject?): String {
         append("Webhook secret: ").append(webhookState).append('\n')
         append("Mode hint: ").append(mode).append('\n')
         append("Configuration presence is not a live provider test. Checkout and signed webhooks still need staging acceptance.")
+        append("\n\nOWNER SETTLEMENT\n")
+        append("Settlement mode: ").append(settlementMode).append('\n')
+        if (settlement.optBoolean("platform_mode_blocked", false)) {
+            append("Safety gate: platform-only payment collection is blocked in this environment.\n")
+        }
+        append("Razorpay Route feature gate: ").append(if (routeEnabled) "Enabled" else "Disabled").append('\n')
+        append("Linked account status: ").append(accountStatus).append('\n')
+        append("Tracked owner transfers: ").append(transferCount).append('\n')
+        append("Transfer exceptions: ").append(transferExceptions).append('\n')
+        append(if (settlementMode == "owner_route" && routeEnabled && settlement.optBoolean("ready_for_owner_routed_payments", false))
+            "Route setup has a configured active owner link; provider-backed payment/settlement acceptance is still required."
+        else
+            "Rent is not confirmed delivered to an owner unless the transfer and bank-settlement states are verified.")
     }
 }
 
