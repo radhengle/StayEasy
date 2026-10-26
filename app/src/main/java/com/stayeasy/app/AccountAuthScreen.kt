@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -53,7 +52,7 @@ import org.json.JSONObject
  * returns the server-approved role and the parent chooses the actual workspace.
  */
 @Composable
-internal fun AccountAuthScreen(
+internal fun BackendAccountAuthScreen(
     baseUrl: String,
     account: JSONObject?,
     startMode: String,
@@ -250,7 +249,7 @@ internal fun AccountAuthScreen(
                                     message = "Account created. Open the verification email to finish registration."
                                 } else {
                                     val result = withContext(Dispatchers.IO) {
-                                        StayApiClient.loginAccount(androidx.compose.ui.platform.LocalContext.current, baseUrl, email, password)
+                                        StayApiClient.loginAccount(context, baseUrl, email, password)
                                     }
                                     val user = result.optJSONObject("user") ?: JSONObject()
                                     onLoginSucceeded(user)
