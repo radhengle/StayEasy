@@ -143,6 +143,11 @@ def fetch_razorpay_order(order_id: str) -> dict[str, Any]:
     return _gateway_request("GET", f"/orders/{quote(order_id, safe='')}")
 
 
+def fetch_razorpay_transfers_for_settlement(settlement_id: str) -> dict[str, Any]:
+    """Fetch the canonical Route transfer collection for an owner settlement webhook."""
+    return _gateway_request("GET", f"/transfers?recipient_settlement_id={quote(settlement_id, safe='')}")
+
+
 def fetch_razorpay_orders_by_receipt(receipt: str) -> dict[str, Any]:
     """Find an order after POST /orders timed out before its ID was persisted."""
     return _gateway_request("GET", f"/orders?receipt={quote(receipt, safe='')}&count=100")
@@ -1410,10 +1415,60 @@ async def razorpay_webhook(
                 m.PaymentTransfer.recipient_settlement_id == settlement_id
             ).with_for_update()))
             if not route_transfers:
-                # Keep this event retryable instead of permanently ignoring a
-                # settlement event that arrived before transfer rows were linked.
-                raise HTTPException(503, "Route settlement has no matching recorded transfers yet.")
+                # Settlement webhooks can race the local transfer-to-settlement linkage.
+                # Ask Razorpay for the authoritative transfer collection rather than
+                # permanently ignoring the event or guessing from its amount alone.
+                try:
+                    provider_collection = fetch_razorpay_transfers_for_settlement(settlement_id)
+                except (GatewayRequestError, HTTPException) as exc:
+                    raise HTTPException(503, "Razorpay settlement transfer lookup failed; retry reconciliation.") from exc
+                provider_items = provider_collection.get("items")
+                if not isinstance(provider_items, list):
+                    raise HTTPException(503, "Razorpay returned no usable transfer collection for this settlement.")
+                for item in provider_items:
+                    if not isinstance(item, dict):
+                        continue
+                    provider_transfer_id = str(item.get("id") or "")
+                    source_id = str(item.get("source") or "")
+                    notes = item.get("notes") if isinstance(item.get("notes"), dict) else {}
+                    attempt_text = str(notes.get("stayeasy_payment_attempt_id") or "")
+                    attempt = db.get(m.PaymentAttempt, int(attempt_text)) if attempt_text.isdigit() else None
+                    if attempt is None and source_id.startswith("order_"):
+                        attempt = db.scalar(select(m.PaymentAttempt).where(
+                            m.PaymentAttempt.provider_order_id == source_id
+                        ))
+                    route_transfer = db.scalar(select(m.PaymentTransfer).where(
+                        m.PaymentTransfer.provider_transfer_id == provider_transfer_id
+                    ).with_for_update()) if provider_transfer_id else None
+                    if route_transfer is None and attempt is not None:
+                        route_transfer = db.scalar(select(m.PaymentTransfer).where(
+                            m.PaymentTransfer.payment_attempt_id == attempt.id
+                        ).with_for_update())
+                    if route_transfer is None:
+                        continue
+                    recipient = str(item.get("recipient") or "")
+                    transfer_amount = item.get("amount")
+                    transfer_currency = str(item.get("currency") or "")
+                    provider_status = str(item.get("transfer_status") or item.get("status") or "").lower()
+                    if (not provider_transfer_id.startswith("trf_")
+                            or recipient != route_transfer.linked_account_id
+                            or transfer_amount != route_transfer.amount_paise
+                            or transfer_currency != route_transfer.currency
+                            or provider_status not in {"created", "pending", "processed", "failed", "reversed", "partially_reversed"}):
+                        raise HTTPException(409, "Razorpay settlement transfer does not match the stored owner, amount, currency or status.")
+                    route_transfer.provider_transfer_id = provider_transfer_id
+                    if source_id.startswith("order_"):
+                        route_transfer.provider_order_id = source_id
+                    route_transfer.recipient_settlement_id = settlement_id
+                    route_transfer.status = provider_status
+                    route_transfer.settlement_status = "settled"
+                    route_transfer.failure_code = "provider_transfer_failed" if provider_status == "failed" else ""
+                    route_transfer.updated_at = _utcnow()
+                    route_transfers.append(route_transfer)
+                if not route_transfers:
+                    raise HTTPException(503, "Razorpay settlement has no matching StayEasy owner transfer yet; retry reconciliation.")
             for route_transfer in route_transfers:
+                route_transfer.recipient_settlement_id = settlement_id
                 route_transfer.settlement_status = "settled"
                 route_transfer.updated_at = _utcnow()
             event.processing_status = "processed"
