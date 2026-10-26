@@ -1534,6 +1534,22 @@ def tenant_invitation_history_payload(db: Session, invitation: m.PropertyInvitat
         "required_document_categories": invitation.required_document_categories or [],
         "document_request_reason": invitation.document_request_reason,
     }
+    # After reassignment, the accepted reservation is the authoritative source
+    # for the bed and price shown in tenant history; the original invitation row
+    # intentionally retains the originally proposed unit.
+    if reservation and reservation.unit_id:
+        assigned_unit = db.get(m.PropertyUnit, reservation.unit_id)
+        if assigned_unit:
+            payload.update({
+                "unit_id": assigned_unit.id,
+                "floor_label": assigned_unit.floor_label,
+                "room_code": assigned_unit.room_code,
+                "unit_code": assigned_unit.unit_code,
+                "unit_status": invitation_unit_state(db, assigned_unit),
+                "monthly_rent": reservation.rent_snapshot,
+                "deposit": reservation.deposit_snapshot,
+                "move_in_date": reservation.move_in_date.isoformat(),
+            })
     return payload
 
 
