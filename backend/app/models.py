@@ -490,6 +490,7 @@ class PaymentAttempt(Base):
     charge_entry_id: Mapped[int] = mapped_column(ForeignKey("ledger_entries.id"), index=True)
     customer_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
     provider: Mapped[str] = mapped_column(String(24), default="razorpay")
+    settlement_mode: Mapped[str] = mapped_column(String(24), default="platform", server_default=text("'platform'"), nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128))
     amount_paise: Mapped[int] = mapped_column(Integer)
     currency: Mapped[str] = mapped_column(String(3), default="INR")
