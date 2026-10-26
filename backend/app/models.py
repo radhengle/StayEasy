@@ -569,6 +569,7 @@ class PaymentTransfer(Base):
     linked_account_id: Mapped[str] = mapped_column(String(100))
     provider_order_id: Mapped[str] = mapped_column(String(100), index=True)
     provider_transfer_id: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
+    recipient_settlement_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
     amount_paise: Mapped[int] = mapped_column(Integer)
     currency: Mapped[str] = mapped_column(String(3), default="INR")
     status: Mapped[str] = mapped_column(String(30), default="creating", index=True)
