@@ -2879,3 +2879,17 @@ def test_route_account_readiness_is_owner_scoped_and_secret_free(monkeypatch):
     assert response.status_code == 200, response.text
     assert response.json()["account_status"] == "not_configured"
     assert response.json()["linked_account_configured"] is False
+
+
+def test_admin_console_cors_preflight_allows_owner_settlement_put():
+    response = client.options(
+        "/payments/admin/owner-settlement-accounts/owner-route-cors-test",
+        headers={
+            "Origin": "http://localhost:8080",
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert "PUT" in response.headers.get("access-control-allow-methods", "")
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:8080"
