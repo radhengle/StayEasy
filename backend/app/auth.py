@@ -140,22 +140,33 @@ def register_account(body: AccountRegister, db: Session = Depends(get_db)):
         verification_code_hash=hash_one_time_code(user_id, code, "email-verification"),
         verification_expires_at=datetime.now(timezone.utc) + timedelta(minutes=15),
     )
-    db.add(user)
-    db.add(credential)
-    db.add(m.TenantProfile(
-        user_id=user_id,
-        emergency_contact_name=body.emergency_contact_name.strip(),
-        emergency_contact_phone=body.emergency_contact_phone.strip(),
-        accommodation_preferences={},
-    ))
     try:
+        # Flush the parent first: PostgreSQL enforces the UserCredential and TenantProfile
+        # foreign keys immediately, and these rows do not have ORM relationships that
+        # guarantee the parent is inserted before dependent rows.
+        db.add(user)
+        db.flush()
+        db.add(credential)
+        db.add(m.TenantProfile(
+            user_id=user_id,
+            emergency_contact_name=body.emergency_contact_name.strip(),
+            emergency_contact_phone=body.emergency_contact_phone.strip(),
+            accommodation_preferences={},
+        ))
         db.flush()
         send_security_code(email, "Verify your StayEasy account", code,
                            f"Your StayEasy verification code is {code}. It expires in 15 minutes. If you did not request this, ignore this email.")
         db.commit()
     except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="An account with this email already exists") from exc
+        # Only report a duplicate-email conflict when the database identifies that
+        # constraint. Other integrity errors must not be disguised as duplicate accounts.
+        original = str(getattr(exc, "orig", exc)).lower()
+        constraint = str(getattr(getattr(exc, "orig", None), "diag", None) and
+                         getattr(exc.orig.diag, "constraint_name", "") or "").lower()
+        if "users.email" in original or "users_email_key" in constraint or "uq_users_email" in constraint:
+            raise HTTPException(status_code=409, detail="An account with this email already exists") from exc
+        raise HTTPException(status_code=500, detail="Account could not be created because of a database integrity error") from exc
     return {"message": "Verification code sent. Verify your email before signing in.", "email": email}
 
 
