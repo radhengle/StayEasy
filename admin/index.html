@@ -23,6 +23,13 @@
       </div>
       <div class="panel"><h2>API health</h2><p class="hint">Checks connectivity separately from authenticated admin access.</p><button id="health">Check health</button><div id="healthLog" class="log" style="margin-top:10px">Not checked yet.</div></div>
       <div class="panel"><h2>Admin reports</h2><p class="hint">High-level platform counts from the API database.</p><button id="reports">Refresh report</button><div id="reportLog" class="log" style="margin-top:10px">Connect with an admin token to load reports.</div></div>
+      <div class="panel"><h2>Owner settlement accounts</h2><p class="hint">Link an owner's Razorpay Route Linked Account ID only after Razorpay confirms Route is enabled and that linked account has passed onboarding/KYC. This does not create or verify bank details.</p>
+        <label for="settlementOwnerId">Approved owner user ID</label><input id="settlementOwnerId" autocomplete="off" spellcheck="false" placeholder="Owner user ID">
+        <label for="settlementAccountId">Razorpay linked account ID</label><input id="settlementAccountId" autocomplete="off" spellcheck="false" placeholder="acc_...">
+        <label for="settlementStatus">Verified provider state</label><select id="settlementStatus"><option value="active">Active · provider approval confirmed</option><option value="pending">Pending · not payable</option><option value="suspended">Suspended · payments blocked</option></select>
+        <div class="actions2"><button class="primary" id="saveSettlementAccount">Save owner link</button><button id="loadSettlementAccounts">Refresh linked accounts</button></div>
+        <div id="settlementLog" class="log">Owner settlement accounts not loaded.</div>
+      </div>
       <div class="panel"><h2>Audit history</h2><p class="hint">Recent moderation and operational changes. Sensitive data should not be copied into shared channels.</p><button id="audit">Load latest 100 entries</button><div id="auditLog" class="log" style="margin-top:10px">Not loaded.</div></div>
     </div>
     <div class="stack">
@@ -53,6 +60,26 @@
   const pretty = v => JSON.stringify(v,null,2);
   const safe = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   async function loadReports(){ const r=await api('/admin/reports'); $('mProperties').textContent=r.properties??0; $('mPublished').textContent=r.published_properties??0; $('mReview').textContent=r.pending_review??0; $('mIssues').textContent=r.open_issues??0; $('reportLog').textContent=pretty(r); }
+  async function loadSettlementAccounts(){
+    const result = await api('/payments/admin/owner-settlement-accounts');
+    $('settlementLog').textContent = pretty(result);
+  }
+  async function saveSettlementAccount(){
+    const ownerId = $('settlementOwnerId').value.trim();
+    const accountId = $('settlementAccountId').value.trim();
+    const status = $('settlementStatus').value;
+    if(!ownerId){notify('Enter the approved owner user ID.',true);return;}
+    if(!/^acc_[A-Za-z0-9]+$/.test(accountId)){notify('Enter the Razorpay linked-account ID beginning acc_.',true);return;}
+    if(status==='active' && !confirm('Confirm Razorpay Route is enabled and this linked account has completed provider onboarding/KYC. Save as active?')) return;
+    try {
+      const result = await api('/payments/admin/owner-settlement-accounts/' + encodeURIComponent(ownerId), {
+        method:'PUT', body:JSON.stringify({linked_account_id:accountId,status})
+      });
+      $('settlementLog').textContent = pretty(result);
+      notify('Owner settlement link saved. Verify the owner integration status and run a test-mode transfer before enabling live payments.');
+      await loadAudit();
+    } catch(e) { notify(e.message,true); }
+  }
   async function loadAudit(){ $('auditLog').textContent=pretty(await api('/admin/audit-log?limit=100')); }
   async function loadQueue(){
     const rows=await api('/admin/listing-review'); const host=$('queue');
@@ -69,6 +96,8 @@
   $('connect').addEventListener('click',connect); $('reload').addEventListener('click',async()=>{try{await loadQueue();notify('Review queue refreshed.')}catch(e){notify(e.message,true)}});
   $('reports').addEventListener('click',async()=>{try{await loadReports();notify('Reports refreshed.')}catch(e){notify(e.message,true)}});
   $('audit').addEventListener('click',async()=>{try{await loadAudit();notify('Audit history loaded.')}catch(e){notify(e.message,true)}});
+  $('loadSettlementAccounts').addEventListener('click',async()=>{try{await loadSettlementAccounts();notify('Owner settlement accounts refreshed.')}catch(e){notify(e.message,true)}});
+  $('saveSettlementAccount').addEventListener('click',saveSettlementAccount);
   $('disconnect').addEventListener('click',()=>{$('token').value='';token='';notify('Token cleared from this page.');});
   $('health').addEventListener('click',async()=>{try{$('healthLog').textContent=pretty(await api('/health'));}catch(e){$('healthLog').textContent=e.message;}});
 })();
