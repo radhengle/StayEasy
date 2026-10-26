@@ -2893,3 +2893,57 @@ def test_admin_console_cors_preflight_allows_owner_settlement_put():
     assert response.status_code == 200, response.text
     assert "PUT" in response.headers.get("access-control-allow-methods", "")
     assert response.headers.get("access-control-allow-origin") == "http://localhost:8080"
+
+
+
+def test_early_route_settlement_webhook_recovers_transfer_from_provider(monkeypatch):
+    import hashlib
+    import hmac
+    import json
+
+    order, _calls, _charge_id, _reservation_id, _property_id = _create_route_test_order(monkeypatch)
+    assert order.status_code == 201, order.text
+    attempt_id = order.json()["id"]
+    with SessionLocal() as db:
+        transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt_id))
+        assert transfer is not None
+        assert transfer.recipient_settlement_id is None
+
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "route-early-settlement-secret")
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_transfers_for_settlement", lambda settlement_id: {
+        "items": [{
+            "id": "trf_stayeasy_route_test_01",
+            "source": "order_stayeasy_route_test_01",
+            "recipient": "acc_STAYEASYTEST01",
+            "amount": 12500,
+            "currency": "INR",
+            "transfer_status": "processed",
+            "settlement_status": "settled",
+            "recipient_settlement_id": settlement_id,
+            "notes": {"stayeasy_payment_attempt_id": str(attempt_id)},
+        }]
+    })
+    payload = {
+        "event": "settlement.processed",
+        "payload": {"settlement": {"entity": {
+            "id": "setl_early_route_test_01",
+            "amount": 12500,
+            "status": "processed",
+            "utr": "test-utr-only",
+        }}},
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    signature = hmac.new(b"route-early-settlement-secret", raw, hashlib.sha256).hexdigest()
+    response = client.post("/payments/webhooks/razorpay", content=raw, headers={
+        "Content-Type": "application/json",
+        "X-Razorpay-Signature": signature,
+        "X-Razorpay-Event-Id": "evt_early_route_settlement_01",
+    })
+    assert response.status_code == 200, response.text
+    with SessionLocal() as db:
+        transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt_id))
+        assert transfer is not None
+        assert transfer.provider_transfer_id == "trf_stayeasy_route_test_01"
+        assert transfer.recipient_settlement_id == "setl_early_route_test_01"
+        assert transfer.status == "processed"
+        assert transfer.settlement_status == "settled"
