@@ -88,6 +88,18 @@ def test_feed_rejects_malformed_envelopes_instead_of_reporting_empty_sync(monkey
         feed_ingestion._read_feed("https://feed.example.test/listings")
 
 
+def test_feed_preserves_malformed_rows_for_ingestion_metrics(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "development")
+    monkeypatch.delenv("PROPERTY_FEED_TOKEN", raising=False)
+    payload = [{"external_id": "pune-2"}, "malformed-row", None, 42]
+    monkeypatch.setattr(
+        feed_ingestion,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(json.dumps(payload).encode()),
+    )
+    assert feed_ingestion._read_feed("https://feed.example.test/listings") == payload
+
+
 def test_http_feed_blocked_outside_development(monkeypatch):
     monkeypatch.setenv("APP_ENV", "production")
     with pytest.raises(ValueError, match="HTTPS"):
