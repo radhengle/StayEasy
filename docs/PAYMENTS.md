@@ -12,7 +12,7 @@ Set these as deployment secrets, never commit live values:
 
 - RAZORPAY_KEY_ID: public checkout key ID from the Razorpay dashboard.
 - RAZORPAY_KEY_SECRET: server-only API and checkout-signature secret.
-- RAZORPAY_WEBHOOK_SECRET: a separate webhook signing secret configured on the Razorpay webhook for payment.authorized, payment.captured, payment.failed, refund.processed, and refund.failed.
+- RAZORPAY_WEBHOOK_SECRET: a separate webhook signing secret configured on the Razorpay webhook for payment.authorized, payment.captured, payment.failed, refund.processed, refund.failed, Route transfer events, and `settlement.processed`.
 
 Use Razorpay test-mode credentials in development/staging. Test mode must be confirmed from the provider dashboard. Production live mode must not be enabled until the legal entity, bank settlement account, account verification, payment disclosures, refund/cancellation terms, privacy notice and support contact have been approved. Configure the webhook URL as https://<api-host>/payments/webhooks/razorpay; use HTTPS only. Webhook signatures are checked against the raw request bytes and the separate webhook secret.
 
@@ -21,6 +21,22 @@ The app returns key_id, checkout_order_id, checkout_amount, and checkout_currenc
 ## Readiness diagnostics
 
 An owner/admin can request `GET /owner/integrations/status` or use **API connection & sync → Integration readiness** in Android. The response reports whether checkout and webhook secrets are configured and provides a test/live mode hint from the key ID prefix; it does not return any key or secret values. This is configuration visibility only. A successful order, verified capture, signed webhook and refund flow still require Razorpay test-mode acceptance against a configured staging webhook.
+
+## Marketplace settlement to property owners
+
+**Tenant checkout and owner settlement are separate steps.** A payment can be captured by the platform merchant account without reaching the PG owner. StayEasy supports an explicit Razorpay Route settlement mode for the marketplace flow; the route must remain disabled until Razorpay has enabled the product for the merchant account.
+
+- `PAYMENT_SETTLEMENT_MODE=owner_route` selects owner-routed orders. Staging/production defaults to this mode.
+- `RAZORPAY_ROUTE_ENABLED=true` is an operator-controlled feature gate. It must only be enabled after Route approval and successful test-mode onboarding.
+- Each property owner must have a Razorpay Route Linked Account created and KYC-approved with Razorpay. StayEasy stores only the linked-account identifier and its status; it does not collect or persist owner bank details, VPA credentials, or KYC documents.
+- An administrator can attach a provider-onboarded account with `PUT /payments/admin/owner-settlement-accounts/{owner_id}` and body `{"linked_account_id":"acc_...","status":"active"}`. The active status is accepted only while Route is enabled. `GET /payments/admin/owner-settlement-accounts` lists links for reconciliation; owners can view their own readiness through `GET /payments/owner/settlement-status`.
+- In owner-route mode, order creation fails closed if Route is disabled or the property's owner has no active linked account. The server adds one transfer for the server-calculated payable amount to the order, verifies the returned transfer ID/recipient/amount/currency before giving Checkout to Android, and reconciles ambiguous order creation by fetching the canonical order. It never sends the tenant to checkout when the owner-transfer details cannot be verified.
+- The signed webhook endpoint must subscribe to Route transfer events including `transfer.created`, `transfer.processed`, `transfer.failed`, and `transfer.reversed`. Owner payment summaries expose transfer state separately from the tenant's captured-payment state; `processed` is not labelled bank-settled unless the provider explicitly reports settlement.
+- **Current Route refund limitation:** routed payments currently support a single full refund only, and only when no earlier refund has been reserved. The implementation uses Razorpay's `reverse_all=true` path to reverse the full linked-account transfer with the refund. It fails closed for partial or subsequent Route refunds before calling Razorpay because amount-specific partial transfer reversal has not yet been implemented. Platform-only payments still support partial refunds. Do not describe Route partial refunds as supported until explicit transfer-reversal amounts, webhook/retry reconciliation and regression tests are added.
+
+For a local non-routed development flow, use `PAYMENT_SETTLEMENT_MODE=platform`; that is a payment into the StayEasy merchant account, **not** a promise of automatic payment to the owner. A production platform-collection model must be explicitly approved and must not be inferred from a missing Route configuration.
+
+The provider dashboard/KYC work and real transactions cannot be completed by source code alone. The present Route order transfers the full server-calculated rent amount to the owner; this assumes the platform has enough available balance to cover Razorpay gateway fees, Route transfer fees and tax. Razorpay documents that insufficient balance can fail a transfer; agree who bears fees, confirm actual merchant pricing, and test the full rent flow before launch. After enabling Route, run a staging acceptance cycle that verifies the created order's `transfers` collection, a captured test payment, transfer webhooks, settlement reporting, full refund reversal, duplicate webhook replay and retry/recovery before any live keys are used. Route partial refunds are not currently supported and must remain blocked until amount-specific reversal is implemented and provider-tested.
 
 ## API flow
 
@@ -49,6 +65,7 @@ An owner/admin can request `GET /owner/integrations/status` or use **API connect
 
 - The native Android Razorpay Standard Checkout SDK is wired to the tenant Rent & Payments screen; test it on real devices against a staging account. Do not use a webview or fake payment success screen.
 - Configure test-mode API keys and webhook secret in staging and verify order/create, success, failure, pending/authorized, duplicate webhook, amount mismatch, refund, partial refund, timeout and restore/replay scenarios.
+- For owner-routed collections, get Razorpay Route enabled, onboard and KYC-approve a test linked account, link it through the admin endpoint, and verify the order includes exactly the expected transfer. Confirm transfer state and settlement separately from payment capture; verify full/partial refunds reverse the transfer as provider-supported.
 - Verify gateway settlements against StayEasy's payment ledger and the property owner's settlement arrangement. Razorpay collection does not automatically mean StayEasy is authorized to hold or split rental funds; use a provider-approved marketplace/linked-account model if StayEasy will collect money on behalf of property owners.
 - Obtain legal/accounting review for security deposit treatment, fee disclosure, refund policy, GST/tax invoices, KYC, payout timing and applicable payment regulations in every launch geography.
 - Never call the app production-ready just because the test gateway is working. Production credentials, Android device acceptance, webhook delivery, finance reconciliation, backup/restore and signed release remain separate launch gates.

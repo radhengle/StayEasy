@@ -173,6 +173,29 @@ internal fun OwnerOnlinePaymentsScreen(
                                 Text(ownerPaymentMoney(payment.optLong("amount_paise")), color = SE.Ink, fontWeight = FontWeight.ExtraBold, fontSize = 17.sp)
                             }
                             Text(statusLabel, color = if (captured) SE.Blue else SE.Orange, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                            val ownerSettlement = payment.optJSONObject("owner_settlement")
+                            if (ownerSettlement != null) {
+                                val settlementMode = ownerPaymentText(ownerSettlement, "mode", "unknown")
+                                val transferStatus = ownerPaymentText(ownerSettlement, "status", "unknown")
+                                val bankStatus = ownerPaymentText(ownerSettlement, "settlement_status", "unknown")
+                                val settlementAmount = ownerSettlement.optLong("amount_paise")
+                                val settlementLabel = when {
+                                    settlementMode == "platform" -> "Platform collection · NOT automatically routed to owner"
+                                    transferStatus in setOf("failed", "unknown", "reversed", "partially_reversed", "missing_transfer_record") ->
+                                        "Owner transfer needs reconciliation · $transferStatus"
+                                    bankStatus == "settled" -> "Owner transfer settled · ${ownerPaymentMoney(settlementAmount)}"
+                                    transferStatus == "processed" -> "Owner transfer processed · bank settlement $bankStatus"
+                                    transferStatus == "created" -> "Owner transfer created · waiting for payment capture"
+                                    else -> "Owner transfer · $transferStatus · bank settlement $bankStatus"
+                                }
+                                Text(
+                                    settlementLabel,
+                                    color = if (settlementMode == "owner_route" && bankStatus == "settled") SE.Blue else SE.Orange,
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 11.sp,
+                                    lineHeight = 15.sp
+                                )
+                            }
                             val orderId = ownerPaymentText(payment, "provider_order_id")
                             val paymentId = ownerPaymentText(payment, "provider_payment_id")
                             if (orderId.isNotBlank()) Text("Order: $orderId", color = SE.Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -220,13 +243,23 @@ internal fun OwnerOnlinePaymentsScreen(
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("${ownerPaymentText(selected, "property_name", "Property")} · Payment #${selected.optLong("id")}", color = SE.Muted, fontSize = 12.sp)
                     Text("Captured: ${ownerPaymentMoney(selected.optLong("amount_paise"))}", color = SE.Ink, fontWeight = FontWeight.Bold)
-                    OutlinedTextField(
-                        value = refundAmountRupees,
-                        onValueChange = { value -> refundAmountRupees = value.filter { it.isDigit() || it == '.' }.take(12) },
-                        label = { Text("Refund amount in ₹ (blank = full remaining amount)") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                    val routedPayment = selected.optJSONObject("owner_settlement")?.optString("mode") == "owner_route"
+                    if (routedPayment) {
+                        Text(
+                            "Owner-routed payments currently support one full refund only. Partial or follow-up refunds are blocked until amount-specific transfer reversal is available.",
+                            color = SE.Orange,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                    } else {
+                        OutlinedTextField(
+                            value = refundAmountRupees,
+                            onValueChange = { value -> refundAmountRupees = value.filter { it.isDigit() || it == '.' }.take(12) },
+                            label = { Text("Refund amount in ₹ (blank = full remaining amount)") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
                     OutlinedTextField(
                         value = refundReason,
                         onValueChange = { refundReason = it.take(500) },

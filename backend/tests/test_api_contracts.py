@@ -2601,3 +2601,391 @@ def test_security_code_sender_supports_explicit_local_plain_smtp(monkeypatch):
     assert delivered["from"] == "no-reply@stayeasy.local"
     assert "123456" in delivered["body"]
     assert "starttls" not in delivered
+
+
+
+def _create_route_test_order(monkeypatch):
+    """Build a route-mode payment using a fake Razorpay Route order response."""
+    charge_id, reservation_id, property_id = _create_payment_scenario()
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_public")
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "test-secret-key")
+    monkeypatch.setenv("PAYMENT_SETTLEMENT_MODE", "owner_route")
+    monkeypatch.setenv("RAZORPAY_ROUTE_ENABLED", "true")
+    monkeypatch.setenv("ALLOW_PLATFORM_SETTLEMENT_IN_PRODUCTION", "false")
+    with SessionLocal() as db:
+        owner = db.get(m.User, "owner-1")
+        if owner is None:
+            db.add(m.User(
+                id="owner-1", email="payment-owner@example.test",
+                display_name="Payment owner", role="owner", is_active=True,
+            ))
+            db.flush()
+        db.add(m.OwnerSettlementAccount(
+            owner_id="owner-1", linked_account_id="acc_STAYEASYTEST01",
+            status="active", linked_by="admin-1",
+            linked_at=datetime.now(timezone.utc),
+        ))
+        db.commit()
+
+    calls = []
+    def fake_route_order(amount_paise, receipt, notes, transfer):
+        calls.append({
+            "amount_paise": amount_paise,
+            "receipt": receipt,
+            "notes": notes,
+            "transfer": transfer,
+        })
+        return {
+            "id": "order_stayeasy_route_test_01",
+            "amount": amount_paise,
+            "currency": "INR",
+            "receipt": receipt,
+            "status": "created",
+            "transfers": [{
+                "id": "trf_stayeasy_route_test_01",
+                "recipient": transfer["account"],
+                "amount": transfer["amount"],
+                "currency": transfer["currency"],
+                "transfer_status": "created",
+                "settlement_status": "pending",
+                "notes": transfer["notes"],
+            }],
+        }
+    monkeypatch.setattr(payment_routes, "create_razorpay_order_with_transfer", fake_route_order)
+    set_actor("payment-customer", "customer")
+    response = client.post(
+        "/payments/orders",
+        json={"charge_id": charge_id},
+        headers={"Idempotency-Key": "tenant-route-order-test-01"},
+    )
+    return response, calls, charge_id, reservation_id, property_id
+
+
+def test_route_order_creates_and_persists_exact_owner_transfer(monkeypatch):
+    response, calls, charge_id, _reservation_id, property_id = _create_route_test_order(monkeypatch)
+    assert response.status_code == 201, response.text
+    assert len(calls) == 1
+    assert calls[0]["amount_paise"] == 12500
+    assert calls[0]["transfer"]["account"] == "acc_STAYEASYTEST01"
+    assert calls[0]["transfer"]["amount"] == 12500
+    assert calls[0]["transfer"]["currency"] == "INR"
+    with SessionLocal() as db:
+        attempt = db.scalar(select(m.PaymentAttempt).where(
+            m.PaymentAttempt.idempotency_key == "tenant-route-order-test-01"
+        ))
+        assert attempt is not None
+        assert attempt.provider_order_id == "order_stayeasy_route_test_01"
+        transfer = db.scalar(select(m.PaymentTransfer).where(
+            m.PaymentTransfer.payment_attempt_id == attempt.id
+        ))
+        assert transfer is not None
+        assert transfer.owner_id == "owner-1"
+        assert transfer.linked_account_id == "acc_STAYEASYTEST01"
+        assert transfer.provider_transfer_id == "trf_stayeasy_route_test_01"
+        assert transfer.amount_paise == 12500
+        assert transfer.status == "created"
+        assert transfer.settlement_status == "pending"
+        charge = db.get(m.LedgerEntry, charge_id)
+        assert charge is not None and charge.status == "open"
+    set_actor("owner-1", "owner")
+    summary = client.get(f"/payments/owner/summary?property_id={property_id}")
+    assert summary.status_code == 200, summary.text
+    item = next(p for p in summary.json()["payments"] if p["id"] == response.json()["id"])
+    assert item["owner_settlement"]["mode"] == "owner_route"
+    assert item["owner_settlement"]["status"] == "created"
+    assert item["owner_settlement"]["amount_paise"] == 12500
+
+
+def test_route_mode_fails_closed_without_active_owner_linked_account(monkeypatch):
+    charge_id, _reservation_id, _property_id = _create_payment_scenario()
+    monkeypatch.setenv("RAZORPAY_KEY_ID", "rzp_test_public")
+    monkeypatch.setenv("RAZORPAY_KEY_SECRET", "test-secret-key")
+    monkeypatch.setenv("PAYMENT_SETTLEMENT_MODE", "owner_route")
+    monkeypatch.setenv("RAZORPAY_ROUTE_ENABLED", "true")
+    calls = []
+    monkeypatch.setattr(payment_routes, "create_razorpay_order_with_transfer",
+                        lambda *args, **kwargs: calls.append(True))
+    response = client.post(
+        "/payments/orders",
+        json={"charge_id": charge_id},
+        headers={"Idempotency-Key": "tenant-route-no-account-01"},
+    )
+    assert response.status_code == 503, response.text
+    assert "owner" in response.json()["detail"].lower()
+    assert calls == []
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(m.PaymentAttempt)) == 0
+        assert db.scalar(select(func.count()).select_from(m.PaymentTransfer)) == 0
+
+
+def test_route_transfer_and_settlement_webhooks_update_separate_states(monkeypatch):
+    import hashlib
+    import hmac
+    import json
+
+    order, _calls, _charge_id, _reservation_id, _property_id = _create_route_test_order(monkeypatch)
+    assert order.status_code == 201, order.text
+    attempt_id = order.json()["id"]
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "route-webhook-test-secret")
+
+    transfer_payload = {
+        "event": "transfer.processed",
+        "payload": {"transfer": {"entity": {
+            "id": "trf_stayeasy_route_test_01",
+            "status": "processed",
+            "transfer_status": "processed",
+            "source": "order_stayeasy_route_test_01",
+            "recipient": "acc_STAYEASYTEST01",
+            "amount": 12500,
+            "currency": "INR",
+            "recipient_settlement_id": "setl_stayeasy_route_test_01",
+            "settlement_status": "pending",
+            "notes": {"stayeasy_payment_attempt_id": str(attempt_id)},
+        }}},
+    }
+    raw = json.dumps(transfer_payload, separators=(",", ":")).encode("utf-8")
+    sig = hmac.new(b"route-webhook-test-secret", raw, hashlib.sha256).hexdigest()
+    response = client.post("/payments/webhooks/razorpay", content=raw, headers={
+        "Content-Type": "application/json",
+        "X-Razorpay-Signature": sig,
+        "X-Razorpay-Event-Id": "evt_route_transfer_processed_01",
+    })
+    assert response.status_code == 200, response.text
+    with SessionLocal() as db:
+        transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt_id))
+        assert transfer is not None
+        assert transfer.status == "processed"
+        assert transfer.settlement_status == "pending"
+        assert transfer.recipient_settlement_id == "setl_stayeasy_route_test_01"
+
+    settlement_payload = {
+        "event": "settlement.processed",
+        "payload": {"settlement": {"entity": {
+            "id": "setl_stayeasy_route_test_01",
+            "amount": 12500,
+            "status": "processed",
+            "utr": "test-utr-only",
+        }}},
+    }
+    raw_settlement = json.dumps(settlement_payload, separators=(",", ":")).encode("utf-8")
+    sig_settlement = hmac.new(b"route-webhook-test-secret", raw_settlement, hashlib.sha256).hexdigest()
+    response = client.post("/payments/webhooks/razorpay", content=raw_settlement, headers={
+        "Content-Type": "application/json",
+        "X-Razorpay-Signature": sig_settlement,
+        "X-Razorpay-Event-Id": "evt_route_settlement_processed_01",
+    })
+    assert response.status_code == 200, response.text
+    with SessionLocal() as db:
+        transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt_id))
+        assert transfer is not None
+        assert transfer.status == "processed"
+        assert transfer.settlement_status == "settled"
+
+
+def test_route_payment_full_refund_requests_linked_account_transfer_reversal(monkeypatch):
+    response, _calls, _charge_id, _reservation_id, _property_id = _create_route_test_order(monkeypatch)
+    assert response.status_code == 201, response.text
+    attempt_id = response.json()["id"]
+    with SessionLocal() as db:
+        attempt = db.get(m.PaymentAttempt, attempt_id)
+        assert attempt is not None
+        attempt.status = "captured"
+        attempt.provider_payment_id = "pay_stayeasy_route_test_01"
+        attempt.captured_at = datetime.now(timezone.utc)
+        db.commit()
+
+    refund_calls = []
+    def fake_refund(payment_id, amount_paise, notes, reverse_all=False):
+        refund_calls.append((payment_id, amount_paise, notes, reverse_all))
+        return {"id": "rfnd_stayeasy_route_test_01", "amount": amount_paise, "status": "pending"}
+    monkeypatch.setattr(payment_routes, "create_razorpay_refund", fake_refund)
+    set_actor("owner-1", "owner")
+    refund = client.post(
+        f"/payments/{attempt_id}/refund",
+        json={"amount_paise": 12500, "reason": "Route full refund reversal test"},
+        headers={"Idempotency-Key": "owner-route-refund-test-01"},
+    )
+    assert refund.status_code == 202, refund.text
+    assert len(refund_calls) == 1
+    assert refund_calls[0][0] == "pay_stayeasy_route_test_01"
+    assert refund_calls[0][1] == 12500
+    assert refund_calls[0][3] is True
+    assert refund.json()["status"] in {"requested", "pending", "unknown"}
+
+
+def test_route_partial_refund_is_blocked_before_provider_call(monkeypatch):
+    response, _calls, _charge_id, _reservation_id, _property_id = _create_route_test_order(monkeypatch)
+    assert response.status_code == 201, response.text
+    attempt_id = response.json()["id"]
+    with SessionLocal() as db:
+        attempt = db.get(m.PaymentAttempt, attempt_id)
+        assert attempt is not None
+        attempt.status = "captured"
+        attempt.provider_payment_id = "pay_stayeasy_route_partial_refund_01"
+        attempt.captured_at = datetime.now(timezone.utc)
+        db.commit()
+
+    provider_calls = []
+    monkeypatch.setattr(payment_routes, "create_razorpay_refund",
+                        lambda *args, **kwargs: provider_calls.append(True))
+    set_actor("owner-1", "owner")
+    response = client.post(
+        f"/payments/{attempt_id}/refund",
+        json={"amount_paise": 5000, "reason": "Route partial refund test"},
+        headers={"Idempotency-Key": "owner-route-partial-refund-01"},
+    )
+    assert response.status_code == 409, response.text
+    assert "partial" in response.json()["detail"].lower()
+    assert provider_calls == []
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(m.PaymentRefund).where(
+            m.PaymentRefund.payment_attempt_id == attempt_id
+        )) == 0
+
+
+
+def test_admin_route_account_link_is_role_protected_and_audited(monkeypatch):
+    setup_property(owner_id="route-owner-admin-test")
+    owner_id = "route-owner-admin-test"
+    with SessionLocal() as db:
+        db.add(m.User(
+            id=owner_id, email="route-owner-admin-test@example.test",
+            display_name="Route owner", role="owner", is_active=True,
+        ))
+        db.commit()
+    monkeypatch.setenv("RAZORPAY_ROUTE_ENABLED", "true")
+    set_actor("tenant-untrusted", "customer")
+    denied = client.put(
+        f"/payments/admin/owner-settlement-accounts/{owner_id}",
+        json={"linked_account_id": "acc_ROUTEACCOUNTTST01", "status": "active"},
+    )
+    assert denied.status_code == 403
+
+    set_actor("admin-1", "admin")
+    linked = client.put(
+        f"/payments/admin/owner-settlement-accounts/{owner_id}",
+        json={"linked_account_id": "acc_ROUTEACCOUNTTST01", "status": "active"},
+    )
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["status"] == "active"
+    rows = client.get("/payments/admin/owner-settlement-accounts")
+    assert rows.status_code == 200, rows.text
+    assert any(row["owner_id"] == owner_id for row in rows.json()["accounts"])
+    with SessionLocal() as db:
+        audit = db.scalar(select(m.AuditLog).where(
+            m.AuditLog.entity_type == "owner_settlement_account",
+            m.AuditLog.entity_id == owner_id,
+            m.AuditLog.action == "owner_settlement_account_linked",
+        ))
+        assert audit is not None
+        assert audit.new_value["linked_account_id"] == "acc_ROUTEACCOUNTTST01"
+
+
+def test_production_platform_only_settlement_is_blocked_without_explicit_approval(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("PAYMENT_SETTLEMENT_MODE", "platform")
+    monkeypatch.setenv("ALLOW_PLATFORM_SETTLEMENT_IN_PRODUCTION", "false")
+    with pytest.raises(HTTPException) as exc:
+        payment_routes._settlement_mode()
+    assert exc.value.status_code == 503
+
+
+def test_route_account_readiness_is_owner_scoped_and_secret_free(monkeypatch):
+    _create_route_test_order(monkeypatch)
+    set_actor("owner-1", "owner")
+    response = client.get("/payments/owner/settlement-status")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mode"] == "owner_route"
+    assert body["route_enabled"] is True
+    assert body["account_status"] == "active"
+    assert body["linked_account_configured"] is True
+    assert "acc_STAYEASYTEST01" not in response.text
+    set_actor("other-owner", "owner")
+    response = client.get("/payments/owner/settlement-status")
+    assert response.status_code == 200, response.text
+    assert response.json()["account_status"] == "not_configured"
+    assert response.json()["linked_account_configured"] is False
+
+
+def test_admin_console_cors_preflight_allows_owner_settlement_put():
+    response = client.options(
+        "/payments/admin/owner-settlement-accounts/owner-route-cors-test",
+        headers={
+            "Origin": "http://localhost:8080",
+            "Access-Control-Request-Method": "PUT",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert "PUT" in response.headers.get("access-control-allow-methods", "")
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:8080"
+
+
+
+def test_early_route_settlement_webhook_recovers_transfer_from_provider(monkeypatch):
+    import hashlib
+    import hmac
+    import json
+
+    order, _calls, _charge_id, _reservation_id, _property_id = _create_route_test_order(monkeypatch)
+    assert order.status_code == 201, order.text
+    attempt_id = order.json()["id"]
+    with SessionLocal() as db:
+        transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt_id))
+        assert transfer is not None
+        assert transfer.recipient_settlement_id is None
+
+    monkeypatch.setenv("RAZORPAY_WEBHOOK_SECRET", "route-early-settlement-secret")
+    monkeypatch.setattr(payment_routes, "fetch_razorpay_transfers_for_settlement", lambda settlement_id: {
+        "items": [{
+            "id": "trf_stayeasy_route_test_01",
+            "source": "order_stayeasy_route_test_01",
+            "recipient": "acc_STAYEASYTEST01",
+            "amount": 12500,
+            "currency": "INR",
+            "transfer_status": "processed",
+            "settlement_status": "settled",
+            "recipient_settlement_id": settlement_id,
+            "notes": {"stayeasy_payment_attempt_id": str(attempt_id)},
+        }]
+    })
+    payload = {
+        "event": "settlement.processed",
+        "payload": {"settlement": {"entity": {
+            "id": "setl_early_route_test_01",
+            "amount": 12500,
+            "status": "processed",
+            "utr": "test-utr-only",
+        }}},
+    }
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    signature = hmac.new(b"route-early-settlement-secret", raw, hashlib.sha256).hexdigest()
+    response = client.post("/payments/webhooks/razorpay", content=raw, headers={
+        "Content-Type": "application/json",
+        "X-Razorpay-Signature": signature,
+        "X-Razorpay-Event-Id": "evt_early_route_settlement_01",
+    })
+    assert response.status_code == 200, response.text
+    with SessionLocal() as db:
+        transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt_id))
+        assert transfer is not None
+        assert transfer.provider_transfer_id == "trf_stayeasy_route_test_01"
+        assert transfer.recipient_settlement_id == "setl_early_route_test_01"
+        assert transfer.status == "processed"
+        assert transfer.settlement_status == "settled"
+
+
+def test_abbreviated_prod_environment_blocks_platform_only_settlement(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("APP_ENV", "prod")
+    monkeypatch.setenv("PAYMENT_SETTLEMENT_MODE", "platform")
+    monkeypatch.setenv("ALLOW_PLATFORM_SETTLEMENT_IN_PRODUCTION", "false")
+    with pytest.raises(HTTPException) as exc:
+        payment_routes._settlement_mode()
+    assert exc.value.status_code == 503
