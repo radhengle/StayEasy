@@ -273,6 +273,9 @@ def _assert_existing_settlement_mode(db: Session, attempt: m.PaymentAttempt) -> 
             raise HTTPException(409, "Settlement configuration changed after this order was created. Contact support; do not start another payment.")
         if transfer.status not in {"created", "processed", "pending"}:
             raise HTTPException(409, "Owner settlement is not confirmed for this order. Finance reconciliation is required.")
+        account = db.scalar(select(m.OwnerSettlementAccount).where(m.OwnerSettlementAccount.owner_id == transfer.owner_id))
+        if account is None or account.status != "active" or account.linked_account_id != transfer.linked_account_id:
+            raise HTTPException(409, "Owner settlement destination changed after this order was created. Finance reconciliation is required.")
     elif transfer is not None:
         raise HTTPException(409, "This order was created with owner settlement routing. Restore its original settlement configuration before retrying.")
 
@@ -480,13 +483,47 @@ def _recover_indeterminate_order_creation(db: Session, attempt: m.PaymentAttempt
 
     order = matching[0]
     provider_order_id = str(order.get("id") or "")
-    if (not provider_order_id or order.get("amount") != attempt.amount_paise
+    route_transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == attempt.id))
+    if route_transfer is not None:
+        try:
+            # The collection lookup may omit nested transfer data; fetch the canonical order
+            # before relaunching Checkout so the owner destination is independently validated.
+            order = fetch_razorpay_order(provider_order_id) if provider_order_id else {}
+        except GatewayRequestError as exc:
+            attempt.status = "unknown"
+            attempt.failure_code = "provider_route_order_lookup_unavailable"
+            route_transfer.status = "unknown"
+            route_transfer.failure_code = "provider_route_order_lookup_unavailable"
+            attempt.updated_at = _utcnow()
+            route_transfer.updated_at = _utcnow()
+            db.commit()
+            raise HTTPException(503, "Owner settlement details are not yet verifiable. Do not start another payment.") from exc
+
+    if (not provider_order_id or str(order.get("id") or provider_order_id) != provider_order_id
+            or (order.get("receipt") is not None and str(order.get("receipt")) != receipt)
+            or order.get("amount") != attempt.amount_paise
             or str(order.get("currency") or "") != attempt.currency):
         attempt.status = "unknown"
         attempt.failure_code = "provider_order_amount_or_currency_mismatch"
+        if route_transfer is not None:
+            route_transfer.status = "unknown"
+            route_transfer.failure_code = "provider_route_order_mismatch"
+            route_transfer.updated_at = _utcnow()
         attempt.updated_at = _utcnow()
         db.commit()
         raise HTTPException(409, "The located Razorpay order does not match the stored amount/currency. Finance reconciliation is required.")
+
+    if route_transfer is not None and not _record_route_transfer_from_order(db, attempt, order):
+        attempt.provider_order_id = provider_order_id
+        attempt.status = "unknown"
+        attempt.failure_code = "route_transfer_missing_or_mismatched"
+        route_transfer.provider_order_id = provider_order_id
+        route_transfer.status = "unknown"
+        route_transfer.failure_code = "route_transfer_missing_or_mismatched"
+        route_transfer.updated_at = _utcnow()
+        attempt.updated_at = _utcnow()
+        db.commit()
+        raise HTTPException(409, "The owner transfer on this Razorpay order could not be verified. Finance reconciliation is required; Checkout was not relaunched.")
 
     attempt.provider_order_id = provider_order_id
     if str(order.get("status") or "").lower() == "created":
@@ -719,6 +756,7 @@ def create_payment_order(
         if existing.charge_entry_id != charge_id:
             raise HTTPException(409, "This idempotency key was already used for a different charge.")
         if existing.status in {"created", "authorized"}:
+            _assert_existing_settlement_mode(db, existing)
             return _checkout_payload(existing)
         if existing.status == "unknown":
             if not existing.provider_order_id:
@@ -760,6 +798,7 @@ def create_payment_order(
         # with a fresh idempotency key. Reuse the still-open, provider-backed order
         # rather than forcing a second order or a dead-end 409.
         if active.status == "created" and active.provider_order_id:
+            _assert_existing_settlement_mode(db, active)
             return _checkout_payload(active)
         if active.status == "authorized":
             raise HTTPException(409, "A payment is authorized and awaiting capture. Check payment history; do not start another payment.")
@@ -767,6 +806,7 @@ def create_payment_order(
             raise HTTPException(409, "Payment status needs provider reconciliation. Do not start another payment.")
         raise HTTPException(409, "A payment order is still being created. Retry this request shortly; do not start another payment.")
 
+    settlement_account = _owner_route_account_for_charge(db, charge)
     attempt = m.PaymentAttempt(
         charge_entry_id=charge.id, customer_id=subject, provider="razorpay",
         idempotency_key=idempotency_key, amount_paise=due, currency="INR",
@@ -786,18 +826,60 @@ def create_payment_order(
             return _checkout_payload(duplicate)
         raise HTTPException(409, "A payment session is already being created for this charge. Retry the same request.") from exc
 
+    route_transfer_record = None
+    if settlement_account is not None:
+        route_transfer_record = m.PaymentTransfer(
+            payment_attempt_id=attempt.id,
+            owner_id=settlement_account.owner_id,
+            linked_account_id=settlement_account.linked_account_id,
+            provider_order_id="",
+            amount_paise=due,
+            currency="INR",
+            status="creating",
+            settlement_status="pending",
+        )
+        db.add(route_transfer_record)
+        db.commit()
+        db.refresh(route_transfer_record)
+
     try:
-        gateway_order = create_razorpay_order(due, f"se-{attempt.id}", {
+        order_notes = {
             "stayeasy_payment_attempt_id": str(attempt.id),
             "stayeasy_charge_id": str(charge.id),
-        })
+            "stayeasy_property_id": str(charge.property_id),
+        }
+        if route_transfer_record is not None:
+            transfer_spec = {
+                "account": route_transfer_record.linked_account_id,
+                "amount": due,
+                "currency": "INR",
+                "notes": {"stayeasy_payment_attempt_id": str(attempt.id),
+                          "stayeasy_property_id": str(charge.property_id)},
+            }
+            gateway_order = create_razorpay_order_with_transfer(due, f"se-{attempt.id}", order_notes, transfer_spec)
+        else:
+            gateway_order = create_razorpay_order(due, f"se-{attempt.id}", order_notes)
         provider_order_id = str(gateway_order.get("id") or "")
         if (not provider_order_id or gateway_order.get("amount") != due
                 or str(gateway_order.get("currency") or "") != "INR"):
             raise GatewayRequestError("The payment provider did not confirm the expected order amount.", ambiguous=True)
+        if route_transfer_record is not None and not _record_route_transfer_from_order(db, attempt, gateway_order):
+            attempt.provider_order_id = provider_order_id
+            attempt.status = "unknown"
+            attempt.failure_code = "route_transfer_missing_or_mismatched"
+            route_transfer_record.provider_order_id = provider_order_id
+            route_transfer_record.status = "unknown"
+            route_transfer_record.failure_code = "route_transfer_missing_or_mismatched"
+            route_transfer_record.updated_at = _utcnow()
+            attempt.updated_at = _utcnow()
+            db.commit()
+            raise HTTPException(409, "The provider did not confirm the configured owner transfer. Payment order is blocked from Checkout pending reconciliation.")
         attempt.provider_order_id = provider_order_id
         attempt.status = "created"
         attempt.updated_at = _utcnow()
+        if route_transfer_record is not None:
+            route_transfer_record.provider_order_id = provider_order_id
+            route_transfer_record.updated_at = _utcnow()
         db.commit()
         db.refresh(attempt)
     except GatewayRequestError as exc:
@@ -807,6 +889,11 @@ def create_payment_order(
             failed_attempt.status = "unknown" if exc.ambiguous else "failed"
             failed_attempt.failure_code = "gateway_order_indeterminate" if exc.ambiguous else "gateway_order_rejected"
             failed_attempt.updated_at = _utcnow()
+            transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == failed_attempt.id))
+            if transfer is not None:
+                transfer.status = "unknown" if exc.ambiguous else "failed"
+                transfer.failure_code = "gateway_order_indeterminate" if exc.ambiguous else "gateway_order_rejected"
+                transfer.updated_at = _utcnow()
             db.commit()
         if exc.ambiguous:
             raise HTTPException(503, "The provider's order result is indeterminate. Do not create a new payment request; support must reconcile it.") from exc
@@ -818,6 +905,11 @@ def create_payment_order(
             failed_attempt.status = "unknown"
             failed_attempt.failure_code = "order_response_persistence_indeterminate"
             failed_attempt.updated_at = _utcnow()
+            transfer = db.scalar(select(m.PaymentTransfer).where(m.PaymentTransfer.payment_attempt_id == failed_attempt.id))
+            if transfer is not None:
+                transfer.status = "unknown"
+                transfer.failure_code = "order_response_persistence_indeterminate"
+                transfer.updated_at = _utcnow()
             db.commit()
         raise
     return _checkout_payload(attempt)
