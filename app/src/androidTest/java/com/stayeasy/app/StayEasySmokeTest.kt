@@ -101,8 +101,8 @@ class StayEasySmokeTest {
     @Test
     fun tenantLoginActionOpensRealEmailPasswordForm() {
         composeRule.onAllNodesWithText("Login")[0].performScrollTo().performClick()
-        composeRule.onNodeWithText("Sign in to StayEasy").assertIsDisplayed()
-        composeRule.onNodeWithText("Email address").assertIsDisplayed()
+        composeRule.onNodeWithText("Welcome back").assertIsDisplayed()
+        composeRule.onNodeWithText("Email address").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("Password").performScrollTo().assertIsDisplayed()
     }
 
@@ -110,8 +110,8 @@ class StayEasySmokeTest {
     fun ownerRegisterActionOpensRealRegistrationFormWithApprovalDisclosure() {
         composeRule.onAllNodesWithText("Register")[1].performScrollTo().performClick()
         composeRule.onNodeWithText("Create your account").assertIsDisplayed()
-        composeRule.onNodeWithText("Email address").assertIsDisplayed()
-        composeRule.onNodeWithText("Owner-access request", substring = true).performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Email address").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Owner access requires approval", substring = true).performScrollTo().assertIsDisplayed()
     }
 
     @Test
