@@ -36,6 +36,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -75,6 +76,8 @@ internal fun TenantPaymentsScreen(
     var busyChargeId by remember { mutableLongStateOf(0L) }
     var refreshingAttemptId by remember { mutableLongStateOf(0L) }
     var loadCycle by remember { mutableIntStateOf(0) }
+    // Keep the same idempotency key after a network timeout so a retry can recover the original order.
+    val orderRetryKeys = remember { mutableStateMapOf<Long, String>() }
 
     LaunchedEffect(baseUrl, token, refreshToken, loadCycle) {
         busyChargeId = 0L
@@ -191,11 +194,13 @@ internal fun TenantPaymentsScreen(
                                 onClick = {
                                     if (id <= 0L || busyChargeId != 0L) return@Button
                                     busyChargeId = id
+                                    val idempotencyKey = orderRetryKeys.getOrPut(id) { UUID.randomUUID().toString() }
                                     scope.launch {
                                         try {
                                             val order = withContext(Dispatchers.IO) {
-                                                StayApiClient.createPaymentOrder(baseUrl, token.orEmpty(), id, UUID.randomUUID().toString())
+                                                StayApiClient.createPaymentOrder(baseUrl, token.orEmpty(), id, idempotencyKey)
                                             }
+                                            orderRetryKeys.remove(id)
                                             notify("Secure checkout is opening. The amount comes from your server-side rent balance.")
                                             onCheckout(order)
                                         } catch (e: Exception) {
