@@ -2782,7 +2782,7 @@ def test_route_transfer_and_settlement_webhooks_update_separate_states(monkeypat
         assert transfer.settlement_status == "settled"
 
 
-def test_route_payment_refund_requests_linked_account_transfer_reversal(monkeypatch):
+def test_route_payment_full_refund_requests_linked_account_transfer_reversal(monkeypatch):
     response, _calls, _charge_id, _reservation_id, _property_id = _create_route_test_order(monkeypatch)
     assert response.status_code == 201, response.text
     attempt_id = response.json()["id"]
@@ -2802,15 +2802,45 @@ def test_route_payment_refund_requests_linked_account_transfer_reversal(monkeypa
     set_actor("owner-1", "owner")
     refund = client.post(
         f"/payments/{attempt_id}/refund",
-        json={"amount_paise": 5000, "reason": "Route refund reversal test"},
+        json={"amount_paise": 12500, "reason": "Route full refund reversal test"},
         headers={"Idempotency-Key": "owner-route-refund-test-01"},
     )
     assert refund.status_code == 202, refund.text
     assert len(refund_calls) == 1
     assert refund_calls[0][0] == "pay_stayeasy_route_test_01"
-    assert refund_calls[0][1] == 5000
+    assert refund_calls[0][1] == 12500
     assert refund_calls[0][3] is True
     assert refund.json()["status"] in {"requested", "pending", "unknown"}
+
+
+def test_route_partial_refund_is_blocked_before_provider_call(monkeypatch):
+    response, _calls, _charge_id, _reservation_id, _property_id = _create_route_test_order(monkeypatch)
+    assert response.status_code == 201, response.text
+    attempt_id = response.json()["id"]
+    with SessionLocal() as db:
+        attempt = db.get(m.PaymentAttempt, attempt_id)
+        assert attempt is not None
+        attempt.status = "captured"
+        attempt.provider_payment_id = "pay_stayeasy_route_partial_refund_01"
+        attempt.captured_at = datetime.now(timezone.utc)
+        db.commit()
+
+    provider_calls = []
+    monkeypatch.setattr(payment_routes, "create_razorpay_refund",
+                        lambda *args, **kwargs: provider_calls.append(True))
+    set_actor("owner-1", "owner")
+    response = client.post(
+        f"/payments/{attempt_id}/refund",
+        json={"amount_paise": 5000, "reason": "Route partial refund test"},
+        headers={"Idempotency-Key": "owner-route-partial-refund-01"},
+    )
+    assert response.status_code == 409, response.text
+    assert "partial" in response.json()["detail"].lower()
+    assert provider_calls == []
+    with SessionLocal() as db:
+        assert db.scalar(select(func.count()).select_from(m.PaymentRefund).where(
+            m.PaymentRefund.payment_attempt_id == attempt_id
+        )) == 0
 
 
 
