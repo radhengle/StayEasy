@@ -578,6 +578,11 @@ def owner_integration_status(
         m.OwnerSettlementAccount.status == "active"
     )) or 0)
     all_owner_account_count = int(db.scalar(select(func.count()).select_from(m.OwnerSettlementAccount)) or 0)
+    owner_settlement_ready = (
+        settlement_mode == "owner_route"
+        and route_enabled
+        and (current_account_status == "active" if actor["role"] == "owner" else active_owner_account_count > 0)
+    )
 
     def timestamp(value):
         return value.isoformat() if value is not None else None
@@ -613,7 +618,7 @@ def owner_integration_status(
             "mode": settlement_mode,
             "platform_mode_blocked": platform_mode_blocked,
             "route_enabled": route_enabled,
-            "ready_for_owner_routed_payments": settlement_mode == "owner_route" and route_enabled and active_owner_account_count > 0,
+            "ready_for_owner_routed_payments": owner_settlement_ready,
             "current_owner_account_status": current_account_status,
             "active_owner_account_count": active_owner_account_count if actor["role"] == "admin" else (1 if current_account_status == "active" else 0),
             "total_owner_account_count": all_owner_account_count if actor["role"] == "admin" else (1 if own_account else 0),
