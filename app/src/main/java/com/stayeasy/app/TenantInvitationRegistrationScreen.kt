@@ -297,7 +297,7 @@ internal fun TenantInvitationRegistrationScreen(
                                         color = SE.Muted, fontSize = 10.sp)
                                     Text(
                                         invitationText(row, "registration_status_label", "Status unavailable"),
-                                        color = if (rowStatus in setOf("approved", "completed")) SE.Blue else if (rowStatus in setOf("rejected", "expired", "withdrawn")) SE.Red else SE.Orange,
+                                        color = if (rowStatus in setOf("approved", "completed")) SE.Blue else if (rowStatus in setOf("rejected", "cancelled", "expired", "withdrawn")) SE.Red else SE.Orange,
                                         fontSize = 10.sp, fontWeight = FontWeight.SemiBold
                                     )
                                 }
