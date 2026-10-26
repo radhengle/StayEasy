@@ -70,8 +70,8 @@ internal fun AccountAuthScreen(
     var displayName by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }
     var phone by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
-    var verificationCode by rememberSaveable { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var verificationCode by remember { mutableStateOf("") }
     var verificationPending by rememberSaveable { mutableStateOf(false) }
     var busy by rememberSaveable { mutableStateOf(false) }
     var error by rememberSaveable { mutableStateOf("") }
