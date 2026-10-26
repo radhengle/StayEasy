@@ -546,6 +546,35 @@ def owner_integration_status(
     else:
         checkout_state = "not_configured"
 
+    settlement_mode = os.getenv("PAYMENT_SETTLEMENT_MODE", "").strip().lower()
+    if not settlement_mode:
+        settlement_mode = "owner_route" if APP_ENV in {"staging", "production"} else "platform"
+    route_enabled = os.getenv("RAZORPAY_ROUTE_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    if actor["role"] == "owner":
+        own_account = db.scalar(select(m.OwnerSettlementAccount).where(
+            m.OwnerSettlementAccount.owner_id == str(actor["subject"])
+        ))
+        owner_transfer_query = select(func.count()).select_from(m.PaymentTransfer).where(
+            m.PaymentTransfer.owner_id == str(actor["subject"])
+        )
+        owner_transfer_count = int(db.scalar(owner_transfer_query) or 0)
+        owner_transfer_failed = int(db.scalar(select(func.count()).select_from(m.PaymentTransfer).where(
+            m.PaymentTransfer.owner_id == str(actor["subject"]),
+            m.PaymentTransfer.status.in_(("failed", "unknown", "reversed", "partially_reversed")),
+        )) or 0)
+        current_account_status = own_account.status if own_account else "not_configured"
+    else:
+        own_account = None
+        owner_transfer_count = int(db.scalar(select(func.count()).select_from(m.PaymentTransfer)) or 0)
+        owner_transfer_failed = int(db.scalar(select(func.count()).select_from(m.PaymentTransfer).where(
+            m.PaymentTransfer.status.in_(("failed", "unknown", "reversed", "partially_reversed")),
+        )) or 0)
+        current_account_status = "admin_view"
+    active_owner_account_count = int(db.scalar(select(func.count()).select_from(m.OwnerSettlementAccount).where(
+        m.OwnerSettlementAccount.status == "active"
+    )) or 0)
+    all_owner_account_count = int(db.scalar(select(func.count()).select_from(m.OwnerSettlementAccount)) or 0)
+
     def timestamp(value):
         return value.isoformat() if value is not None else None
 
@@ -575,6 +604,17 @@ def owner_integration_status(
             "webhook_secret_configured": webhook_secret_configured,
             "mode_hint": mode_hint,
             "note": "Configuration presence is not a provider acceptance test; verify checkout and signed webhooks in test mode.",
+        },
+        "owner_settlement": {
+            "mode": settlement_mode,
+            "route_enabled": route_enabled,
+            "ready_for_owner_routed_payments": settlement_mode == "owner_route" and route_enabled and active_owner_account_count > 0,
+            "current_owner_account_status": current_account_status,
+            "active_owner_account_count": active_owner_account_count if actor["role"] == "admin" else (1 if current_account_status == "active" else 0),
+            "total_owner_account_count": all_owner_account_count if actor["role"] == "admin" else (1 if own_account else 0),
+            "tracked_transfer_count": owner_transfer_count,
+            "transfer_exception_count": owner_transfer_failed,
+            "note": "Route payment splitting needs provider enablement and a KYC-approved linked account per owner. This diagnostic does not prove a transfer settled to the owner's bank.",
         },
     }
 
