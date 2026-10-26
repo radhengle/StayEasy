@@ -544,4 +544,39 @@ class PaymentWebhookEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+class OwnerSettlementAccount(Base):
+    """A Route linked account ID verified by an administrator after provider-side onboarding.
+
+    This table deliberately stores no bank account, VPA, KYC document, or other payout credentials.
+    """
+    __tablename__ = "owner_settlement_accounts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    linked_account_id: Mapped[str] = mapped_column(String(100), unique=True)
+    status: Mapped[str] = mapped_column(String(24), default="pending", index=True)
+    linked_by: Mapped[str] = mapped_column(String(36), default="")
+    linked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class PaymentTransfer(Base):
+    """Expected/actual owner settlement transfer created as part of a Razorpay Route order."""
+    __tablename__ = "payment_transfers"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payment_attempt_id: Mapped[int] = mapped_column(ForeignKey("payment_attempts.id"), unique=True, index=True)
+    owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    linked_account_id: Mapped[str] = mapped_column(String(100))
+    provider_order_id: Mapped[str] = mapped_column(String(100), index=True)
+    provider_transfer_id: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
+    amount_paise: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(3), default="INR")
+    status: Mapped[str] = mapped_column(String(30), default="creating", index=True)
+    settlement_status: Mapped[str] = mapped_column(String(24), default="pending")
+    failure_code: Mapped[str] = mapped_column(String(80), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 Index("uq_properties_external_source_key", Property.external_source_key, unique=True)
