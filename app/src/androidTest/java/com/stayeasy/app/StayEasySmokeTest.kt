@@ -199,8 +199,9 @@ class StayEasySmokeTest {
         composeRule.onNodeWithText("Your profile").assertIsDisplayed()
         clickControlContaining("Sign in / Create account")
         composeRule.onNodeWithText("StayEasy account").assertIsDisplayed()
-        composeRule.onNodeWithText("Connect your StayEasy API first").assertIsDisplayed()
-        composeRule.onNodeWithText("Configure API connection").assertIsDisplayed()
+        composeRule.onNodeWithText("Welcome back").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Email address").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("Password").performScrollTo().assertIsDisplayed()
     }
 
     @Test
