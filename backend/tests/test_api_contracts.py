@@ -2811,3 +2811,71 @@ def test_route_payment_refund_requests_linked_account_transfer_reversal(monkeypa
     assert refund_calls[0][1] == 5000
     assert refund_calls[0][3] is True
     assert refund.json()["status"] in {"requested", "pending", "unknown"}
+
+
+
+def test_admin_route_account_link_is_role_protected_and_audited(monkeypatch):
+    setup_property(owner_id="route-owner-admin-test")
+    owner_id = "route-owner-admin-test"
+    with SessionLocal() as db:
+        db.add(m.User(
+            id=owner_id, email="route-owner-admin-test@example.test",
+            display_name="Route owner", role="owner", is_active=True,
+        ))
+        db.commit()
+    monkeypatch.setenv("RAZORPAY_ROUTE_ENABLED", "true")
+    set_actor("tenant-untrusted", "customer")
+    denied = client.put(
+        f"/payments/admin/owner-settlement-accounts/{owner_id}",
+        json={"linked_account_id": "acc_ROUTEACCOUNTTST01", "status": "active"},
+    )
+    assert denied.status_code == 403
+
+    set_actor("admin-1", "admin")
+    linked = client.put(
+        f"/payments/admin/owner-settlement-accounts/{owner_id}",
+        json={"linked_account_id": "acc_ROUTEACCOUNTTST01", "status": "active"},
+    )
+    assert linked.status_code == 200, linked.text
+    assert linked.json()["status"] == "active"
+    rows = client.get("/payments/admin/owner-settlement-accounts")
+    assert rows.status_code == 200, rows.text
+    assert any(row["owner_id"] == owner_id for row in rows.json()["accounts"])
+    with SessionLocal() as db:
+        audit = db.scalar(select(m.AuditLog).where(
+            m.AuditLog.entity_type == "owner_settlement_account",
+            m.AuditLog.entity_id == owner_id,
+            m.AuditLog.action == "owner_settlement_account_linked",
+        ))
+        assert audit is not None
+        assert audit.new_value["linked_account_id"] == "acc_ROUTEACCOUNTTST01"
+
+
+def test_production_platform_only_settlement_is_blocked_without_explicit_approval(monkeypatch):
+    import pytest
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("PAYMENT_SETTLEMENT_MODE", "platform")
+    monkeypatch.setenv("ALLOW_PLATFORM_SETTLEMENT_IN_PRODUCTION", "false")
+    with pytest.raises(HTTPException) as exc:
+        payment_routes._settlement_mode()
+    assert exc.value.status_code == 503
+
+
+def test_route_account_readiness_is_owner_scoped_and_secret_free(monkeypatch):
+    _create_route_test_order(monkeypatch)
+    set_actor("owner-1", "owner")
+    response = client.get("/payments/owner/settlement-status")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mode"] == "owner_route"
+    assert body["route_enabled"] is True
+    assert body["account_status"] == "active"
+    assert body["linked_account_configured"] is True
+    assert "acc_STAYEASYTEST01" not in response.text
+    set_actor("other-owner", "owner")
+    response = client.get("/payments/owner/settlement-status")
+    assert response.status_code == 200, response.text
+    assert response.json()["account_status"] == "not_configured"
+    assert response.json()["linked_account_configured"] is False
